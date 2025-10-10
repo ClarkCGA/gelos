@@ -1,0 +1,27 @@
+services:
+  notebook:
+    image: gelos:latest
+    build: .
+    volumes:
+       - /workspace/_output/gfm-explainability/code/data/:/data/ 
+       - .:/app/ 
+    command: jupyter lab --ip=0.0.0.0 --allow-root
+    ports:
+       - "8089:8888"
+    shm_size: '2gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["6"]
+              capabilities: [gpu]
+
+  test:
+    image: gelos-test:latest
+    build: 
+      context: .
+      target: test
+    volumes:
+      - .:/app/
+    command: make test
