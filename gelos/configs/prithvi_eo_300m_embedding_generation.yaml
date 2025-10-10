@@ -1,0 +1,42 @@
+# lightning.pytorch==2.1.1
+seed_everything: 0
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  callbacks: []
+  max_epochs: 0
+
+data:
+  class_path: gelos.gelosdatamodule.GelosDataModule
+  init_args:
+    batch_size: 1
+    num_workers: 0
+    
+
+predict_output_dir: './'
+
+model:
+  class_path: terratorch.tasks.EmbeddingGenerationTask
+  init_args:
+    model_factory: EncoderDecoderFactory
+    model_args:
+      backbone: prithvi_eo_v2_300
+      backbone_pretrained: true
+      backbone_bands:
+        - BLUE
+        - GREEN
+        - RED
+        - RED_EDGE_1
+        - NIR_BROAD
+        - NIR_NARROW
+    output_format: parquet
+    embed_file_key: file_id
+    output_dir: 'data/processed/terramind_embeddings'
+    layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
+    embedding_pooling: null
+    has_cls: False
+    # temporal_cfg: 
+    #   temporal_wrapper: True
+    #   temporal_pooling: keep

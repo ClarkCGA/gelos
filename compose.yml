@@ -2,19 +2,22 @@ services:
   notebook:
     image: gelos:latest
     build: .
+    env_file:
+      - .env
     volumes:
-       - /workspace/_output/gfm-explainability/code/data/:/data/ 
        - .:/app/ 
+       - ${RAW_PATH}:/app/data/raw/
+       - ${PROCESSED_PATH}:/app/data/processed/
     command: jupyter lab --ip=0.0.0.0 --allow-root
     ports:
-       - "8089:8888"
+       - "${HOST_PORT}:8888"
     shm_size: '2gb'
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["6"]
+              count: all
               capabilities: [gpu]
 
   test:
