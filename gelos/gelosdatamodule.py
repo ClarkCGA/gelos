@@ -21,7 +21,7 @@ from gelos.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
 app = typer.Typer()
 
 MEANS = {
-    "S2": { 
+    "sentinel_2": { 
         "COASTAL_AEROSOL": 0.0,
         "BLUE": 0.0,
         "GREEN": 0.0,
@@ -37,7 +37,7 @@ MEANS = {
         "CIRRUS": 0.0,
         "THEMRAL_INFRARED_1": 0.0,
     }, 
-    "S1": { 
+    "sentinel_1": { 
         "VV": 0.0,
         "VH": 0.0,
         "ASC_VV": 0.0,
@@ -46,7 +46,7 @@ MEANS = {
         "DSC_VH": 0.0,
         "VV_VH": 0.0,
     }, 
-    "Landsat": {
+    "landsat": {
         "coastal": 0.0,    # Coastal/Aerosol (Band 1)
         "blue": 0.0,      # Blue (Band 2)
         "green": 0.0,      # Green (Band 3)
@@ -55,13 +55,13 @@ MEANS = {
         "swir16": 0.0,    # Shortwave Infrared 1 (SWIR1, Band 6)
         "swir22": 0.0,     # Shortwave Infrared 2 (SWIR2, Band 7)
     },
-    "DEM": {
+    "dem": {
         "dem": 0.0,
       },
     }
 
 STDS = {
-    "S2": { 
+    "sentinel_2": { 
         "COASTAL_AEROSOL": 1.0,
         "BLUE": 1.0,
         "GREEN": 1.0,
@@ -77,7 +77,7 @@ STDS = {
         "CIRRUS": 1.0,
         "THEMRAL_INFRARED_1": 1.0,
     }, 
-    "S1": { 
+    "sentinel_1": { 
         "VV": 1.0,
         "VH": 1.0,
         "ASC_VV": 1.0,
@@ -86,7 +86,7 @@ STDS = {
         "DSC_VH": 1.0,
         "VV_VH": 1.0,
     }, 
-    "Landsat": {
+    "landsat": {
         "coastal": 1.0,    # Coastal/Aerosol (Band 1)
         "blue": 1.0,      # Blue (Band 2)
         "green": 1.0,      # Green (Band 3)
@@ -95,7 +95,7 @@ STDS = {
         "swir16": 1.0,    # Shortwave Infrared 1 (SWIR1, Band 6)
         "swir22": 1.0,     # Shortwave Infrared 2 (SWIR2, Band 7)
     },
-    "DEM": {
+    "dem": {
         "dem": 1.0,
       },
     }
