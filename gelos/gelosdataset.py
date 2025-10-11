@@ -1,14 +1,17 @@
-import albumentations as A
-import pdb
-import numpy as np
 from pathlib import Path
 from typing import List
-from torchgeo.datasets import GeoDataset
+
+import albumentations as A
 import geopandas as gpd
-from terratorch.datasets.utils import HLSBands, default_transform, filter_valid_files, generate_bands_intervals
-from terratorch.datasets.transforms import MultimodalTransforms
+import numpy as np
 import rioxarray as rxr
+from terratorch.datasets.transforms import MultimodalTransforms
+from terratorch.datasets.utils import (
+    default_transform,
+)
 import torch
+from torchgeo.datasets import GeoDataset
+
 
 class MultimodalToTensor:
     def __init__(self, modalities):
@@ -20,7 +23,9 @@ class MultimodalToTensor:
             if not isinstance(v, np.ndarray):
                 new_dict[k] = v
             else:
-                if k in self.modalities and len(v.shape) >= 3:  # Assuming raster modalities with 3+ dimensions
+                if (
+                    k in self.modalities and len(v.shape) >= 3
+                ):  # Assuming raster modalities with 3+ dimensions
                     if len(v.shape) <= 4:
                         v = np.moveaxis(v, -1, 0)  # C, H, W or C, T, H, W
                     elif len(v.shape) == 5:
@@ -29,6 +34,7 @@ class MultimodalToTensor:
                         raise ValueError(f"Unexpected shape for {k}: {v.shape}")
                 new_dict[k] = torch.from_numpy(v)
         return new_dict
+
 
 class GELOSDataSet(GeoDataset):
     """
@@ -44,7 +50,7 @@ class GELOSDataSet(GeoDataset):
     TBD Dataset Size
     4 time steps for each land cover chip
     """
- 
+
     S2_BAND_NAMES = [
         "COASTAL_AEROSOL",
         "BLUE",
@@ -60,8 +66,8 @@ class GELOSDataSet(GeoDataset):
         # "WATER_VAPOR",
         "CIRRUS",
         "THEMRAL_INFRARED_1",
-      ] 
-    S1_BAND_NAMES = [ 
+    ]
+    S1_BAND_NAMES = [
         "VV",
         "VH",
         "ASC_VV",
@@ -69,19 +75,17 @@ class GELOSDataSet(GeoDataset):
         "DSC_VV",
         "DSC_VH",
         "VV_VH",
-      ]
+    ]
     LANDSAT_BAND_NAMES = [
-        "coastal",    # Coastal/Aerosol (Band 1)
-        "blue",      # Blue (Band 2)
-        "green",      # Green (Band 3)
-        "red",        # Red (Band 4)
-        "nir08",      # Near Infrared (NIR, Band 5)
-        "swir16",    # Shortwave Infrared 1 (SWIR1, Band 6)
-        "swir22",     # Shortwave Infrared 2 (SWIR2, Band 7)
-      ]
-    DEM_BAND_NAMES = [
-        "dem"
-      ]
+        "coastal",  # Coastal/Aerosol (Band 1)
+        "blue",  # Blue (Band 2)
+        "green",  # Green (Band 3)
+        "red",  # Red (Band 4)
+        "nir08",  # Near Infrared (NIR, Band 5)
+        "swir16",  # Shortwave Infrared 1 (SWIR1, Band 6)
+        "swir22",  # Shortwave Infrared 2 (SWIR2, Band 7)
+    ]
+    DEM_BAND_NAMES = ["dem"]
     all_band_names = {
         "sentinel_1": S1_BAND_NAMES,
         "sentinel_2": S2_BAND_NAMES,
@@ -97,17 +101,17 @@ class GELOSDataSet(GeoDataset):
     }
 
     BAND_SETS = {"all": all_band_names, "rgb": rgb_bands}
-    
+
     def __init__(
         self,
         data_root: str | Path,
         bands: dict[str, List[str]] = BAND_SETS["all"],
         transform: A.Compose | None = None,
-        concat_bands: bool = False
+        concat_bands: bool = False,
     ) -> None:
         """
         Initializes an instance of GELOS.
-        
+
         Args:
         data_root (str | Path): root directory where the dataset can be found
         bands: (Dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
@@ -117,15 +121,15 @@ class GELOSDataSet(GeoDataset):
         self.bands = bands
         self.concat_bands = concat_bands
 
-        assert set(self.bands.keys()).issubset(
-            set(self.all_band_names.keys())
-        ), f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
+        assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
+            f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
+        )
 
         self.band_indices = {
             sens: [self.all_band_names[sens].index(band) for band in self.bands[sens]]
             for sens in self.bands.keys()
         }
-        
+
         self.gdf = gpd.read_file(self.data_root / "cleaned_df.geojson")
         self.gdf = self._process_metadata_df()
 
@@ -136,15 +140,13 @@ class GELOSDataSet(GeoDataset):
             self.transform = MultimodalToTensor(self.bands.keys())
         else:
             transform = {
-                s: transform[s] if s in transform else default_transform
-                for s in self.bands.keys()
+                s: transform[s] if s in transform else default_transform for s in self.bands.keys()
             }
             self.transform = MultimodalTransforms(transform, shared=False)
-        
 
     def __len__(self) -> int:
         return len(self.gdf)
-    
+
     def __getitem__(self, index: int) -> dict:
         sample_row = self.gdf.iloc[index]
 
@@ -160,7 +162,7 @@ class GELOSDataSet(GeoDataset):
             sensor = list(output.keys())[0]
             output["image"] = output.pop(sensor)
         if self.transform:
-          output = self.transform(output)
+            output = self.transform(output)
 
         if self.concat_bands:
             # Concatenate bands of all image modalities
@@ -175,14 +177,11 @@ class GELOSDataSet(GeoDataset):
         return output
 
     def _load_file(self, path) -> np.array:
-
         data = rxr.open_rasterio(path, masked=True).to_numpy()
 
         return data
 
     def _load_sensor_images(self, sensor_filepaths: List[Path]) -> np.array:
-
-
         sensor_images = [self._load_file(path) for path in sensor_filepaths]
         sensor_image = np.stack(sensor_images, axis=0)
 
@@ -193,10 +192,11 @@ class GELOSDataSet(GeoDataset):
         # if the modality has multiple dates, construct them from the dates column
         # otherwise, for single time step variables, construct from chip id
         def _construct_file_paths(row, modality: str, data_root: Path) -> List[Path]:
-            date_list = row[f"{modality}_dates"].split(',')
+            date_list = row[f"{modality}_dates"].split(",")
             chip_id = row["chip_id"]
             path_list = [data_root / f"{modality}_{chip_id:06}_{date}.tif" for date in date_list]
             return path_list
+
         def _construct_dem_path(row, data_root: Path) -> List[Path]:
             chip_id = row["chip_id"]
             dem_list = [data_root / f"dem_{chip_id:06}.tif"]
@@ -204,9 +204,11 @@ class GELOSDataSet(GeoDataset):
 
         for modality in self.bands.keys():
             if modality == "dem":
-                self.gdf["dem_paths"] = self.gdf.apply(_construct_dem_path, data_root=self.data_root, axis=1)
-                continue           
-            
+                self.gdf["dem_paths"] = self.gdf.apply(
+                    _construct_dem_path, data_root=self.data_root, axis=1
+                )
+                continue
+
             self.gdf[f"{modality}_paths"] = self.gdf.apply(
                 _construct_file_paths, modality=modality, data_root=self.data_root, axis=1
             )

@@ -1,27 +1,23 @@
 from pathlib import Path
-
-from loguru import logger
-from tqdm import tqdm
-import typer
 from typing import Any
-from pathlib import Path
 
 import albumentations as A
-from torch.utils.data import DataLoader
-
-from terratorch.datamodules.generic_multimodal_data_module import MultimodalNormalize, wrap_in_compose_is_list
+from kornia.augmentation import AugmentationSequential
+from terratorch.datamodules.generic_multimodal_data_module import (
+    MultimodalNormalize,
+    wrap_in_compose_is_list,
+)
 from terratorch.datamodules.generic_pixel_wise_data_module import Normalize
-
-from gelos.gelosdataset import GELOSDataSet 
+from torch.utils.data import DataLoader
 from torchgeo.datamodules import GeoDataModule
-from kornia.augmentation import AugmentationSequential 
-import pdb
-from gelos.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
+import typer
+
+from gelos.gelosdataset import GELOSDataSet
 
 app = typer.Typer()
 
 MEANS = {
-    "sentinel_2": { 
+    "sentinel_2": {
         "COASTAL_AEROSOL": 0.0,
         "BLUE": 0.0,
         "GREEN": 0.0,
@@ -36,8 +32,8 @@ MEANS = {
         # "WATER_VAPOR": 0.0,
         "CIRRUS": 0.0,
         "THEMRAL_INFRARED_1": 0.0,
-    }, 
-    "sentinel_1": { 
+    },
+    "sentinel_1": {
         "VV": 0.0,
         "VH": 0.0,
         "ASC_VV": 0.0,
@@ -45,23 +41,23 @@ MEANS = {
         "DSC_VV": 0.0,
         "DSC_VH": 0.0,
         "VV_VH": 0.0,
-    }, 
+    },
     "landsat": {
-        "coastal": 0.0,    # Coastal/Aerosol (Band 1)
-        "blue": 0.0,      # Blue (Band 2)
-        "green": 0.0,      # Green (Band 3)
-        "red": 0.0,        # Red (Band 4)
-        "nir08": 0.0,      # Near Infrared (NIR, Band 5)
-        "swir16": 0.0,    # Shortwave Infrared 1 (SWIR1, Band 6)
-        "swir22": 0.0,     # Shortwave Infrared 2 (SWIR2, Band 7)
+        "coastal": 0.0,  # Coastal/Aerosol (Band 1)
+        "blue": 0.0,  # Blue (Band 2)
+        "green": 0.0,  # Green (Band 3)
+        "red": 0.0,  # Red (Band 4)
+        "nir08": 0.0,  # Near Infrared (NIR, Band 5)
+        "swir16": 0.0,  # Shortwave Infrared 1 (SWIR1, Band 6)
+        "swir22": 0.0,  # Shortwave Infrared 2 (SWIR2, Band 7)
     },
     "dem": {
         "dem": 0.0,
-      },
-    }
+    },
+}
 
 STDS = {
-    "sentinel_2": { 
+    "sentinel_2": {
         "COASTAL_AEROSOL": 1.0,
         "BLUE": 1.0,
         "GREEN": 1.0,
@@ -76,8 +72,8 @@ STDS = {
         # "WATER_VAPOR": 1.0,
         "CIRRUS": 1.0,
         "THEMRAL_INFRARED_1": 1.0,
-    }, 
-    "sentinel_1": { 
+    },
+    "sentinel_1": {
         "VV": 1.0,
         "VH": 1.0,
         "ASC_VV": 1.0,
@@ -85,41 +81,42 @@ STDS = {
         "DSC_VV": 1.0,
         "DSC_VH": 1.0,
         "VV_VH": 1.0,
-    }, 
+    },
     "landsat": {
-        "coastal": 1.0,    # Coastal/Aerosol (Band 1)
-        "blue": 1.0,      # Blue (Band 2)
-        "green": 1.0,      # Green (Band 3)
-        "red": 1.0,        # Red (Band 4)
-        "nir08": 1.0,      # Near Infrared (NIR, Band 5)
-        "swir16": 1.0,    # Shortwave Infrared 1 (SWIR1, Band 6)
-        "swir22": 1.0,     # Shortwave Infrared 2 (SWIR2, Band 7)
+        "coastal": 1.0,  # Coastal/Aerosol (Band 1)
+        "blue": 1.0,  # Blue (Band 2)
+        "green": 1.0,  # Green (Band 3)
+        "red": 1.0,  # Red (Band 4)
+        "nir08": 1.0,  # Near Infrared (NIR, Band 5)
+        "swir16": 1.0,  # Shortwave Infrared 1 (SWIR1, Band 6)
+        "swir22": 1.0,  # Shortwave Infrared 2 (SWIR2, Band 7)
     },
     "dem": {
         "dem": 1.0,
-      },
-    }
- 
+    },
+}
+
+
 # instantiate GELOS datamodule class
 class GELOSDataModule(GeoDataModule):
     """
     This is the datamodule for Geospatial Exploration of Latent Observation Space (GELOS)
     """
-    
+
     def __init__(
-            self,
-            batch_size: int,
-            num_workers: int,
-            data_root: str | Path,
-            bands: dict[str] = GELOSDataSet.all_band_names,
-            transform: A.Compose | None | list[A.BasicTransform] = None, 
-            aug: AugmentationSequential = None,
-            metadata_filename: str = "cleaned_df.geojson",
-            **kwargs: Any,
+        self,
+        batch_size: int,
+        num_workers: int,
+        data_root: str | Path,
+        bands: dict[str] = GELOSDataSet.all_band_names,
+        transform: A.Compose | None | list[A.BasicTransform] = None,
+        aug: AugmentationSequential = None,
+        metadata_filename: str = "cleaned_df.geojson",
+        **kwargs: Any,
     ) -> None:
         """
         Initializes the DataModule for GELOS.
-        
+
         Args:
             batch_size (int): Batch size for DataLoaders.
             num_workers (int): Number of workers for data loading.
@@ -129,9 +126,9 @@ class GELOSDataModule(GeoDataModule):
             aug (AugmentationSequential, optional): Augmentation or normalization to apply. Defaults to normalization if not provided.
             metadata_filename: (str, optional): Filename for chip tracker
             **kwargs: Additional keyword arguments.
-            """
+        """
         super().__init__(GELOSDataSet, batch_size, num_workers, **kwargs)
-        
+
         self.data_root = data_root
         self.bands = bands
         self.modalities = self.bands.keys()
@@ -144,14 +141,18 @@ class GELOSDataModule(GeoDataModule):
             self.stds[modality] = [STDS[modality][band] for band in self.bands[modality]]
         self.transform = wrap_in_compose_is_list(transform)
         if len(self.bands.keys()) == 1:
-            self.aug = Normalize(self.means[self.modalities[0]], self.stds[self.modalities[0]]) if aug is None else aug
+            self.aug = (
+                Normalize(self.means[self.modalities[0]], self.stds[self.modalities[0]])
+                if aug is None
+                else aug
+            )
         else:
             MultimodalNormalize(self.means, self.stds) if aug is None else aug
 
-    def setup(self, stage: str = 'predict') -> None:
+    def setup(self, stage: str = "predict") -> None:
         """
         Set up GELOS dataset
-        """ 
+        """
         if stage != "predict":
             raise ValueError("GELOS dataset is for prediction only")
         self.dataset = self.dataset_class(
@@ -160,10 +161,10 @@ class GELOSDataModule(GeoDataModule):
             transform=self.transform,
         )
 
-    def _dataloader_factory(self, stage: str = 'predict'):
-        if stage != 'predict':
+    def _dataloader_factory(self, stage: str = "predict"):
+        if stage != "predict":
             raise ValueError("GELOS dataset is for prediction only")
-        dataset = self.dataset 
+        dataset = self.dataset
         batch_size = self.batch_size
         return DataLoader(
             dataset=dataset,
