@@ -9,18 +9,18 @@ trainer:
   max_epochs: 0
 
 data:
-  class_path: gelos.gelosdatamodule.GelosDataModule
+  class_path: custom_modules.gelosdatamodule.GELOSDataModule
   init_args:
     batch_size: 1
     num_workers: 0
-    
+    data_root: /app/data/raw/v0.40
 
-predict_output_dir: './'
+predict_output_dir: ./
+
 
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask
   init_args:
-    model_factory: EncoderDecoderFactory
     model_args:
       backbone: prithvi_eo_v2_300
       backbone_pretrained: true
@@ -33,7 +33,7 @@ model:
         - NIR_NARROW
     output_format: parquet
     embed_file_key: file_id
-    output_dir: 'data/processed/terramind_embeddings'
+    output_dir: data/processed/terramind_embeddings
     layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
     embedding_pooling: null
     has_cls: False
