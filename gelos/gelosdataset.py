@@ -1,4 +1,5 @@
 from pathlib import Path
+import pdb
 from typing import List
 
 import albumentations as A
@@ -6,13 +7,9 @@ import geopandas as gpd
 import numpy as np
 import rioxarray as rxr
 from terratorch.datasets.transforms import MultimodalTransforms
-from terratorch.datasets.utils import (
-    default_transform,
-)
+
 import torch
 from torchgeo.datasets import GeoDataset
-
-
 class MultimodalToTensor:
     def __init__(self, modalities):
         self.modalities = modalities
@@ -20,19 +17,7 @@ class MultimodalToTensor:
     def __call__(self, d):
         new_dict = {}
         for k, v in d.items():
-            if not isinstance(v, np.ndarray):
-                new_dict[k] = v
-            else:
-                if (
-                    k in self.modalities and len(v.shape) >= 3
-                ):  # Assuming raster modalities with 3+ dimensions
-                    if len(v.shape) <= 4:
-                        v = np.moveaxis(v, -1, 0)  # C, H, W or C, T, H, W
-                    elif len(v.shape) == 5:
-                        v = np.moveaxis(v, -1, 1)  # B, C, T, H, W
-                    else:
-                        raise ValueError(f"Unexpected shape for {k}: {v.shape}")
-                new_dict[k] = torch.from_numpy(v)
+            new_dict[k] = torch.from_numpy(v)
         return new_dict
 
 
@@ -134,16 +119,23 @@ class GELOSDataSet(GeoDataset):
         self.gdf = self._process_metadata_df()
 
         # Adjust transforms based on the number of sensors
-        if len(self.bands.keys()) == 1:
-            self.transform = transform if transform else default_transform
-        elif transform is None:
+        if transform is None:
             self.transform = MultimodalToTensor(self.bands.keys())
         else:
             transform = {
-                s: transform[s] if s in transform else default_transform for s in self.bands.keys()
+                s: transform[s] for s in self.bands.keys()
             }
             self.transform = MultimodalTransforms(transform, shared=False)
-
+        sentinel_1_size=[4, 2, 96, 96]
+        sentinel_2_size=[4, 12, 96, 96]
+        landsat_size=[4, 7, 32, 32]
+        dem_size=[1, 1, 32, 32]
+        self.data_shapes = {
+            'sentinel_1': sentinel_1_size,
+            'sentinel_2': sentinel_2_size,
+            'landsat': landsat_size,
+            'dem': dem_size,
+        }
     def __len__(self) -> int:
         return len(self.gdf)
 
@@ -154,55 +146,78 @@ class GELOSDataSet(GeoDataset):
 
         for sensor in self.bands.keys():
             sensor_filepaths = sample_row[f"{sensor}_paths"]
-            image = self._load_sensor_images(sensor_filepaths)
-            output[sensor] = image.astype(np.float32)
+            image = self._load_sensor_images(sensor_filepaths, sensor)
+            # Check the shape of the loaded array
+            expected_shape = self.data_shapes[sensor]
+            actual_shape = image.shape
+            assert actual_shape == tuple(expected_shape), (
+            f"Shape mismatch for sensor '{sensor}'. "
+            f"Expected {tuple(expected_shape)}, but got {actual_shape}."
+            )
+        
 
-        if len(output.keys()) == 1:
-            # Rename the single sensor key to "image"
-            sensor = list(output.keys())[0]
-            output["image"] = output.pop(sensor)
+            
+            output[sensor] = image.astype(np.float32)
         if self.transform:
             output = self.transform(output)
 
-        if self.concat_bands:
+        if len(self.bands.keys()) == 1:
+            # Rename the single sensor key to "image"
+            sensor = list(output.keys())[0]
+            output["image"] = output.pop(sensor)
+        elif self.concat_bands:
             # Concatenate bands of all image modalities
             data = [output.pop(m) for m in self.bands.keys() if m in output]
-            output["image"] = torch.cat(data, dim=1 if self.data_with_sample_dim else 0)
+            output["image"] = torch.cat(data, dim=1) # concatenate into channel dimension
         else:
             # Tasks expect data to be stored in "image", moving modalities to image dict
             output["image"] = {m: output.pop(m) for m in self.bands.keys() if m in output}
 
-        output["filename"] = sample_row["chip_id"]
+        output["filename"] = sample_row["chip_index"]
 
         return output
 
-    def _load_file(self, path) -> np.array:
+    def _load_file(self, path, band_indices: List[int]) -> np.array:
         data = rxr.open_rasterio(path, masked=True).to_numpy()
+        try:
+            return data[band_indices, :, :]
+        except:
+            return data
 
-        return data
-
-    def _load_sensor_images(self, sensor_filepaths: List[Path]) -> np.array:
-        sensor_images = [self._load_file(path) for path in sensor_filepaths]
+    def _load_sensor_images(self, sensor_filepaths: List[Path], sensor: str) -> np.array:
+        band_indices = self.band_indices[sensor]
+        sensor_images = [self._load_file(path, band_indices) for path in sensor_filepaths]
         sensor_image = np.stack(sensor_images, axis=0)
 
         return sensor_image
 
+
     def _process_metadata_df(self) -> gpd.GeoDataFrame:
         # for each modality, construct file paths
         # if the modality has multiple dates, construct them from the dates column
-        # otherwise, for single time step variables, construct from chip id
+        # otherwise, for single time step variables, construct from chip index
+
+        # Filter out chips with less than 4 dates for any modality
+        for modality in self.bands.keys():
+            if modality == "dem":
+                continue
+            # Keep only rows where the number of dates is 4 or more
+            self.gdf = self.gdf[self.gdf[f"{modality}_dates"].str.split(",").str.len() >= 4]
+
+
         def _construct_file_paths(row, modality: str, data_root: Path) -> List[Path]:
             date_list = row[f"{modality}_dates"].split(",")
-            chip_id = row["chip_id"]
-            path_list = [data_root / f"{modality}_{chip_id:06}_{date}.tif" for date in date_list]
+            chip_index = row["chip_index"]
+            path_list = [data_root / f"{modality}_{chip_index:06}_{date}.tif" for date in date_list]
             return path_list
 
         def _construct_dem_path(row, data_root: Path) -> List[Path]:
-            chip_id = row["chip_id"]
-            dem_list = [data_root / f"dem_{chip_id:06}.tif"]
+            chip_index = row["chip_index"]
+            dem_list = [data_root / f"dem_{chip_index:06}.tif"]
             return dem_list
 
         for modality in self.bands.keys():
+
             if modality == "dem":
                 self.gdf["dem_paths"] = self.gdf.apply(
                     _construct_dem_path, data_root=self.data_root, axis=1

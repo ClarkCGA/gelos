@@ -16,86 +16,71 @@ from gelos.gelosdataset import GELOSDataSet
 
 app = typer.Typer()
 
-MEANS = {
-    "sentinel_2": {
-        "COASTAL_AEROSOL": 0.0,
-        "BLUE": 0.0,
-        "GREEN": 0.0,
-        "RED": 0.0,
-        "RED_EDGE_1": 0.0,
-        "RED_EDGE_2": 0.0,
-        "RED_EDGE_3": 0.0,
-        "NIR_BROAD": 0.0,
-        "NIR_NARROW": 0.0,
-        "SWIR_1": 0.0,
-        "SWIR_2": 0.0,
-        # "WATER_VAPOR": 0.0,
-        "CIRRUS": 0.0,
-        "THEMRAL_INFRARED_1": 0.0,
-    },
+MEANS =  {
     "sentinel_1": {
-        "VV": 0.0,
-        "VH": 0.0,
-        "ASC_VV": 0.0,
-        "ASC_VH": 0.0,
-        "DSC_VV": 0.0,
-        "DSC_VH": 0.0,
-        "VV_VH": 0.0,
+        "VV": 0.14450763165950775,
+        "VH": 0.029020152986049652
+    },
+    "sentinel_2": {
+        "COASTAL_AEROSOL": 1852.9951171875,
+        "BLUE": 2046.738525390625,
+        "GREEN": 2346.2802734375,
+        "RED": 2593.03857421875,
+        "RED_EDGE_1": 2900.828857421875,
+        "RED_EDGE_2": 3365.597900390625,
+        "RED_EDGE_3": 3576.141357421875,
+        "NIR_BROAD": 3657.3046875,
+        "NIR_NARROW": 3703.0908203125,
+        "SWIR_1": 3709.93359375,
+        "SWIR_2": 3543.164794921875,
+        "CIRRUS": 3048.239990234375
     },
     "landsat": {
-        "coastal": 0.0,  # Coastal/Aerosol (Band 1)
-        "blue": 0.0,  # Blue (Band 2)
-        "green": 0.0,  # Green (Band 3)
-        "red": 0.0,  # Red (Band 4)
-        "nir08": 0.0,  # Near Infrared (NIR, Band 5)
-        "swir16": 0.0,  # Shortwave Infrared 1 (SWIR1, Band 6)
-        "swir22": 0.0,  # Shortwave Infrared 2 (SWIR2, Band 7)
+        "coastal": 0.08165209740400314,
+        "blue": 0.09596806019544601,
+        "green": 0.1315794140100479,
+        "red": 0.1531316637992859,
+        "nir08": 0.2621993124485016,
+        "swir16": 0.23768098652362823,
+        "swir22": 0.18106447160243988
     },
     "dem": {
-        "dem": 0.0,
-    },
+        "dem": 642.7003173828125
+    }
 }
 
-STDS = {
-    "sentinel_2": {
-        "COASTAL_AEROSOL": 1.0,
-        "BLUE": 1.0,
-        "GREEN": 1.0,
-        "RED": 1.0,
-        "RED_EDGE_1": 1.0,
-        "RED_EDGE_2": 1.0,
-        "RED_EDGE_3": 1.0,
-        "NIR_BROAD": 1.0,
-        "NIR_NARROW": 1.0,
-        "SWIR_1": 1.0,
-        "SWIR_2": 1.0,
-        # "WATER_VAPOR": 1.0,
-        "CIRRUS": 1.0,
-        "THEMRAL_INFRARED_1": 1.0,
-    },
+STDS =  {
     "sentinel_1": {
-        "VV": 1.0,
-        "VH": 1.0,
-        "ASC_VV": 1.0,
-        "ASC_VH": 1.0,
-        "DSC_VV": 1.0,
-        "DSC_VH": 1.0,
-        "VV_VH": 1.0,
+        "VV": 2.600670576095581,
+        "VH": 0.26772621273994446
+    },
+    "sentinel_2": {
+        "COASTAL_AEROSOL": 1201.80078125,
+        "BLUE": 1267.075927734375,
+        "GREEN": 1316.0233154296875,
+        "RED": 1520.836669921875,
+        "RED_EDGE_1": 1518.5592041015625,
+        "RED_EDGE_2": 1419.7735595703125,
+        "RED_EDGE_3": 1442.878662109375,
+        "NIR_BROAD": 1476.5181884765625,
+        "NIR_NARROW": 1437.5333251953125,
+        "SWIR_1": 1440.673095703125,
+        "SWIR_2": 1588.948974609375,
+        "CIRRUS": 1524.4881591796875
     },
     "landsat": {
-        "coastal": 1.0,  # Coastal/Aerosol (Band 1)
-        "blue": 1.0,  # Blue (Band 2)
-        "green": 1.0,  # Green (Band 3)
-        "red": 1.0,  # Red (Band 4)
-        "nir08": 1.0,  # Near Infrared (NIR, Band 5)
-        "swir16": 1.0,  # Shortwave Infrared 1 (SWIR1, Band 6)
-        "swir22": 1.0,  # Shortwave Infrared 2 (SWIR2, Band 7)
+        "coastal": 0.15966829657554626,
+        "blue": 0.16089804470539093,
+        "green": 0.15540584921836853,
+        "red": 0.1680557280778885,
+        "nir08": 0.15390564501285553,
+        "swir16": 0.14630644023418427,
+        "swir22": 0.1311405450105667
     },
     "dem": {
-        "dem": 1.0,
-    },
+        "dem": 783.0748291015625
+    }
 }
-
 
 # instantiate GELOS datamodule class
 class GELOSDataModule(GeoDataModule):
@@ -111,7 +96,7 @@ class GELOSDataModule(GeoDataModule):
         bands: dict[str] = GELOSDataSet.all_band_names,
         transform: A.Compose | None | list[A.BasicTransform] = None,
         aug: AugmentationSequential = None,
-        metadata_filename: str = "cleaned_df.geojson",
+        concat_bands: bool = False,
         **kwargs: Any,
     ) -> None:
         """
@@ -124,16 +109,17 @@ class GELOSDataModule(GeoDataModule):
             bands: (Dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
             transform (A.Compose, optional): Transforms for data, defaults to ToTensorV2.
             aug (AugmentationSequential, optional): Augmentation or normalization to apply. Defaults to normalization if not provided.
-            metadata_filename: (str, optional): Filename for chip tracker
+            concat_bands (bool): Whether to concat all sensors into one 'image' tensor or keep separate
             **kwargs: Additional keyword arguments.
         """
         super().__init__(GELOSDataSet, batch_size, num_workers, **kwargs)
 
         self.data_root = data_root
         self.bands = bands
-        self.modalities = self.bands.keys()
+        self.modalities = list(self.bands.keys())
         self.num_workers = num_workers
         self.batch_size = batch_size
+        self.concat_bands = concat_bands
         self.means = {}
         self.stds = {}
         for modality in self.modalities:
@@ -159,6 +145,8 @@ class GELOSDataModule(GeoDataModule):
             data_root=self.data_root,
             bands=self.bands,
             transform=self.transform,
+            concat_bands=self.concat_bands
+            
         )
 
     def _dataloader_factory(self, stage: str = "predict"):
