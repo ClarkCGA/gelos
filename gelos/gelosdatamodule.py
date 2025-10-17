@@ -9,7 +9,7 @@ from terratorch.datamodules.generic_multimodal_data_module import (
 )
 from terratorch.datamodules.generic_pixel_wise_data_module import Normalize
 from torch.utils.data import DataLoader
-from torchgeo.datamodules import GeoDataModule
+from torchgeo.datamodules import NonGeoDataModule
 import typer
 
 from gelos.gelosdataset import GELOSDataSet
@@ -31,9 +31,9 @@ MEANS =  {
         "RED_EDGE_3": 3576.141357421875,
         "NIR_BROAD": 3657.3046875,
         "NIR_NARROW": 3703.0908203125,
-        "SWIR_1": 3709.93359375,
-        "SWIR_2": 3543.164794921875,
-        "CIRRUS": 3048.239990234375
+        "WATER_VAPOR": 3709.93359375,
+        "SWIR_1": 3543.164794921875,
+        "SWIR_2": 3048.239990234375
     },
     "landsat": {
         "coastal": 0.08165209740400314,
@@ -64,9 +64,9 @@ STDS =  {
         "RED_EDGE_3": 1442.878662109375,
         "NIR_BROAD": 1476.5181884765625,
         "NIR_NARROW": 1437.5333251953125,
-        "SWIR_1": 1440.673095703125,
-        "SWIR_2": 1588.948974609375,
-        "CIRRUS": 1524.4881591796875
+        "WATER_VAPOR": 1440.673095703125,
+        "SWIR_1": 1588.948974609375,
+        "SWIR_2": 1524.4881591796875
     },
     "landsat": {
         "coastal": 0.15966829657554626,
@@ -83,7 +83,7 @@ STDS =  {
 }
 
 # instantiate GELOS datamodule class
-class GELOSDataModule(GeoDataModule):
+class GELOSDataModule(NonGeoDataModule):
     """
     This is the datamodule for Geospatial Exploration of Latent Observation Space (GELOS)
     """

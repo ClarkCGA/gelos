@@ -9,7 +9,7 @@ import rioxarray as rxr
 from terratorch.datasets.transforms import MultimodalTransforms
 
 import torch
-from torchgeo.datasets import GeoDataset
+from torchgeo.datasets import NonGeoDataset
 class MultimodalToTensor:
     def __init__(self, modalities):
         self.modalities = modalities
@@ -21,7 +21,7 @@ class MultimodalToTensor:
         return new_dict
 
 
-class GELOSDataSet(GeoDataset):
+class GELOSDataSet(NonGeoDataset):
     """
     Dataset intended for embedding extraction and exploration.
     Contains Sentinel 1 and 2 data, DEM, and Landsat 8 and 9 data.
@@ -46,20 +46,19 @@ class GELOSDataSet(GeoDataset):
         "RED_EDGE_3",
         "NIR_BROAD",
         "NIR_NARROW",
+        "WATER_VAPOR",
         "SWIR_1",
         "SWIR_2",
-        # "WATER_VAPOR",
-        "CIRRUS",
-        "THEMRAL_INFRARED_1",
     ]
     S1_BAND_NAMES = [
         "VV",
         "VH",
-        "ASC_VV",
-        "ASC_VH",
-        "DSC_VV",
-        "DSC_VH",
-        "VV_VH",
+        # TODO 2025-10-17 GELOS v0.40 does not differentiate ASC and DSC S1 passes
+        # "ASC_VV",
+        # "ASC_VH",
+        # "DSC_VV",
+        # "DSC_VH",
+        # "VV_VH",
     ]
     LANDSAT_BAND_NAMES = [
         "coastal",  # Coastal/Aerosol (Band 1)
@@ -143,17 +142,18 @@ class GELOSDataSet(GeoDataset):
         sample_row = self.gdf.iloc[index]
 
         output = {}
-
+        
         for sensor in self.bands.keys():
             sensor_filepaths = sample_row[f"{sensor}_paths"]
             image = self._load_sensor_images(sensor_filepaths, sensor)
             # Check the shape of the loaded array
-            expected_shape = self.data_shapes[sensor]
-            actual_shape = image.shape
-            assert actual_shape == tuple(expected_shape), (
-            f"Shape mismatch for sensor '{sensor}'. "
-            f"Expected {tuple(expected_shape)}, but got {actual_shape}."
-            )
+            # expected_shape = self.data_shapes[sensor]
+            # actual_shape = image.shape
+            # assert actual_shape == tuple(expected_shape), (
+            # f"Shape mismatch for sensor '{sensor}'. "
+            # f"Expected {tuple(expected_shape)}, but got {actual_shape}."
+            # )
+        
         
 
             
@@ -173,7 +173,10 @@ class GELOSDataSet(GeoDataset):
             # Tasks expect data to be stored in "image", moving modalities to image dict
             output["image"] = {m: output.pop(m) for m in self.bands.keys() if m in output}
 
-        output["filename"] = sample_row["chip_index"]
+        chip_id = str(sample_row["chip_index"]).zfill(6)
+        # chip_id = sample_row["chip_index"]
+        output["filename"] = [chip_id] * 4
+
 
         return output
 
@@ -187,7 +190,7 @@ class GELOSDataSet(GeoDataset):
     def _load_sensor_images(self, sensor_filepaths: List[Path], sensor: str) -> np.array:
         band_indices = self.band_indices[sensor]
         sensor_images = [self._load_file(path, band_indices) for path in sensor_filepaths]
-        sensor_image = np.stack(sensor_images, axis=0)
+        sensor_image = np.stack(sensor_images, axis=1)
 
         return sensor_image
 

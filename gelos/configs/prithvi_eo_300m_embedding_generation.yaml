@@ -9,11 +9,19 @@ trainer:
   max_epochs: 0
 
 data:
-  class_path: custom_modules.gelosdatamodule.GELOSDataModule
+  class_path: gelos.gelosdatamodule.GELOSDataModule
   init_args:
-    batch_size: 1
+    batch_size: 4
     num_workers: 0
     data_root: /app/data/raw/v0.40
+    bands:
+      sentinel_2:
+        - BLUE
+        - GREEN
+        - RED
+        - RED_EDGE_1
+        - NIR_BROAD
+        - NIR_NARROW
 
 predict_output_dir: ./
 
@@ -21,6 +29,7 @@ predict_output_dir: ./
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask
   init_args:
+    model: prithvi_eo_v2_300
     model_args:
       backbone: prithvi_eo_v2_300
       backbone_pretrained: true
@@ -32,11 +41,11 @@ model:
         - NIR_BROAD
         - NIR_NARROW
     output_format: parquet
-    embed_file_key: file_id
-    output_dir: data/processed/terramind_embeddings
+    embed_file_key: filename 
+    output_dir: /app/data/interim/v0.40
     layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
     embedding_pooling: null
-    has_cls: False
+    has_cls: True
     # temporal_cfg: 
     #   temporal_wrapper: True
     #   temporal_pooling: keep
