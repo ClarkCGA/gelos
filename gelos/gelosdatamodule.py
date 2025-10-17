@@ -6,6 +6,7 @@ from kornia.augmentation import AugmentationSequential
 from terratorch.datamodules.generic_multimodal_data_module import (
     MultimodalNormalize,
     wrap_in_compose_is_list,
+    collate_samples
 )
 from terratorch.datamodules.generic_pixel_wise_data_module import Normalize
 from torch.utils.data import DataLoader
@@ -134,6 +135,7 @@ class GELOSDataModule(NonGeoDataModule):
             )
         else:
             MultimodalNormalize(self.means, self.stds) if aug is None else aug
+        self.collate_fn = collate_samples
 
     def setup(self, stage: str = "predict") -> None:
         """
@@ -159,6 +161,6 @@ class GELOSDataModule(NonGeoDataModule):
             batch_size=batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            # collate_fn=self.collate_fn,
+            collate_fn=self.collate_fn,
             # drop_last=self.drop_last,
         )

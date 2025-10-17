@@ -175,7 +175,7 @@ class GELOSDataSet(NonGeoDataset):
 
         chip_id = str(sample_row["chip_index"]).zfill(6)
         # chip_id = sample_row["chip_index"]
-        output["filename"] = [chip_id] * 4
+        output["filename"] = np.array([chip_id] * 4, dtype=str)
 
 
         return output
