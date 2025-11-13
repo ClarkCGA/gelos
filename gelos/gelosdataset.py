@@ -69,19 +69,19 @@ class GELOSDataSet(NonGeoDataset):
         "swir16",  # Shortwave Infrared 1 (SWIR1, Band 6)
         "swir22",  # Shortwave Infrared 2 (SWIR2, Band 7)
     ]
-    DEM_BAND_NAMES = ["dem"]
+    DEM_BAND_NAMES = ["DEM"]
     all_band_names = {
-        "sentinel_1": S1_BAND_NAMES,
-        "sentinel_2": S2_BAND_NAMES,
+        "S1RTC": S1_BAND_NAMES,
+        "S2L2A": S2_BAND_NAMES,
         "landsat": LANDSAT_BAND_NAMES,
-        "dem": DEM_BAND_NAMES,
+        "DEM": DEM_BAND_NAMES,
     }
 
     rgb_bands = {
-        "sentinel_1": [],
-        "sentinel_2": ["RED", "GREEN", "BLUE"],
+        "S1RTC": [],
+        "S2L2A": ["RED", "GREEN", "BLUE"],
         "landsat": ["red", "green", "blue"],
-        "dem": [],
+        "DEM": [],
     }
 
     BAND_SETS = {"all": all_band_names, "rgb": rgb_bands}
@@ -125,15 +125,15 @@ class GELOSDataSet(NonGeoDataset):
                 s: transform[s] for s in self.bands.keys()
             }
             self.transform = MultimodalTransforms(transform, shared=False)
-        sentinel_1_size=[4, 2, 96, 96]
-        sentinel_2_size=[4, 12, 96, 96]
+        S1RTC_size=[4, 2, 96, 96]
+        S2L2A_size=[4, 12, 96, 96]
         landsat_size=[4, 7, 32, 32]
-        dem_size=[1, 1, 32, 32]
+        DEM_size=[1, 1, 32, 32]
         self.data_shapes = {
-            'sentinel_1': sentinel_1_size,
-            'sentinel_2': sentinel_2_size,
+            'S1RTC': S1RTC_size,
+            'S2L2A': S2L2A_size,
             'landsat': landsat_size,
-            'dem': dem_size,
+            'DEM': DEM_size,
         }
     def __len__(self) -> int:
         return len(self.gdf)
@@ -199,10 +199,10 @@ class GELOSDataSet(NonGeoDataset):
         # for each modality, construct file paths
         # if the modality has multiple dates, construct them from the dates column
         # otherwise, for single time step variables, construct from chip index
-
+        self.gdf = self.gdf.rename({"sentinel_1_dates": "S1RTC_dates", "sentinel_2_dates": "S2L2A_dates"}, axis=1)
         # Filter out chips with less than 4 dates for any modality
         for modality in self.bands.keys():
-            if modality == "dem":
+            if modality == "DEM":
                 continue
             # Keep only rows where the number of dates is 4 or more
             self.gdf = self.gdf[self.gdf[f"{modality}_dates"].str.split(",").str.len() >= 4]
@@ -214,16 +214,16 @@ class GELOSDataSet(NonGeoDataset):
             path_list = [data_root / f"{modality}_{chip_index:06}_{date}.tif" for date in date_list]
             return path_list
 
-        def _construct_dem_path(row, data_root: Path) -> List[Path]:
+        def _construct_DEM_path(row, data_root: Path) -> List[Path]:
             chip_index = row["chip_index"]
-            dem_list = [data_root / f"dem_{chip_index:06}.tif"]
-            return dem_list
+            DEM_list = [data_root / f"DEM_{chip_index:06}.tif"]
+            return DEM_list
 
         for modality in self.bands.keys():
 
-            if modality == "dem":
-                self.gdf["dem_paths"] = self.gdf.apply(
-                    _construct_dem_path, data_root=self.data_root, axis=1
+            if modality == "DEM":
+                self.gdf["DEM_paths"] = self.gdf.apply(
+                    _construct_DEM_path, data_root=self.data_root, axis=1
                 )
                 continue
 

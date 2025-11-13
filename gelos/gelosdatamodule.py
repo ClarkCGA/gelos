@@ -18,11 +18,11 @@ from gelos.gelosdataset import GELOSDataSet
 app = typer.Typer()
 
 MEANS =  {
-    "sentinel_1": {
+    "S1RTC": {
         "VV": 0.14450763165950775,
         "VH": 0.029020152986049652
     },
-    "sentinel_2": {
+    "S2L2A": {
         "COASTAL_AEROSOL": 1852.9951171875,
         "BLUE": 2046.738525390625,
         "GREEN": 2346.2802734375,
@@ -45,17 +45,17 @@ MEANS =  {
         "swir16": 0.23768098652362823,
         "swir22": 0.18106447160243988
     },
-    "dem": {
-        "dem": 642.7003173828125
+    "DEM": {
+        "DEM": 642.7003173828125
     }
 }
 
 STDS =  {
-    "sentinel_1": {
+    "S1RTC": {
         "VV": 2.600670576095581,
         "VH": 0.26772621273994446
     },
-    "sentinel_2": {
+    "S2L2A": {
         "COASTAL_AEROSOL": 1201.80078125,
         "BLUE": 1267.075927734375,
         "GREEN": 1316.0233154296875,
@@ -78,8 +78,8 @@ STDS =  {
         "swir16": 0.14630644023418427,
         "swir22": 0.1311405450105667
     },
-    "dem": {
-        "dem": 783.0748291015625
+    "DEM": {
+        "DEM": 783.0748291015625
     }
 }
 
@@ -134,7 +134,7 @@ class GELOSDataModule(NonGeoDataModule):
                 else aug
             )
         else:
-            MultimodalNormalize(self.means, self.stds) if aug is None else aug
+            self.aug = (MultimodalNormalize(self.means, self.stds) if aug is None else aug)
         self.collate_fn = collate_samples
 
     def setup(self, stage: str = "predict") -> None:
