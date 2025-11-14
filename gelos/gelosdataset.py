@@ -7,6 +7,7 @@ import geopandas as gpd
 import numpy as np
 import rioxarray as rxr
 from terratorch.datasets.transforms import MultimodalTransforms
+import torch.nn.functional as F
 
 import torch
 from torchgeo.datasets import NonGeoDataset
@@ -92,6 +93,8 @@ class GELOSDataSet(NonGeoDataset):
         bands: dict[str, List[str]] = BAND_SETS["all"],
         transform: A.Compose | None = None,
         concat_bands: bool = False,
+        repeat_bands: dict[str, int] = None,
+        target_size: int = None
     ) -> None:
         """
         Initializes an instance of GELOS.
@@ -100,10 +103,14 @@ class GELOSDataSet(NonGeoDataset):
         data_root (str | Path): root directory where the dataset can be found
         bands: (Dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
         transform (A.compose, optional): transform to apply. Defaults to ToTensorV2.
+        concat_bands (bool, optional): concatenate all modalities into the channel dimension
+        repeat_bands (dict[str, int], optional): repeat bands when loading from disc, intended to repeat single time step modalities e.g. DEM
         """
         self.data_root = Path(data_root)
         self.bands = bands
         self.concat_bands = concat_bands
+        self.repeat_bands = repeat_bands
+        self.target_size = target_size
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
             f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
@@ -158,8 +165,31 @@ class GELOSDataSet(NonGeoDataset):
 
             
             output[sensor] = image.astype(np.float32)
+            
+        if self.repeat_bands:
+            for sensor, repeats in self.repeat_bands.items():
+                output[sensor] = np.tile(output[sensor], (1, repeats, 1, 1))
+
         if self.transform:
             output = self.transform(output)
+
+        if self.target_size:
+            h = self.target_size
+            w = self.target_size
+            for sensor in output.keys():
+                # output[sensor] shape: [C, T, H, W] -> reshape to [C*T, H, W]
+                original_shape = output[sensor].shape
+                c, t = original_shape[:2]
+                reshaped = output[sensor].reshape(c * t, *original_shape[2:])
+                # Interpolate
+                interpolated = F.interpolate(
+                    reshaped.unsqueeze(0), 
+                    size=(h, w), 
+                    mode='bilinear', 
+                    align_corners=False
+                ).squeeze(0)
+                # Reshape back to [C, T, H, W]
+                output[sensor] = interpolated.reshape(c, t, h, w)
 
         if len(self.bands.keys()) == 1:
             # Rename the single sensor key to "image"

@@ -98,6 +98,8 @@ class GELOSDataModule(NonGeoDataModule):
         transform: A.Compose | None | list[A.BasicTransform] = None,
         aug: AugmentationSequential = None,
         concat_bands: bool = False,
+        repeat_bands: dict[str, int] = None,
+        target_size: int = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -121,6 +123,8 @@ class GELOSDataModule(NonGeoDataModule):
         self.num_workers = num_workers
         self.batch_size = batch_size
         self.concat_bands = concat_bands
+        self.repeat_bands = repeat_bands
+        self.target_size = target_size
         self.means = {}
         self.stds = {}
         for modality in self.modalities:
@@ -147,8 +151,9 @@ class GELOSDataModule(NonGeoDataModule):
             data_root=self.data_root,
             bands=self.bands,
             transform=self.transform,
-            concat_bands=self.concat_bands
-            
+            concat_bands=self.concat_bands,
+            repeat_bands=self.repeat_bands,
+            target_size=self.target_size
         )
 
     def _dataloader_factory(self, stage: str = "predict"):

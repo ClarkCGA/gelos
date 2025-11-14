@@ -15,7 +15,7 @@ data:
     num_workers: 0
     data_root: /app/data/raw/v0.40
     bands:
-      sentinel_2:
+      S2L2A:
         - BLUE
         - GREEN
         - RED
