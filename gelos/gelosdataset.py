@@ -111,6 +111,11 @@ class GELOSDataSet(NonGeoDataset):
         self.concat_bands = concat_bands
         self.repeat_bands = repeat_bands
         self.target_size = target_size
+        self.modality_rename_dict = {
+            "S2L2A": "sentinel_2",
+            "S1RTC": "sentinel_1",
+            "DEM": "dem"
+        }
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
             f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
@@ -237,8 +242,8 @@ class GELOSDataSet(NonGeoDataset):
             # Keep only rows where the number of dates is 4 or more
             self.gdf = self.gdf[self.gdf[f"{modality}_dates"].str.split(",").str.len() >= 4]
 
-
         def _construct_file_paths(row, modality: str, data_root: Path) -> List[Path]:
+            # modality = self.modality_rename_dict.get(modality, modality)
             date_list = row[f"{modality}_dates"].split(",")
             chip_index = row["chip_index"]
             path_list = [data_root / f"{modality}_{chip_index:06}_{date}.tif" for date in date_list]
@@ -246,7 +251,7 @@ class GELOSDataSet(NonGeoDataset):
 
         def _construct_DEM_path(row, data_root: Path) -> List[Path]:
             chip_index = row["chip_index"]
-            DEM_list = [data_root / f"DEM_{chip_index:06}.tif"]
+            DEM_list = [data_root / f"dem_{chip_index:06}.tif"]
             return DEM_list
 
         for modality in self.bands.keys():
