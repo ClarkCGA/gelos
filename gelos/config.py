@@ -16,7 +16,7 @@ INTERIM_DATA_DIR = DATA_DIR / "interim"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 EXTERNAL_DATA_DIR = DATA_DIR / "external"
 
-DATA_VERSION = "0.4.0"
+DATA_VERSION = "v0.40"
 
 MODELS_DIR = PROJ_ROOT / "models"
 

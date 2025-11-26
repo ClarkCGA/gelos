@@ -13,7 +13,6 @@ data:
   init_args:
     batch_size: 1
     num_workers: 0
-    data_root: /app/data/raw/v0.40
     bands:
       S2L2A:
         - BLUE
@@ -22,9 +21,6 @@ data:
         - RED_EDGE_1
         - NIR_BROAD
         - NIR_NARROW
-
-predict_output_dir: ./
-
 
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask
@@ -42,9 +38,8 @@ model:
         - NIR_NARROW
     output_format: parquet
     embed_file_key: filename 
-    output_dir: /app/data/interim/v0.40
-    layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
-    embedding_pooling: null
+    # layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
+    embedding_pooling: vit_cls #null #vit_cls causes an error - default behavior with null seems to use vit_cls
     has_cls: True
     # temporal_cfg: 
     #   temporal_wrapper: True

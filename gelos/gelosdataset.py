@@ -37,7 +37,7 @@ class GELOSDataSet(NonGeoDataset):
     4 time steps for each land cover chip
     """
 
-    S2_BAND_NAMES = [
+    S2RTC_BAND_NAMES = [
         "COASTAL_AEROSOL",
         "BLUE",
         "GREEN",
@@ -51,7 +51,7 @@ class GELOSDataSet(NonGeoDataset):
         "SWIR_1",
         "SWIR_2",
     ]
-    S1_BAND_NAMES = [
+    S1RTC_BAND_NAMES = [
         "VV",
         "VH",
         # TODO 2025-10-17 GELOS v0.40 does not differentiate ASC and DSC S1 passes
@@ -72,8 +72,8 @@ class GELOSDataSet(NonGeoDataset):
     ]
     DEM_BAND_NAMES = ["DEM"]
     all_band_names = {
-        "S1RTC": S1_BAND_NAMES,
-        "S2L2A": S2_BAND_NAMES,
+        "S1RTC": S1RTC_BAND_NAMES,
+        "S2L2A": S2RTC_BAND_NAMES,
         "landsat": LANDSAT_BAND_NAMES,
         "DEM": DEM_BAND_NAMES,
     }
@@ -208,9 +208,11 @@ class GELOSDataSet(NonGeoDataset):
             # Tasks expect data to be stored in "image", moving modalities to image dict
             output["image"] = {m: output.pop(m) for m in self.bands.keys() if m in output}
 
+        # create chip_id with timestep as output filenames
         chip_id = str(sample_row["chip_index"]).zfill(6)
-        # chip_id = sample_row["chip_index"]
-        output["filename"] = np.array([chip_id] * 4, dtype=str)
+        # chip_ids = [f"{chip_id}_{i}" for i in range(4)]
+        # output["filename"] = np.array(chip_ids, dtype=str)
+        output["filename"] = np.array(chip_id, dtype=str)
 
 
         return output
@@ -234,16 +236,16 @@ class GELOSDataSet(NonGeoDataset):
         # for each modality, construct file paths
         # if the modality has multiple dates, construct them from the dates column
         # otherwise, for single time step variables, construct from chip index
-        self.gdf = self.gdf.rename({"sentinel_1_dates": "S1RTC_dates", "sentinel_2_dates": "S2L2A_dates"}, axis=1)
         # Filter out chips with less than 4 dates for any modality
         for modality in self.bands.keys():
-            if modality == "DEM":
+            modality = self.modality_rename_dict.get(modality, modality)
+            if modality == "dem":
                 continue
             # Keep only rows where the number of dates is 4 or more
             self.gdf = self.gdf[self.gdf[f"{modality}_dates"].str.split(",").str.len() >= 4]
 
         def _construct_file_paths(row, modality: str, data_root: Path) -> List[Path]:
-            # modality = self.modality_rename_dict.get(modality, modality)
+            modality = self.modality_rename_dict.get(modality, modality)
             date_list = row[f"{modality}_dates"].split(",")
             chip_index = row["chip_index"]
             path_list = [data_root / f"{modality}_{chip_index:06}_{date}.tif" for date in date_list]

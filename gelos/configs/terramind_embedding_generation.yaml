@@ -13,7 +13,6 @@ data:
   init_args:
     batch_size: 1
     num_workers: 0
-    data_root: /app/data/raw/v0.40
     bands:
       S2L2A:
       - COASTAL_AEROSOL
@@ -37,8 +36,6 @@ data:
       DEM: 4
     target_size: 96
 
-predict_output_dir: ./
-
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask
   init_args:
@@ -52,7 +49,6 @@ model:
       pretrained: True
     output_format: parquet
     embed_file_key: filename
-    output_dir: /app/data/interim/v0.40/terramind
     layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
     embedding_pooling: null
     has_cls: False
