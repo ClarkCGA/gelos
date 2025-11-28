@@ -12,6 +12,7 @@ import typer
 app = typer.Typer()
 from gelos.config import PROJ_ROOT, PROCESSED_DATA_DIR, DATA_VERSION, RAW_DATA_DIR
 from terratorch.tasks import EmbeddingGenerationTask
+
 class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
     def check_file_ids(self, file_ids, x):
         return

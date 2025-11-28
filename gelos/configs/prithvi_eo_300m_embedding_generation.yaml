@@ -39,7 +39,7 @@ model:
     output_format: parquet
     embed_file_key: filename 
     # layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
-    embedding_pooling: vit_cls #null #vit_cls causes an error - default behavior with null seems to use vit_cls
+    embedding_pooling: null 
     has_cls: True
     # temporal_cfg: 
     #   temporal_wrapper: True

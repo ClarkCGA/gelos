@@ -126,7 +126,7 @@ class GELOSDataSet(NonGeoDataset):
             for sens in self.bands.keys()
         }
 
-        self.gdf = gpd.read_file(self.data_root / "cleaned_df.geojson")
+        self.gdf = gpd.read_file(self.data_root / "gelos_chip_tracker.geojson")
         self.gdf = self._process_metadata_df()
 
         # Adjust transforms based on the number of sensors
@@ -137,16 +137,6 @@ class GELOSDataSet(NonGeoDataset):
                 s: transform[s] for s in self.bands.keys()
             }
             self.transform = MultimodalTransforms(transform, shared=False)
-        S1RTC_size=[4, 2, 96, 96]
-        S2L2A_size=[4, 12, 96, 96]
-        landsat_size=[4, 7, 32, 32]
-        DEM_size=[1, 1, 32, 32]
-        self.data_shapes = {
-            'S1RTC': S1RTC_size,
-            'S2L2A': S2L2A_size,
-            'landsat': landsat_size,
-            'DEM': DEM_size,
-        }
     def __len__(self) -> int:
         return len(self.gdf)
 
@@ -158,17 +148,6 @@ class GELOSDataSet(NonGeoDataset):
         for sensor in self.bands.keys():
             sensor_filepaths = sample_row[f"{sensor}_paths"]
             image = self._load_sensor_images(sensor_filepaths, sensor)
-            # Check the shape of the loaded array
-            # expected_shape = self.data_shapes[sensor]
-            # actual_shape = image.shape
-            # assert actual_shape == tuple(expected_shape), (
-            # f"Shape mismatch for sensor '{sensor}'. "
-            # f"Expected {tuple(expected_shape)}, but got {actual_shape}."
-            # )
-        
-        
-
-            
             output[sensor] = image.astype(np.float32)
             
         if self.repeat_bands:
@@ -208,11 +187,9 @@ class GELOSDataSet(NonGeoDataset):
             # Tasks expect data to be stored in "image", moving modalities to image dict
             output["image"] = {m: output.pop(m) for m in self.bands.keys() if m in output}
 
-        # create chip_id with timestep as output filenames
-        chip_id = str(sample_row["chip_index"]).zfill(6)
-        # chip_ids = [f"{chip_id}_{i}" for i in range(4)]
-        # output["filename"] = np.array(chip_ids, dtype=str)
-        output["filename"] = np.array(chip_id, dtype=str)
+        # create id with timestep as output filenames
+        id = str(sample_row["id"]).zfill(6)
+        output["filename"] = np.array(id, dtype=str)
 
 
         return output
@@ -233,27 +210,18 @@ class GELOSDataSet(NonGeoDataset):
 
 
     def _process_metadata_df(self) -> gpd.GeoDataFrame:
-        # for each modality, construct file paths
-        # if the modality has multiple dates, construct them from the dates column
-        # otherwise, for single time step variables, construct from chip index
-        # Filter out chips with less than 4 dates for any modality
-        for modality in self.bands.keys():
-            modality = self.modality_rename_dict.get(modality, modality)
-            if modality == "dem":
-                continue
-            # Keep only rows where the number of dates is 4 or more
-            self.gdf = self.gdf[self.gdf[f"{modality}_dates"].str.split(",").str.len() >= 4]
 
+        # for each modality, construct file paths
         def _construct_file_paths(row, modality: str, data_root: Path) -> List[Path]:
             modality = self.modality_rename_dict.get(modality, modality)
             date_list = row[f"{modality}_dates"].split(",")
-            chip_index = row["chip_index"]
-            path_list = [data_root / f"{modality}_{chip_index:06}_{date}.tif" for date in date_list]
+            id = row["id"]
+            path_list = [data_root / f"{modality}_{id:06}_{date}.tif" for date in date_list]
             return path_list
 
         def _construct_DEM_path(row, data_root: Path) -> List[Path]:
-            chip_index = row["chip_index"]
-            DEM_list = [data_root / f"dem_{chip_index:06}.tif"]
+            id = row["id"]
+            DEM_list = [data_root / f"dem_{id:06}.tif"]
             return DEM_list
 
         for modality in self.bands.keys():
