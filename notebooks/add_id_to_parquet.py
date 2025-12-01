@@ -6,7 +6,7 @@ from gelos import config
 from tqdm import tqdm
 from pathlib import Path
 yaml_config_directory = config.PROJ_ROOT / 'gelos' / 'configs'
-for yaml_filepath in yaml_config_directory.glob("*.yaml"):
+for yaml_filepath in yaml_config_directory.glob("*prithvi*"):
     with open(yaml_filepath, "r") as f:
         yaml_config = yaml.safe_load(f)
     print(yaml.dump(yaml_config))
@@ -24,6 +24,6 @@ for yaml_filepath in yaml_config_directory.glob("*.yaml"):
         for file in tqdm(sorted(embeddings_directory.glob("*.parquet"))):
             df = pd.read_parquet(file)
             file_id = int(file.stem.split("_")[0])  # 0000 -> 0
-            df["id"] = file_id
+            df["file_id"] = file_id
             df.to_parquet(file)
 

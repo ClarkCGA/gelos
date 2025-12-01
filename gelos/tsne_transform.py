@@ -106,14 +106,15 @@ def plot_from_tsne(
     plt.title(extraction_strategy)
     plt.xlabel("t-SNE Dimension 1", fontsize=12)
     plt.ylabel("t-SNE Dimension 2", fontsize=12)
-    plt.xlim([-axis_lim, axis_lim])
-    plt.ylim([-axis_lim, axis_lim])
+    if axis_lim:
+        plt.xlim([-axis_lim, axis_lim])
+        plt.ylim([-axis_lim, axis_lim])
     plt.legend(handles=legend_patches, loc="upper left", fontsize=10, framealpha=0.9)
 
     if output_dir:
         model_title = model_title.replace(" ", "").lower()
         extraction_strategy = extraction_strategy.replace(" ", "").lower()
-        embedding_layer = embedding_layer.replace(" ", "").lower()
+        embedding_layer = embedding_layer.replace("_", "").lower()
         plt.savefig(output_dir / f"{model_title}_{extraction_strategy}_{embedding_layer}_tsneplot.png", dpi=600, bbox_inches="tight")
     else:
         plt.show()
@@ -128,7 +129,7 @@ def save_tsne_as_csv(
 ) -> None:
     model_title = model_title.replace(" ", "").lower()
     extraction_strategy = extraction_strategy.replace(" ", "").lower()
-    embedding_layer = embedding_layer.replace(" ", "").lower()
+    embedding_layer = embedding_layer.replace("_", "").lower()
     embeddings_df = pd.DataFrame({
         "id" : chip_indices,
         f"{model_title}_{extraction_strategy}_x" : embeddings_tsne[:, 0],
@@ -164,7 +165,11 @@ for yaml_filepath in yaml_config_directory.glob("*.yaml"):
 
         for extraction_strategy, slice_args in embedding_extraction_strategies.items():
 
-            embeddings, chip_indices = extract_embeddings_from_directory(embeddings_directory, slice_args=slice_args)
+            embeddings, chip_indices = extract_embeddings_from_directory(
+                embeddings_directory,
+                n_sample = 100,
+                slice_args=slice_args
+                )
 
             embeddings_tsne = tsne_from_embeddings(embeddings)
 
@@ -185,5 +190,6 @@ for yaml_filepath in yaml_config_directory.glob("*.yaml"):
                 embedding_layer,
                 legend_patches,
                 chip_indices,
+                axis_lim = None,
                 output_dir = figures_dir
                 )

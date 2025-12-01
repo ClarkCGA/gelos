@@ -45,6 +45,7 @@ def generate_embeddings(yaml_path: Path) -> None:
 def main():
     yaml_config_directory = PROJ_ROOT / 'gelos' / 'configs'
     yaml_paths = list(yaml_config_directory.glob('*.yaml'))
+    print(f"yamls to process: {yaml_paths}")
     for yaml_path in yaml_paths:
         generate_embeddings(yaml_path)
 

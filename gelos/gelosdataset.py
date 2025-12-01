@@ -190,6 +190,7 @@ class GELOSDataSet(NonGeoDataset):
         # create id with timestep as output filenames
         id = str(sample_row["id"]).zfill(6)
         output["filename"] = np.array(id, dtype=str)
+        output["file_id"] = sample_row["id"]
 
 
         return output
