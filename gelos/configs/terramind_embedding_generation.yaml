@@ -38,6 +38,7 @@ data:
 
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask
+  title: Terramind V1 Base
   init_args:
     model: terramind_v1_base 
     model_args:
@@ -55,3 +56,22 @@ model:
     temporal_cfg: 
       temporal_wrapper: True
       temporal_pooling: keep
+
+
+# define embedding extraction strategy names and lists of arguments for the embedding extraction function
+embedding_extraction_strategies:
+  All Steps of Middle Patch:
+    - start: 0
+      stop: null
+      step: 1
+    - start: 18
+      stop: 19
+      step: 1
+  All Patches from April to June:
+    - start: 1
+      stop: 2
+      step: 1 
+  All Embeddings:
+    - start: 0
+      stop: null
+      step: 1

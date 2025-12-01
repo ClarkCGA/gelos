@@ -24,6 +24,7 @@ data:
 
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask
+  title: Prithvi EO V2 300M
   init_args:
     model: prithvi_eo_v2_300
     model_args:
@@ -44,3 +45,26 @@ model:
     # temporal_cfg: 
     #   temporal_wrapper: True
     #   temporal_pooling: keep
+
+# define embedding extraction strategy names and lists of arguments for the embedding extraction function
+embedding_extraction_strategies:
+  CLS Token:
+    - start: 0
+      stop: 1
+      step: 1
+  All Steps of Middle Patch:
+ # as the first patch is the cls token, we index the middle as 19 rather than 18.
+ # this is important for consistency with non-cls token models like terramind.
+    - start: 19
+      stop: null
+      # start and step are determined by the patch H and W dimensions determined by the model and the input sizes.
+      # in this case, as our inputs are 96x96 and prithvi eo 300m uses 16x16 patches, we have 36 patches per time step.
+      step: 36
+  All Patches from April to June:
+    - start: 37
+      stop: 73
+      step: 1
+  All Embeddings:
+    - start: 0
+      stop: null
+      step: 1
