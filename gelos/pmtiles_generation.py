@@ -1,7 +1,7 @@
-from gelos.config import PROCESSED_DATA_DIR, DATA_VERSION, RAW_DATA_DIR
 import geopandas as gpd
 import subprocess
-from gelos.config import PROCESSED_DATA_DIR, DATA_VERSION
+from gelos.config import RAW_DATA_DIR, PROCESSED_DATA_DIR, DATA_VERSION
+import shutil
 
 output_dir = PROCESSED_DATA_DIR / DATA_VERSION
 embedding_csv_paths = output_dir.rglob("*.csv")
@@ -30,6 +30,8 @@ chip_gdf_centroids = chip_gdf.copy()
 chip_gdf_centroids["geometry"] = chip_gdf_centroids.geometry.centroid
 chip_gdf_centroids = chip_gdf_centroids.set_geometry("geometry")
 chip_gdf_centroids.to_file(output_dir / "gelos_centroids_with_tsne.geojson")
+
+
 cmd = f"""
 tippecanoe -f -Z5 -z14 \
   -ps \
@@ -58,4 +60,8 @@ tippecanoe -f -Z5 -z14 \
   {str(output_dir / "gelos_chip_tracker_with_tsne.geojson")}
 """
 
+
 subprocess.run(cmd, shell=True, check=True)
+
+shutil.copy(output_dir / "gelos_chip_tracker.pmtiles", data_root / "gelos_chip_tracker.pmtiles")
+shutil.copy(output_dir / "centroids.pmtiles", data_root / "centroids.pmtiles")

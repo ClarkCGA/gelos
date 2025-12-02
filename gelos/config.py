@@ -1,10 +1,15 @@
 from pathlib import Path
-
+import os
 from dotenv import load_dotenv
 from loguru import logger
 
 # Load environment variables from .env file if it exists
+# This loads GELOS_BUCKET, the S3 bucket for the gelos dataset
 load_dotenv()
+GELOS_BUCKET = os.environ["GELOS_BUCKET"]  
+AWS_SECRET_KEY = os.environ["AWS_SECRET_KEY"]
+AWS_ACCESS_KEY = os.environ["AWS_ACCESS_KEY"]
+AWS_REGION = os.environ["AWS_REGION"]
 
 # Paths
 PROJ_ROOT = Path(__file__).resolve().parents[1]

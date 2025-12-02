@@ -1,12 +1,4 @@
 FROM pytorch/pytorch:2.8.0-cuda12.9-cudnn9-runtime AS base
-# FROM python:slim-bookworm AS base
-# install system tools + cleanup in a single RUN
-# RUN apt-get update && apt-get install -y --no-install-recommends \
-#     make \
-#     curl \
-#     git \
-#     && rm -rf /var/lib/apt/lists/*
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     curl \
