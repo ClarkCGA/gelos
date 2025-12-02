@@ -7,6 +7,7 @@ import pyarrow as pa
 from matplotlib.patches import Patch
 from tqdm import tqdm
 import pyarrow.parquet as pq
+import pyarrow.dataset as ds
 import numpy as np
 import yaml
 from gelos import config
@@ -34,10 +35,13 @@ def sample_files(directory: str | Path, sample_size: int, *, seed: int | None = 
 
     files = [Path(entry.path) for entry in os.scandir(directory) if entry.is_file()]
     if sample_size >= len(files):
+        files.sort()
+        return files
+    else:
+        files = rng.sample(files, sample_size)
+        files.sort()
         return files
 
-
-    return rng.sample(files, sample_size)
 def select_embedding_indices(
         embeddings_column: pa.lib.ListArray, 
         slice_args: list[dict[str, int]]
@@ -64,19 +68,20 @@ def extract_embeddings_from_directory(
         files = [directory / f"{str(id).zfill(6)}_embedding.parquet" for id in chip_indices]
     else:
         files = sample_files(directory, n_sample, seed=42)
-        chip_indices = [int(file.stem.split('_')[0]) for file in files]
-
+    dataset = ds.dataset(files, format="parquet")
+    scanner = dataset.scanner(columns=["embedding", "file_id"])
     # OPTIMIZE: This would be faster batched, but the order of embeddings must be preserved
     # embedding generation should save chip id as a colummn of the parquet output
-    chunks = []
-    for file_path in tqdm(files, desc="reading embeddings"):
-        table = pq.read_table(file_path, columns=["embedding"])
-        col = table.column("embedding")
-        sliced = select_embedding_indices(col, slice_args)
+    emb_chunks, id_chunks = [], []
+    batches = scanner.to_batches()
+    for batch in tqdm(batches, desc="Processing embeddings"):
+        sliced = select_embedding_indices(batch.column("embedding"), slice_args)
         flattened = pa.compute.list_flatten(sliced, recursive=True)
-        chunk_np = flattened.to_numpy(zero_copy_only=False).reshape(len(table), -1)
-        chunks.append(chunk_np)
-    embeddings = np.vstack(chunks)
+        emb_np = flattened.to_numpy(zero_copy_only=False).reshape(len(batch), -1)
+        emb_chunks.append(emb_np)
+        id_chunks.append(batch.column("file_id").to_numpy())
+    embeddings = np.vstack(emb_chunks)
+    chip_indices = np.concatenate(id_chunks).astype(int).tolist()
     return embeddings, chip_indices
 
 def tsne_from_embeddings(embeddings: np.array) -> np.array:
@@ -132,8 +137,8 @@ def save_tsne_as_csv(
     embedding_layer = embedding_layer.replace("_", "").lower()
     embeddings_df = pd.DataFrame({
         "id" : chip_indices,
-        f"{model_title}_{extraction_strategy}_x" : embeddings_tsne[:, 0],
-        f"{model_title}_{extraction_strategy}_y" : embeddings_tsne[:, 0],
+        f"{model_title}_{extraction_strategy}_tsne_x" : embeddings_tsne[:, 0],
+        f"{model_title}_{extraction_strategy}_tsne_y" : embeddings_tsne[:, 1],
     }).set_index("id")
     embeddings_df.to_csv(output_dir / f"{model_title}_{extraction_strategy}_{embedding_layer}_tsnetable.csv")
 
@@ -167,7 +172,7 @@ for yaml_filepath in yaml_config_directory.glob("*.yaml"):
 
             embeddings, chip_indices = extract_embeddings_from_directory(
                 embeddings_directory,
-                n_sample = 100,
+                n_sample = 100000,
                 slice_args=slice_args
                 )
 
