@@ -142,7 +142,16 @@ def save_tsne_as_csv(
     }).set_index("id")
     embeddings_df.to_csv(output_dir / f"{model_title}_{extraction_strategy}_{embedding_layer}_tsnetable.csv")
 
-yaml_config_directory = config.PROJ_ROOT / 'gelos' / 'configs'
+yaml_config_directory = PROJ_ROOT / 'gelos' / 'configs'
+
+output_dir = PROCESSED_DATA_DIR / DATA_VERSION / model_name
+data_root = RAW_DATA_DIR / DATA_VERSION
+chip_gdf = gpd.read_file(data_root / 'gelos_chip_tracker.geojson')
+reports_dir = REPORTS_DIR / DATA_VERSION
+reports_dir.mkdir(exist_ok=True, parents=True)
+figures_dir = FIGURES_DIR / DATA_VERSION
+figures_dir.mkdir(exist_ok=True, parents=True)
+
 for yaml_filepath in yaml_config_directory.glob("*.yaml"):
     with open(yaml_filepath, "r") as f:
         yaml_config = yaml.safe_load(f)
@@ -150,14 +159,6 @@ for yaml_filepath in yaml_config_directory.glob("*.yaml"):
     model_name = yaml_config['model']['init_args']['model']
     model_title = yaml_config['model']['title']
     embedding_extraction_strategies = yaml_config['embedding_extraction_strategies']
-
-    output_dir = PROCESSED_DATA_DIR / DATA_VERSION / model_name
-    data_root = RAW_DATA_DIR / DATA_VERSION
-    chip_gdf = gpd.read_file(data_root / 'gelos_chip_tracker.geojson')
-    reports_dir = REPORTS_DIR / DATA_VERSION
-    reports_dir.mkdir(exist_ok=True, parents=True)
-    figures_dir = FIGURES_DIR / DATA_VERSION
-    figures_dir.mkdir(exist_ok=True, parents=True)
 
     # add variables to yaml config so it can be passed to classes
     yaml_config['data']['init_args']['data_root'] = data_root
