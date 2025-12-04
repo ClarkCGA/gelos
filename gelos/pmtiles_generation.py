@@ -30,6 +30,8 @@ chip_gdf_centroids = chip_gdf.copy()
 chip_gdf_centroids["geometry"] = chip_gdf_centroids.geometry.centroid
 chip_gdf_centroids = chip_gdf_centroids.set_geometry("geometry")
 chip_gdf_centroids.to_file(output_dir / "gelos_centroids_with_tsne.geojson")
+chip_gdf_centroids.to_file(output_dir / "points.json")
+
 
 
 cmd = f"""
