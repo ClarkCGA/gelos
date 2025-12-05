@@ -65,5 +65,5 @@ tippecanoe -f -Z5 -z14 \
 
 subprocess.run(cmd, shell=True, check=True)
 
-shutil.copy(output_dir / "gelos_chip_tracker.pmtiles", data_root / "gelos_chip_tracker.pmtiles")
-shutil.copy(output_dir / "centroids.pmtiles", data_root / "centroids.pmtiles")
+# shutil.copy(output_dir / "gelos_chip_tracker.pmtiles", data_root / "gelos_chip_tracker.pmtiles")
+# shutil.copy(output_dir / "centroids.pmtiles", data_root / "centroids.pmtiles")

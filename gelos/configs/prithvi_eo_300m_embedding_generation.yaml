@@ -18,9 +18,9 @@ data:
         - BLUE
         - GREEN
         - RED
-        - RED_EDGE_1
-        - NIR_BROAD
         - NIR_NARROW
+        - SWIR_1
+        - SWIR_2
 
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask
@@ -34,9 +34,9 @@ model:
         - BLUE
         - GREEN
         - RED
-        - RED_EDGE_1
-        - NIR_BROAD
         - NIR_NARROW
+        - SWIR_1
+        - SWIR_2
     output_format: parquet
     embed_file_key: filename 
     # layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
