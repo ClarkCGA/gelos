@@ -134,7 +134,7 @@ class GELOSDataSet(NonGeoDataset):
             self.transform = MultimodalToTensor(self.bands.keys())
         else:
             transform = {
-                s: transform[s] for s in self.bands.keys()
+                s: transform for s in self.bands.keys()
             }
             self.transform = MultimodalTransforms(transform, shared=False)
     def __len__(self) -> int:
@@ -154,8 +154,6 @@ class GELOSDataSet(NonGeoDataset):
             for sensor, repeats in self.repeat_bands.items():
                 output[sensor] = np.tile(output[sensor], (1, repeats, 1, 1))
 
-        if self.transform:
-            output = self.transform(output)
 
         if self.target_size:
             h = self.target_size
@@ -163,6 +161,9 @@ class GELOSDataSet(NonGeoDataset):
             for sensor in output.keys():
                 # output[sensor] shape: [C, T, H, W] -> reshape to [C*T, H, W]
                 original_shape = output[sensor].shape
+                h_sensor, w_sensor = original_shape[-2:]
+                if h == h_sensor and w == w_sensor:
+                    continue
                 c, t = original_shape[:2]
                 reshaped = output[sensor].reshape(c * t, *original_shape[2:])
                 # Interpolate
@@ -174,6 +175,14 @@ class GELOSDataSet(NonGeoDataset):
                 ).squeeze(0)
                 # Reshape back to [C, T, H, W]
                 output[sensor] = interpolated.reshape(c, t, h, w)
+        for k, v in output.items():
+            print(k, v.shape)
+
+        if self.transform:
+            output = self.transform(output)
+        for k, v in output.items():
+            print(k, v.shape)
+        
 
         if len(self.bands.keys()) == 1:
             # Rename the single sensor key to "image"
@@ -205,7 +214,7 @@ class GELOSDataSet(NonGeoDataset):
     def _load_sensor_images(self, sensor_filepaths: List[Path], sensor: str) -> np.array:
         band_indices = self.band_indices[sensor]
         sensor_images = [self._load_file(path, band_indices) for path in sensor_filepaths]
-        sensor_image = np.stack(sensor_images, axis=1)
+        sensor_image = np.stack(sensor_images, axis=0)
 
         return sensor_image
 

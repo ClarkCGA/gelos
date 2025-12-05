@@ -21,9 +21,6 @@ data:
         - NIR_NARROW
         - SWIR_1
         - SWIR_2
-    transform:
-      - class_path: albumentations.pytorch.transforms.ToTensorV2
-
 
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask
