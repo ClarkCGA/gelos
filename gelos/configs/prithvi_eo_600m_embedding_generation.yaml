@@ -21,7 +21,16 @@ data:
         - NIR_NARROW
         - SWIR_1
         - SWIR_2
-
+    transform:
+        - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
+        - class_path: albumentations.PadIfNeeded
+          init_args:
+            min_height: 98
+            min_width: 98
+        - class_path: albumentations.pytorch.transforms.ToTensorV2
+        - class_path: terratorch.datasets.transforms.UnflattenTemporalFromChannels
+          init_args:
+            n_timesteps: 4
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask
   title: Prithvi EO V2 600M

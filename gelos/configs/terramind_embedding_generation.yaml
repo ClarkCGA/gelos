@@ -34,7 +34,17 @@ data:
       - DEM  
     repeat_bands:
       DEM: 4
-    target_size: 96
+    transform:
+      - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
+      - class_path: albumentations.augmentations.geometric.resize.Resize
+        init_args:
+          height: 96
+          width: 96
+          interpolation: 0 # Nearest Neighbor
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
+      - class_path: terratorch.datasets.transforms.UnflattenTemporalFromChannels
+        init_args:
+          n_timesteps: 4
 
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask

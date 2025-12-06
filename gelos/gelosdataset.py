@@ -152,37 +152,10 @@ class GELOSDataSet(NonGeoDataset):
             
         if self.repeat_bands:
             for sensor, repeats in self.repeat_bands.items():
-                output[sensor] = np.tile(output[sensor], (1, repeats, 1, 1))
-
-
-        if self.target_size:
-            h = self.target_size
-            w = self.target_size
-            for sensor in output.keys():
-                # output[sensor] shape: [C, T, H, W] -> reshape to [C*T, H, W]
-                original_shape = output[sensor].shape
-                h_sensor, w_sensor = original_shape[-2:]
-                if h == h_sensor and w == w_sensor:
-                    continue
-                c, t = original_shape[:2]
-                reshaped = output[sensor].reshape(c * t, *original_shape[2:])
-                # Interpolate
-                interpolated = F.interpolate(
-                    reshaped.unsqueeze(0), 
-                    size=(h, w), 
-                    mode='bilinear', 
-                    align_corners=False
-                ).squeeze(0)
-                # Reshape back to [C, T, H, W]
-                output[sensor] = interpolated.reshape(c, t, h, w)
-        for k, v in output.items():
-            print(k, v.shape)
+                output[sensor] = np.tile(output[sensor], (repeats, 1, 1, 1))
 
         if self.transform:
             output = self.transform(output)
-        for k, v in output.items():
-            print(k, v.shape)
-        
 
         if len(self.bands.keys()) == 1:
             # Rename the single sensor key to "image"
@@ -207,7 +180,7 @@ class GELOSDataSet(NonGeoDataset):
     def _load_file(self, path, band_indices: List[int]) -> np.array:
         data = rxr.open_rasterio(path, masked=True).to_numpy()
         try:
-            return data[band_indices, :, :]
+            return data[band_indices, :, :].transpose(1,2,0)
         except:
             return data
 

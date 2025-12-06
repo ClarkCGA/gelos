@@ -117,10 +117,11 @@ def plot_from_tsne(
     plt.legend(handles=legend_patches, loc="upper left", fontsize=10, framealpha=0.9)
 
     if output_dir:
-        model_title = model_title.replace(" ", "").lower()
-        extraction_strategy = extraction_strategy.replace(" ", "").lower()
-        embedding_layer = embedding_layer.replace("_", "").lower()
-        plt.savefig(output_dir / f"{model_title}_{extraction_strategy}_{embedding_layer}_tsneplot.png", dpi=600, bbox_inches="tight")
+        model_title_lower = model_title.replace(" ", "").lower()
+        extraction_strategy_lower = extraction_strategy.replace(" ", "").lower()
+        embedding_layer_lower = embedding_layer.replace("_", "").lower()
+        figure_path = output_dir / f"{model_title_lower}_{extraction_strategy_lower}_{embedding_layer_lower}_tsneplot.png"
+        plt.savefig(figure_path, dpi=600, bbox_inches="tight")
     else:
         plt.show()
 
@@ -132,19 +133,21 @@ def save_tsne_as_csv(
         embedding_layer: str,
         output_dir: str | Path = None
 ) -> None:
-    model_title = model_title.replace(" ", "").lower()
-    extraction_strategy = extraction_strategy.replace(" ", "").lower()
-    embedding_layer = embedding_layer.replace("_", "").lower()
+
+    model_title_lower = model_title.replace(" ", "").lower()
+    extraction_strategy_lower = extraction_strategy.replace(" ", "").lower()
+    embedding_layer_lower = embedding_layer.replace("_", "").lower()
+    csv_path = output_dir / f"{model_title_lower}_{extraction_strategy_lower}_{embedding_layer_lower}_tsne.csv"
+
     embeddings_df = pd.DataFrame({
         "id" : chip_indices,
-        f"{model_title}_{extraction_strategy}_tsne_x" : embeddings_tsne[:, 0],
-        f"{model_title}_{extraction_strategy}_tsne_y" : embeddings_tsne[:, 1],
+        f"{model_title_lower}_{extraction_strategy_lower}_tsne_x" : embeddings_tsne[:, 0],
+        f"{model_title_lower}_{extraction_strategy_lower}_tsne_y" : embeddings_tsne[:, 1],
     }).set_index("id")
-    embeddings_df.to_csv(output_dir / f"{model_title}_{extraction_strategy}_{embedding_layer}_tsnetable.csv")
+    embeddings_df.to_csv(csv_path)
 
 yaml_config_directory = PROJ_ROOT / 'gelos' / 'configs'
 
-output_dir = PROCESSED_DATA_DIR / DATA_VERSION / model_name
 data_root = RAW_DATA_DIR / DATA_VERSION
 chip_gdf = gpd.read_file(data_root / 'gelos_chip_tracker.geojson')
 reports_dir = REPORTS_DIR / DATA_VERSION
@@ -159,10 +162,8 @@ for yaml_filepath in yaml_config_directory.glob("*.yaml"):
     model_name = yaml_config['model']['init_args']['model']
     model_title = yaml_config['model']['title']
     embedding_extraction_strategies = yaml_config['embedding_extraction_strategies']
+    output_dir = PROCESSED_DATA_DIR / DATA_VERSION / model_name
 
-    # add variables to yaml config so it can be passed to classes
-    yaml_config['data']['init_args']['data_root'] = data_root
-    yaml_config['model']['init_args']['output_dir'] = output_dir
     embeddings_directories = [item for item in output_dir.iterdir() if item.is_dir()]
 
     for embeddings_directory in embeddings_directories:
@@ -170,6 +171,15 @@ for yaml_filepath in yaml_config_directory.glob("*.yaml"):
         embedding_layer = embeddings_directory.stem
 
         for extraction_strategy, slice_args in embedding_extraction_strategies.items():
+
+
+            model_title_lower = model_title.replace(" ", "").lower()
+            extraction_strategy_lower = extraction_strategy.replace(" ", "").lower()
+            embedding_layer_lower = embedding_layer.replace("_", "").lower()
+            csv_path = output_dir / f"{model_title_lower}_{extraction_strategy_lower}_{embedding_layer_lower}_tnse.csv"
+            if csv_path.exists():
+                print(f"{csv_path.name} already exists, skipping embedding extraction")
+                continue
 
             embeddings, chip_indices = extract_embeddings_from_directory(
                 embeddings_directory,

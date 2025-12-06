@@ -12,6 +12,7 @@ import typer
 app = typer.Typer()
 from gelos.config import PROJ_ROOT, PROCESSED_DATA_DIR, DATA_VERSION, RAW_DATA_DIR
 from terratorch.tasks import EmbeddingGenerationTask
+from lightning.pytorch.cli import instantiate_class
 
 class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
     def check_file_ids(self, file_ids, x):
@@ -37,6 +38,12 @@ def generate_embeddings(yaml_path: Path) -> None:
     yaml_config['data']['init_args']['data_root'] = data_root
     yaml_config['model']['init_args']['output_dir'] = output_dir
 
+    # instantiate transform classes if they exist
+    if "transform" in yaml_config["data"]["init_args"].keys():
+          yaml_config["data"]["init_args"]["transform"] = [
+                instantiate_class(args = (), init=class_path) for class_path in yaml_config["data"]["init_args"]["transform"]
+          ]
+
     gelos_datamodule = GELOSDataModule(**yaml_config['data']['init_args'])
     task = LenientEmbeddingGenerationTask(**yaml_config['model']['init_args'])
 
@@ -47,8 +54,6 @@ def generate_embeddings(yaml_path: Path) -> None:
     marker_file.touch()
     print("marking embeddings as complete")
     
-        
-
 @app.command()
 def main():
     yaml_config_directory = PROJ_ROOT / 'gelos' / 'configs'
