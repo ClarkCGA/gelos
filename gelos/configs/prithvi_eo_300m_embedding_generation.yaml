@@ -21,6 +21,12 @@ data:
         - NIR_NARROW
         - SWIR_1
         - SWIR_2
+    transform:
+      - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
+      - class_path: terratorch.datasets.transforms.UnflattenTemporalFromChannels
+        init_args:
+          n_timesteps: 4
 
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask
@@ -28,18 +34,20 @@ model:
   init_args:
     model: prithvi_eo_v2_300
     model_args:
-      backbone: prithvi_eo_v2_300
-      backbone_pretrained: true
-      backbone_bands:
+      bands:
         - BLUE
         - GREEN
         - RED
         - NIR_NARROW
         - SWIR_1
         - SWIR_2
+      pretrained: true
     output_format: parquet
     embed_file_key: filename 
-    # layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
+    layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
+    output_format: parquet
+    embed_file_key: filename 
+    #   temporal_pooling: keep
     embedding_pooling: null 
     has_cls: True
     # temporal_cfg: 

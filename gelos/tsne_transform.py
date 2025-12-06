@@ -16,6 +16,10 @@ import matplotlib.pyplot as plt
 from gelos.config import PROJ_ROOT, PROCESSED_DATA_DIR, DATA_VERSION, RAW_DATA_DIR
 from gelos.config import REPORTS_DIR, FIGURES_DIR
 
+import typer
+
+app = typer.Typer()
+
 legend_patches = [
     Patch(color=color, label=name)
     for name, color in [
@@ -70,8 +74,6 @@ def extract_embeddings_from_directory(
         files = sample_files(directory, n_sample, seed=42)
     dataset = ds.dataset(files, format="parquet")
     scanner = dataset.scanner(columns=["embedding", "file_id"])
-    # OPTIMIZE: This would be faster batched, but the order of embeddings must be preserved
-    # embedding generation should save chip id as a colummn of the parquet output
     emb_chunks, id_chunks = [], []
     batches = scanner.to_batches()
     for batch in tqdm(batches, desc="Processing embeddings"):
@@ -146,66 +148,72 @@ def save_tsne_as_csv(
     }).set_index("id")
     embeddings_df.to_csv(csv_path)
 
-yaml_config_directory = PROJ_ROOT / 'gelos' / 'configs'
+@app.command()
+def main():
 
-data_root = RAW_DATA_DIR / DATA_VERSION
-chip_gdf = gpd.read_file(data_root / 'gelos_chip_tracker.geojson')
-reports_dir = REPORTS_DIR / DATA_VERSION
-reports_dir.mkdir(exist_ok=True, parents=True)
-figures_dir = FIGURES_DIR / DATA_VERSION
-figures_dir.mkdir(exist_ok=True, parents=True)
+    yaml_config_directory = PROJ_ROOT / 'gelos' / 'configs'
 
-for yaml_filepath in yaml_config_directory.glob("*.yaml"):
-    with open(yaml_filepath, "r") as f:
-        yaml_config = yaml.safe_load(f)
-    print(yaml.dump(yaml_config))
-    model_name = yaml_config['model']['init_args']['model']
-    model_title = yaml_config['model']['title']
-    embedding_extraction_strategies = yaml_config['embedding_extraction_strategies']
-    output_dir = PROCESSED_DATA_DIR / DATA_VERSION / model_name
+    data_root = RAW_DATA_DIR / DATA_VERSION
+    chip_gdf = gpd.read_file(data_root / 'gelos_chip_tracker.geojson')
+    reports_dir = REPORTS_DIR / DATA_VERSION
+    reports_dir.mkdir(exist_ok=True, parents=True)
+    figures_dir = FIGURES_DIR / DATA_VERSION
+    figures_dir.mkdir(exist_ok=True, parents=True)
 
-    embeddings_directories = [item for item in output_dir.iterdir() if item.is_dir()]
+    for yaml_filepath in yaml_config_directory.glob("*.yaml"):
+        with open(yaml_filepath, "r") as f:
+            yaml_config = yaml.safe_load(f)
+        print(yaml.dump(yaml_config))
+        model_name = yaml_config['model']['init_args']['model']
+        model_title = yaml_config['model']['title']
+        embedding_extraction_strategies = yaml_config['embedding_extraction_strategies']
+        output_dir = PROCESSED_DATA_DIR / DATA_VERSION / model_name
 
-    for embeddings_directory in embeddings_directories:
+        embeddings_directories = [item for item in output_dir.iterdir() if item.is_dir()]
 
-        embedding_layer = embeddings_directory.stem
+        for embeddings_directory in embeddings_directories:
 
-        for extraction_strategy, slice_args in embedding_extraction_strategies.items():
+            embedding_layer = embeddings_directory.stem
+
+            for extraction_strategy, slice_args in embedding_extraction_strategies.items():
 
 
-            model_title_lower = model_title.replace(" ", "").lower()
-            extraction_strategy_lower = extraction_strategy.replace(" ", "").lower()
-            embedding_layer_lower = embedding_layer.replace("_", "").lower()
-            csv_path = output_dir / f"{model_title_lower}_{extraction_strategy_lower}_{embedding_layer_lower}_tnse.csv"
-            if csv_path.exists():
-                print(f"{csv_path.name} already exists, skipping embedding extraction")
-                continue
+                model_title_lower = model_title.replace(" ", "").lower()
+                extraction_strategy_lower = extraction_strategy.replace(" ", "").lower()
+                embedding_layer_lower = embedding_layer.replace("_", "").lower()
+                csv_path = output_dir / f"{model_title_lower}_{extraction_strategy_lower}_{embedding_layer_lower}_tnse.csv"
+                if csv_path.exists():
+                    print(f"{csv_path.name} already exists, skipping embedding extraction")
+                    continue
 
-            embeddings, chip_indices = extract_embeddings_from_directory(
-                embeddings_directory,
-                n_sample = 100000,
-                slice_args=slice_args
-                )
+                embeddings, chip_indices = extract_embeddings_from_directory(
+                    embeddings_directory,
+                    n_sample = 100000,
+                    slice_args=slice_args
+                    )
 
-            embeddings_tsne = tsne_from_embeddings(embeddings)
+                embeddings_tsne = tsne_from_embeddings(embeddings)
 
-            save_tsne_as_csv(
-                embeddings_tsne,
-                chip_indices,
-                model_title,
-                extraction_strategy,
-                embedding_layer,
-                output_dir
-                )
+                save_tsne_as_csv(
+                    embeddings_tsne,
+                    chip_indices,
+                    model_title,
+                    extraction_strategy,
+                    embedding_layer,
+                    output_dir
+                    )
 
-            plot_from_tsne(
-                embeddings_tsne,
-                chip_gdf,
-                model_title,
-                extraction_strategy,
-                embedding_layer,
-                legend_patches,
-                chip_indices,
-                axis_lim = None,
-                output_dir = figures_dir
-                )
+                plot_from_tsne(
+                    embeddings_tsne,
+                    chip_gdf,
+                    model_title,
+                    extraction_strategy,
+                    embedding_layer,
+                    legend_patches,
+                    chip_indices,
+                    axis_lim = None,
+                    output_dir = figures_dir
+                    )
+
+if __name__ == "__main__":
+    app()

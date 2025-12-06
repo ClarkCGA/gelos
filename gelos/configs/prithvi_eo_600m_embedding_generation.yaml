@@ -37,15 +37,15 @@ model:
   init_args:
     model: prithvi_eo_v2_600
     model_args:
-      backbone: prithvi_eo_v2_600
-      backbone_pretrained: true
-      backbone_bands:
+    model_args:
+      bands:
         - BLUE
         - GREEN
         - RED
         - NIR_NARROW
         - SWIR_1
         - SWIR_2
+      pretrained: true
     output_format: parquet
     embed_file_key: filename 
     # layers: [-1] # Model layers to extract embeddings from, -1 means the last layer

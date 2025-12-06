@@ -10,6 +10,7 @@ services:
        - .:/app/ 
        - ${RAW_PATH}:/app/data/raw/
        - ${PROCESSED_PATH}:/app/data/processed/
+       - ${EXTERNAL_PATH}:/app/data/external/
     command: jupyter lab --ip=0.0.0.0 --allow-root
     ports:
        - "${HOST_PORT}:8888"
