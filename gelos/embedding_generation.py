@@ -30,9 +30,9 @@ def generate_embeddings(yaml_path: Path) -> None:
     output_dir.mkdir(exist_ok=True, parents=True)
     data_root = RAW_DATA_DIR / DATA_VERSION
     marker_file = output_dir / ".embeddings_complete"
-    if (marker_file).exists():
-        print("embeddings already complete, skipping...")
-        return
+    # if (marker_file).exists():
+    #     print("embeddings already complete, skipping...")
+    #     return
 
     # add variables to yaml config so it can be passed to classes
     yaml_config['data']['init_args']['data_root'] = data_root

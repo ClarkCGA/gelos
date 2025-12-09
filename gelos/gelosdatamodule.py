@@ -1,6 +1,5 @@
 from pathlib import Path
-from typing import Any
-
+from typing import Any, List
 import albumentations as A
 from kornia.augmentation import AugmentationSequential
 from terratorch.datamodules.generic_multimodal_data_module import (
@@ -99,7 +98,8 @@ class GELOSDataModule(NonGeoDataModule):
         aug: AugmentationSequential = None,
         concat_bands: bool = False,
         repeat_bands: dict[str, int] = None,
-        target_size: int = None,
+        perturb_bands: dict[str, List[str]] = None,
+        perturb_alpha: float = 1,
         **kwargs: Any,
     ) -> None:
         """
@@ -113,6 +113,9 @@ class GELOSDataModule(NonGeoDataModule):
             transform (A.Compose, optional): Transforms for data, defaults to ToTensorV2.
             aug (AugmentationSequential, optional): Augmentation or normalization to apply. Defaults to normalization if not provided.
             concat_bands (bool): Whether to concat all sensors into one 'image' tensor or keep separate
+            repeat_bands (dict[str, int], optional): repeat bands when loading from disc, intended to repeat single time step modalities e.g. DEM
+            perturb_bands (dict[str, List[str]], optional): perturb bands with additive gaussian noise. Dictionary defining modalities and bands for perturbation.
+            perturb_alpha (float, optional): relative weight given to source data vs perturbation noise. 0 signifies all noise, 1 signifies equal weights
             **kwargs: Additional keyword arguments.
         """
         super().__init__(GELOSDataSet, batch_size, num_workers, **kwargs)
@@ -124,7 +127,8 @@ class GELOSDataModule(NonGeoDataModule):
         self.batch_size = batch_size
         self.concat_bands = concat_bands
         self.repeat_bands = repeat_bands
-        self.target_size = target_size
+        self.perturb_bands = perturb_bands
+        self.perturb_alpha = perturb_alpha
         self.means = {}
         self.stds = {}
         for modality in self.modalities:
@@ -150,10 +154,13 @@ class GELOSDataModule(NonGeoDataModule):
         self.dataset = self.dataset_class(
             data_root=self.data_root,
             bands=self.bands,
+            means=self.means,
+            stds=self.stds,
             transform=self.transform,
             concat_bands=self.concat_bands,
             repeat_bands=self.repeat_bands,
-            target_size=self.target_size
+            perturb_bands=self.perturb_bands,
+            perturb_alpha = self.perturb_alpha,
         )
 
     def _dataloader_factory(self, stage: str = "predict"):
