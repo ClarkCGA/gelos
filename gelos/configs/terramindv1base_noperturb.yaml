@@ -12,7 +12,7 @@ data:
   class_path: gelos.gelosdatamodule.GELOSDataModule
   init_args:
     batch_size: 1
-    num_workers: 0
+    num_workers: 2
     bands:
       S2L2A:
       - COASTAL_AEROSOL
@@ -70,6 +70,7 @@ model:
 
 # define embedding extraction strategy names and lists of arguments for the embedding extraction function
 embedding_extraction_strategies:
+  # since terramind embeddings are nested lists, the first args dict gets all time steps, the second gets patch at idx 18 (center)
   All Steps of Middle Patch:
     - start: 0
       stop: null

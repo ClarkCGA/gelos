@@ -98,8 +98,7 @@ class GELOSDataModule(NonGeoDataModule):
         aug: AugmentationSequential = None,
         concat_bands: bool = False,
         repeat_bands: dict[str, int] = None,
-        perturb_bands: dict[str, List[str]] = None,
-        perturb_alpha: float = 1,
+        perturb_bands: dict[str, dict[str, float]] = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -114,8 +113,7 @@ class GELOSDataModule(NonGeoDataModule):
             aug (AugmentationSequential, optional): Augmentation or normalization to apply. Defaults to normalization if not provided.
             concat_bands (bool): Whether to concat all sensors into one 'image' tensor or keep separate
             repeat_bands (dict[str, int], optional): repeat bands when loading from disc, intended to repeat single time step modalities e.g. DEM
-            perturb_bands (dict[str, List[str]], optional): perturb bands with additive gaussian noise. Dictionary defining modalities and bands for perturbation.
-            perturb_alpha (float, optional): relative weight given to source data vs perturbation noise. 0 signifies all noise, 1 signifies equal weights
+            perturb_bands (dict[str, dict[str, float]], optional): perturb bands with additive gaussian noise. Dictionary defining modalities and bands with weights for perturbation.
             **kwargs: Additional keyword arguments.
         """
         super().__init__(GELOSDataSet, batch_size, num_workers, **kwargs)
@@ -128,7 +126,6 @@ class GELOSDataModule(NonGeoDataModule):
         self.concat_bands = concat_bands
         self.repeat_bands = repeat_bands
         self.perturb_bands = perturb_bands
-        self.perturb_alpha = perturb_alpha
         self.means = {}
         self.stds = {}
         for modality in self.modalities:
@@ -160,7 +157,6 @@ class GELOSDataModule(NonGeoDataModule):
             concat_bands=self.concat_bands,
             repeat_bands=self.repeat_bands,
             perturb_bands=self.perturb_bands,
-            perturb_alpha = self.perturb_alpha,
         )
 
     def _dataloader_factory(self, stage: str = "predict"):

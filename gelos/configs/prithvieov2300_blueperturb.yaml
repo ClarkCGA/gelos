@@ -12,7 +12,7 @@ data:
   class_path: gelos.gelosdatamodule.GELOSDataModule
   init_args:
     batch_size: 1
-    num_workers: 0
+    num_workers: 2
     bands:
       S2L2A:
         - BLUE
@@ -23,7 +23,7 @@ data:
         - SWIR_2
     perturb_bands:
       S2L2A:
-        - BLUE
+        BLUE: 0.1
     transform:
       - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
       - class_path: albumentations.pytorch.transforms.ToTensorV2

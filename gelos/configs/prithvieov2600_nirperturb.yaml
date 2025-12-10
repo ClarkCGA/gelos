@@ -3,7 +3,8 @@ seed_everything: 0
 trainer:
   accelerator: auto
   strategy: auto
-  devices: auto
+  devices:
+    - 1 
   num_nodes: 1
   callbacks: []
   max_epochs: 0
@@ -12,7 +13,7 @@ data:
   class_path: gelos.gelosdatamodule.GELOSDataModule
   init_args:
     batch_size: 1
-    num_workers: 0
+    num_workers: 2
     bands:
       S2L2A:
         - BLUE
@@ -23,7 +24,7 @@ data:
         - SWIR_2
     perturb_bands:
       S2L2A:
-        - NIR_NARROW 
+        NIR_NARROW: 0.1
     transform:
         - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
         - class_path: albumentations.PadIfNeeded

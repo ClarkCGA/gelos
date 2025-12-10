@@ -184,9 +184,9 @@ class GELOSDataSet(NonGeoDataset):
         
         # Add or replace individual bands with Gaussian noise scaled to each band's dataset-wide mean and std
         if self.perturb_bands:
-            for sensor, perturb_band_list in self.perturb_bands.items():
-                band_indices = [self.bands[sensor].index(b) for b in perturb_band_list]
-                output = self._perturb_bands(output, sensor, band_indices)
+            for sensor, perturb_band_dict in self.perturb_bands.items():
+                band_dict = {self.bands[sensor].index(band) : alpha for band, alpha in perturb_band_dict.items()}
+                output = self._perturb_bands(output, sensor, band_dict)
 
         if self.transform:
             output = self.transform(output)
@@ -211,17 +211,18 @@ class GELOSDataSet(NonGeoDataset):
 
         return output
 
-    def _perturb_bands(self, output, sensor, band_indices):
+    def _perturb_bands(self, output, sensor, band_dict):
         # perturb given bands of one sensor output
         # get mean and std of given band of sensor
-        for band_index in band_indices:
+        for band_index, alpha in band_dict.items():
             loc = self.means[sensor][band_index]
             scale = self.stds[sensor][band_index]
             
             # get size of noise tensor to generate
             size = output[sensor][:, :, :, band_index].shape
             noise = np.random.normal(loc=loc, scale=scale, size=size)
-            combined_noise = (noise + output[sensor][:, :, :, band_index] * self.perturb_alpha) / (1 + self.perturb_alpha)
+            original_band = output[sensor][:, :, :, band_index]
+            combined_noise = (noise * alpha) + (original_band * (1 - alpha))
             # combine noise back into output
             output[sensor][:, :, :, band_index] = combined_noise
         return output
@@ -292,10 +293,10 @@ class GELOSDataSet(NonGeoDataset):
             nrows = 1
         ncols=4
 
-        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(ncols * 5, nrows * 5), squeeze=False)
+        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(ncols * 5, nrows * 5), squeeze=False, constrained_layout=True)
 
         if not isinstance(sample["image"], dict):
-            "Only one modality, setup dict for plotting"
+            # only one modality, setup dict for plotting
             sens = list(self.bands.keys())[0]
             sample["image"] = {sens: sample["image"]}
 
