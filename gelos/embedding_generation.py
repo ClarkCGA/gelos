@@ -95,8 +95,8 @@ def main(
         yaml_paths = list(yaml_config_directory.glob("*.yaml"))
 
     logger.info(f"yamls to process: {yaml_paths}")
-    for yaml_path_loop in yaml_paths:
-        generate_embeddings(yaml_path_loop)
+    for yaml_path in yaml_paths:
+        generate_embeddings(yaml_path)
 
 
 

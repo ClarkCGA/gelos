@@ -82,7 +82,7 @@ embedding_extraction_strategies:
     - start: 1
       stop: 2
       step: 1 
-  # All Embeddings:
-  #   - start: 0
-  #     stop: null
-  #     step: 1
+  All Embeddings:
+    - start: 0
+      stop: null
+      step: 1

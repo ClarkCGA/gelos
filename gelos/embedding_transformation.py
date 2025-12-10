@@ -9,16 +9,9 @@ from gelos.config import PROJ_ROOT, PROCESSED_DATA_DIR, DATA_VERSION, RAW_DATA_D
 from gelos.config import REPORTS_DIR, FIGURES_DIR
 from pathlib import Path
 import typer
-
+from loguru import logger
 app = typer.Typer()
-@app.command()
-def main():
-
-    yaml_config_directory = PROJ_ROOT / 'gelos' / 'configs'
-    yaml_paths = list(yaml_config_directory.glob('*.yaml'))
-    print(f"yamls to process: {yaml_paths}")
-    for yaml_path in yaml_paths:
-        transform_embeddings(yaml_path)
+from typing import Optional
 
 def transform_embeddings(yaml_path: Path) -> None:
 
@@ -50,6 +43,7 @@ def transform_embeddings(yaml_path: Path) -> None:
             model_title_lower = model_title.replace(" ", "").lower()
             extraction_strategy_lower = extraction_strategy.replace(" ", "").lower()
             embedding_layer_lower = embedding_layer.replace("_", "").lower()
+
             csv_path = output_dir / f"{model_title_lower}_{perturb_string}_{extraction_strategy_lower}_{embedding_layer_lower}_tnse.csv"
             if csv_path.exists():
                 print(f"{str(csv_path)} already exists, skipping embedding extraction")
@@ -62,6 +56,8 @@ def transform_embeddings(yaml_path: Path) -> None:
                 )
 
             embeddings_tsne = tsne_from_embeddings(embeddings)
+
+            print(f"tnse transform finished, extracting embeddings into {str(csv_path)} and plotting")
 
             save_tsne_as_csv(
                 embeddings_tsne,
@@ -83,6 +79,28 @@ def transform_embeddings(yaml_path: Path) -> None:
                 axis_lim = None,
                 output_dir = figures_dir
                 )
+@app.command()
+def main(
+    yaml_path: Optional[Path] = typer.Option(
+        None, "--yaml-path", "-y", help="Path to a single yaml config to process."
+    )
+):
+    """
+    Generate embeddings from a model and data specified in a yaml config.
+
+    If --yaml-path is provided, only that yaml will be processed.
+    Otherwise, all yamls in the default config directory will be processed.
+    """
+    if yaml_path:
+        yaml_paths = [Path(yaml_path)]
+    else:
+        yaml_config_directory = PROJ_ROOT / "gelos" / "configs"
+        yaml_paths = list(yaml_config_directory.glob("*.yaml"))
+
+    logger.info(f"yamls to process: {yaml_paths}")
+    for yaml_path in yaml_paths:
+        transform_embeddings(yaml_path)
+
 
 if __name__ == "__main__":
     app()

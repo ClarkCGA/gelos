@@ -4,7 +4,7 @@ from gelos.config import RAW_DATA_DIR, PROCESSED_DATA_DIR, DATA_VERSION
 import shutil
 
 output_dir = PROCESSED_DATA_DIR / DATA_VERSION
-embedding_csv_paths = output_dir.rglob("*.csv")
+embedding_csv_paths = output_dir.rglob("*tsne.csv")
 data_root = RAW_DATA_DIR / DATA_VERSION
 chip_gdf = gpd.read_file(data_root / 'gelos_chip_tracker.geojson')
 chip_gdf = chip_gdf[[
