@@ -4,6 +4,12 @@ import numpy as np
 from pathlib import Path
 from matplotlib.patches import Patch
 
+def format_lat_lon(lat: float, lon: float) -> str:
+    """Return formatted coords like 12.34°N, 56.78°E."""
+    lat_hemisphere = "N" if lat >= 0 else "S"
+    lon_hemisphere = "E" if lon >= 0 else "W"
+    return f"{abs(lat):.2f}°{lat_hemisphere}, {abs(lon):.2f}°{lon_hemisphere}"
+
 legend_patches = [
     Patch(color=color, label=name)
     for name, color in [
