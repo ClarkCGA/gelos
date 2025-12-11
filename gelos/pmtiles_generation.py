@@ -21,17 +21,18 @@ chip_gdf = chip_gdf[[
     "sentinel_2_thumbs",
     "geometry"
     ]]
+tsne_gdf = chip_gdf.copy()
 for embedding_csv_path in embedding_csv_paths:
-    embed_df = gpd.read_file(embedding_csv_path)
-    embed_df.to_csv(output_dir / embedding_csv_path.name, index=False)
+    embed_df = gpd.read_file(embedding_csv_path).drop("id", axis=1)
+    tsne_gdf = tsne_gdf.merge(embed_df, left_index=True, right_index=True, how="left")
     
 print(f"chip tracker columns: {chip_gdf.columns}")
-chip_gdf.to_file(output_dir / "gelos_chip_tracker_with_tsne.geojson")
+tsne_gdf.to_file(output_dir / "gelos_chip_tracker_with_tsne.geojson")
 chip_gdf_centroids = chip_gdf.copy()
 chip_gdf_centroids["geometry"] = chip_gdf_centroids.geometry.centroid
 chip_gdf_centroids = chip_gdf_centroids.set_geometry("geometry")
 chip_gdf_centroids.to_file(output_dir / "gelos_centroids_with_tsne.geojson")
-chip_gdf_centroids.to_file(output_dir / "points.json")
+tsne_gdf.to_file(output_dir / "points.json")
 
 
 

@@ -10,7 +10,7 @@ from terratorch.datasets.transforms import MultimodalTransforms
 import torch.nn.functional as F
 import torch
 from torchgeo.datasets import NonGeoDataset
-class MultimodalToTensor:
+class MultimodalToTensor: #TODO: Fix to expect [T, H, W, C]
     def __init__(self, modalities):
         self.modalities = modalities
 
