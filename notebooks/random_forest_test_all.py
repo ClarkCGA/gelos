@@ -101,17 +101,22 @@ def aggregate_rf_metrics(output_path: Optional[Path] = None):
             continue
         df = pd.read_csv(metrics_file)
         summary_df = df[df["fold"].astype(str).isin(["mean", "std"])]
-        for _, row in summary_df.iterrows():
-            rows.append(
-                {
-                    "model_name": model_name,
-                    "extraction_strategy": extraction_strategy,
-                    "embedding_layer": embedding_layer,
-                    "fold": row["fold"],
-                    "accuracy": row["accuracy"],
-                    "source_file": metrics_file.relative_to(output_dir),
-                }
-            )
+        mean_val = summary_df.loc[summary_df["fold"].astype(str) == "mean", "accuracy"].squeeze()
+        std_val = summary_df.loc[summary_df["fold"].astype(str) == "std", "accuracy"].squeeze()
+        if pd.isna(mean_val) or pd.isna(std_val):
+            logger.warning(f"Missing mean/std in {metrics_file}, skipping.")
+            continue
+        rows.append(
+            {
+                "model_name": model_name,
+                "extraction_strategy": extraction_strategy,
+                "embedding_layer": embedding_layer,
+                "accuracy_mean": mean_val,
+                "accuracy_std": std_val,
+                "accuracy_formatted": f"{mean_val:.4f} +- {std_val:.4f}",
+                "source_file": metrics_file.relative_to(output_dir),
+            }
+        )
     if not rows:
         logger.warning("No summary rows (mean/std) collected.")
         return

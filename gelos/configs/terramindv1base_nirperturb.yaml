@@ -36,7 +36,7 @@ data:
       DEM: 4
     perturb_bands:
       S2L2A:
-        BLUE: 0.1
+        NIR_NARROW: 0.1
     transform:
       - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
       - class_path: albumentations.augmentations.geometric.resize.Resize
