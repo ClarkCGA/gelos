@@ -4,6 +4,7 @@ from gelos.tsne_transform import tsne_from_embeddings, save_tsne_as_csv
 from gelos.plotting import plot_from_tsne, legend_patches
 from gelos.embedding_generation import perturb_args_to_string
 import geopandas as gpd
+import pandas as pd
 import yaml
 from gelos.config import PROJ_ROOT, PROCESSED_DATA_DIR, DATA_VERSION, RAW_DATA_DIR
 from gelos.config import REPORTS_DIR, FIGURES_DIR
@@ -13,16 +14,12 @@ from loguru import logger
 app = typer.Typer()
 from typing import Optional
 
-def transform_embeddings(yaml_path: Path) -> None:
+def transform_embeddings(yaml_path: Path, chip_gdf, figures_dir) -> None:
 
     with open(yaml_path, "r") as f:
         yaml_config = yaml.safe_load(f)
-    print(yaml.dump(yaml_config))
+    logger.info(f"processing {yaml_path}")
 
-    data_root = RAW_DATA_DIR / DATA_VERSION
-    chip_gdf = gpd.read_file(data_root / 'gelos_chip_tracker.geojson')
-    figures_dir = FIGURES_DIR / DATA_VERSION
-    figures_dir.mkdir(exist_ok=True, parents=True)
 
     model_name = yaml_config['model']['init_args']['model']
     model_title = yaml_config['model']['title']
@@ -44,30 +41,38 @@ def transform_embeddings(yaml_path: Path) -> None:
             extraction_strategy_lower = extraction_strategy.replace(" ", "").lower()
             embedding_layer_lower = embedding_layer.replace("_", "").lower()
 
-            csv_path = output_dir / f"{model_title_lower}_{perturb_string}_{extraction_strategy_lower}_{embedding_layer_lower}_tnse.csv"
-            if csv_path.exists():
-                print(f"{str(csv_path)} already exists, skipping embedding extraction")
-                continue
-            print(f"extracting embeddings into {str(csv_path)}")
+            csv_path = output_dir / f"{model_title_lower}_{extraction_strategy_lower}_{embedding_layer_lower}_tsne.csv"
 
-            embeddings, chip_indices = extract_embeddings(
-                embeddings_directory,
-                slice_args=slice_args
-                )
+            if csv_path.exists() and 1==0:
+                logger.info(f"{str(csv_path)} already exists, loading embeddings from file")
+                loaded_embeddings = pd.read_csv(csv_path)
+                embeddings_tsne = loaded_embeddings[[
+                    f"{model_title_lower}_{extraction_strategy_lower}_tsne_x",
+                    f"{model_title_lower}_{extraction_strategy_lower}_tsne_y"
+                ]].to_numpy()
+                chip_indices = loaded_embeddings["id"].to_numpy()
+            else:    
+                logger.info(f"extracting embeddings into {str(csv_path)}")
 
-            embeddings_tsne = tsne_from_embeddings(embeddings)
+                embeddings, chip_indices = extract_embeddings(
+                    embeddings_directory,
+                    slice_args=slice_args
+                    )
 
-            print(f"tnse transform finished, extracting embeddings into {str(csv_path)} and plotting")
+                embeddings_tsne = tsne_from_embeddings(embeddings)
 
-            save_tsne_as_csv(
-                embeddings_tsne,
-                chip_indices,
-                model_title,
-                extraction_strategy,
-                embedding_layer,
-                output_dir
-                )
+                logger.info(f"tnse transform finished, extracting embeddings into {str(csv_path)}")
 
+                save_tsne_as_csv(
+                    embeddings_tsne,
+                    chip_indices,
+                    model_title,
+                    extraction_strategy,
+                    embedding_layer,
+                    output_dir
+                    )
+
+            logger.info("plotting...")
             plot_from_tsne(
                 embeddings_tsne,
                 chip_gdf,
@@ -91,15 +96,20 @@ def main(
     If --yaml-path is provided, only that yaml will be processed.
     Otherwise, all yamls in the default config directory will be processed.
     """
+    data_root = RAW_DATA_DIR / DATA_VERSION
+    chip_gdf = gpd.read_file(data_root / 'gelos_chip_tracker.geojson')
+    figures_dir = FIGURES_DIR / DATA_VERSION
+    figures_dir.mkdir(exist_ok=True, parents=True)
+
     if yaml_path:
         yaml_paths = [Path(yaml_path)]
     else:
         yaml_config_directory = PROJ_ROOT / "gelos" / "configs"
-        yaml_paths = list(yaml_config_directory.glob("*.yaml"))
+        yaml_paths = list(yaml_config_directory.glob("*noperturb*.yaml*")) # only do tsne transforms for non-perturbed
 
     logger.info(f"yamls to process: {yaml_paths}")
     for yaml_path in yaml_paths:
-        transform_embeddings(yaml_path)
+        transform_embeddings(yaml_path, chip_gdf, figures_dir)
 
 
 if __name__ == "__main__":

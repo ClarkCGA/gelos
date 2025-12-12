@@ -48,12 +48,15 @@ def plot_from_tsne(
         plt.xlim([-axis_lim, axis_lim])
         plt.ylim([-axis_lim, axis_lim])
     plt.legend(handles=legend_patches, loc="upper left", fontsize=10, framealpha=0.9)
+    # plt.axis("off")
 
     if output_dir:
         model_title_lower = model_title.replace(" ", "").lower()
         extraction_strategy_lower = extraction_strategy.replace(" ", "").lower()
         embedding_layer_lower = embedding_layer.replace("_", "").lower()
         figure_path = output_dir / f"{model_title_lower}_{extraction_strategy_lower}_{embedding_layer_lower}_tsneplot.png"
+        # figure_path = output_dir / f"{model_title_lower}_{extraction_strategy_lower}_{embedding_layer_lower}_tsneplot_minimal.png"
         plt.savefig(figure_path, dpi=600, bbox_inches="tight")
+        # plt.savefig(figure_path, dpi=600, bbox_inches="tight", transparent=True)
     else:
         plt.show()
