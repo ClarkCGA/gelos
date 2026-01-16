@@ -63,7 +63,7 @@ embedding_extraction_strategies:
   All Steps of Middle Patch:
  # as the first patch is the cls token, we index the middle as 19 rather than 18.
  # this is important for consistency with non-cls token models like terramind.
-    - start: 19
+    - start: 15
       stop: null
       # start and step are determined by the patch H and W dimensions determined by the model and the input sizes.
       # in this case, as our inputs are 96x96 and prithvi eo 300m uses 16x16 patches, we have 36 patches per time step.
