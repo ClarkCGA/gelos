@@ -59,13 +59,7 @@ chip_gdf.to_file(interim_dir / "gelos_app_chip_tracker.geojson", driver="GeoJSON
 
 # generate pmtiles using tippecanoe
 cmd = f"""
-tippecanoe -f -Z5 -z14 \
-  -ps \
-  --no-tiny-polygon-reduction \
-  --no-tile-size-limit \
-  --no-feature-limit \
-  --drop-densest-as-needed \
-  --extend-zooms-if-still-dropping \
+tippecanoe -zg \
   -l gelos_centroids \
   -o {str(app_files_dir / "centroids.pmtiles")} \
   {str(interim_dir / "gelos_app_centroids.geojson")}
@@ -74,7 +68,7 @@ tippecanoe -f -Z5 -z14 \
 subprocess.run(cmd, shell=True, check=True)
 
 cmd = f"""
-tippecanoe -f -Z5 -z14 \
+tippecanoe -f -zg \
   -ps \
   --no-tiny-polygon-reduction \
   --no-tile-size-limit \
