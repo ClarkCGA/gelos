@@ -50,11 +50,17 @@ for embedding_csv_path in embedding_csv_paths:
 
 
 # save centroids and chips to temporary files for tippecanoe to load from
-chip_gdf_centroids = chip_gdf.copy()
+chip_gdf_chip_tracker = chip_gdf[[
+    "category",
+    "id",
+    "color",
+    "geometry",
+    ]]
+chip_gdf_centroids = chip_gdf_chip_tracker.copy()
 chip_gdf_centroids["geometry"] = chip_gdf_centroids.geometry.centroid
 chip_gdf_centroids = chip_gdf_centroids.set_geometry("geometry")
 chip_gdf_centroids.to_file(interim_dir / "gelos_app_centroids.geojson", driver="GeoJSON")
-chip_gdf.to_file(interim_dir / "gelos_app_chip_tracker.geojson", driver="GeoJSON")
+chip_gdf_chip_tracker.to_file(interim_dir / "gelos_app_chip_tracker.geojson", driver="GeoJSON")
 
 
 # generate pmtiles using tippecanoe
