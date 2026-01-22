@@ -74,7 +74,7 @@ tippecanoe -zg \
 subprocess.run(cmd, shell=True, check=True)
 
 cmd = f"""
-tippecanoe -f -zg \
+tippecanoe -f \
   -ps \
   --no-tiny-polygon-reduction \
   --no-tile-size-limit \
