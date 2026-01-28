@@ -1,0 +1,89 @@
+# lightning.pytorch==2.1.1
+seed_everything: 0
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices:
+    - 1 
+  num_nodes: 1
+  callbacks: []
+  max_epochs: 0
+
+data:
+  class_path: gelos.gelosdatamodule.GELOSDataModule
+  init_args:
+    batch_size: 1
+    num_workers: 2
+    bands:
+      S2L2A:
+        - BLUE
+        - GREEN
+        - RED
+        - NIR_NARROW
+        - SWIR_1
+        - SWIR_2
+    perturb_bands:
+      S2L2A:
+        NIR_NARROW: 0.1
+    transform:
+        - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
+        - class_path: albumentations.PadIfNeeded
+          init_args:
+            min_height: 98
+            min_width: 98
+        - class_path: albumentations.pytorch.transforms.ToTensorV2
+        - class_path: terratorch.datasets.transforms.UnflattenTemporalFromChannels
+          init_args:
+            n_timesteps: 4
+model:
+  class_path: terratorch.tasks.EmbeddingGenerationTask
+  title: Prithvi EO V2 600M
+  init_args:
+    model: prithvi_eo_v2_600
+    model_args:
+    model_args:
+      bands:
+        - BLUE
+        - GREEN
+        - RED
+        - NIR_NARROW
+        - SWIR_1
+        - SWIR_2
+      pretrained: true
+    output_format: parquet
+    embed_file_key: filename 
+    # layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
+    embedding_pooling: null 
+    has_cls: True
+    # temporal_cfg: 
+    #   temporal_wrapper: True
+    #   temporal_pooling: keep
+
+# define embedding extraction strategy names and lists of arguments for the embedding extraction function
+embedding_extraction_strategies:
+  CLS Token:
+    - start: 0
+      stop: 1
+      step: 1
+  All Steps of Middle Patch:
+ # as the first patch is the cls token, we index the middle as 25 rather than 24.
+ # this is important for consistency with non-cls token models like terramind.
+    - start: 25
+      stop: null
+      # start and step are determined by the patch H and W dimensions determined by the model and the input sizes.
+      # in this case, as our inputs are 96x96 and prithvi eo 600m uses 14x14 patches,
+      # inputs are padded to 98x98 and we have 7x7 or 49 patches per time step.
+      step: 49
+  All Patches from April to June:
+    - start: 50
+      stop: 99
+      step: 1
+  # All Embeddings:
+  #   - start: 0
+  #     stop: null
+  #     step: 1
+
+# define dimensionality reduction strategies for embeddings
+  # reduction_strategies:
+  #   tSNE:
+  #   PCA:
