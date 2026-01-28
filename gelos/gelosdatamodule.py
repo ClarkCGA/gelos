@@ -16,84 +16,19 @@ from gelos.gelosdataset import GELOSDataSet
 
 app = typer.Typer()
 
-MEANS =  {
-    "S1RTC": {
-        "VV": 0.14450763165950775,
-        "VH": 0.029020152986049652
-    },
-    "S2L2A": {
-        "COASTAL_AEROSOL": 1852.9951171875,
-        "BLUE": 2046.738525390625,
-        "GREEN": 2346.2802734375,
-        "RED": 2593.03857421875,
-        "RED_EDGE_1": 2900.828857421875,
-        "RED_EDGE_2": 3365.597900390625,
-        "RED_EDGE_3": 3576.141357421875,
-        "NIR_BROAD": 3657.3046875,
-        "NIR_NARROW": 3703.0908203125,
-        "WATER_VAPOR": 3709.93359375,
-        "SWIR_1": 3543.164794921875,
-        "SWIR_2": 3048.239990234375
-    },
-    "landsat": {
-        "coastal": 0.08165209740400314,
-        "blue": 0.09596806019544601,
-        "green": 0.1315794140100479,
-        "red": 0.1531316637992859,
-        "nir08": 0.2621993124485016,
-        "swir16": 0.23768098652362823,
-        "swir22": 0.18106447160243988
-    },
-    "DEM": {
-        "DEM": 642.7003173828125
-    }
-}
-
-STDS =  {
-    "S1RTC": {
-        "VV": 2.600670576095581,
-        "VH": 0.26772621273994446
-    },
-    "S2L2A": {
-        "COASTAL_AEROSOL": 1201.80078125,
-        "BLUE": 1267.075927734375,
-        "GREEN": 1316.0233154296875,
-        "RED": 1520.836669921875,
-        "RED_EDGE_1": 1518.5592041015625,
-        "RED_EDGE_2": 1419.7735595703125,
-        "RED_EDGE_3": 1442.878662109375,
-        "NIR_BROAD": 1476.5181884765625,
-        "NIR_NARROW": 1437.5333251953125,
-        "WATER_VAPOR": 1440.673095703125,
-        "SWIR_1": 1588.948974609375,
-        "SWIR_2": 1524.4881591796875
-    },
-    "landsat": {
-        "coastal": 0.15966829657554626,
-        "blue": 0.16089804470539093,
-        "green": 0.15540584921836853,
-        "red": 0.1680557280778885,
-        "nir08": 0.15390564501285553,
-        "swir16": 0.14630644023418427,
-        "swir22": 0.1311405450105667
-    },
-    "DEM": {
-        "DEM": 783.0748291015625
-    }
-}
-
 # instantiate GELOS datamodule class
 class GELOSDataModule(NonGeoDataModule):
     """
     This is the datamodule for Geospatial Exploration of Latent Observation Space (GELOS)
     """
-
     def __init__(
         self,
         batch_size: int,
         num_workers: int,
         data_root: str | Path,
-        bands: dict[str] = GELOSDataSet.all_band_names,
+        means: dict[str, dict[str, float]],
+        stds: dict[str, dict[str, float]],
+        bands: dict[str, List[str]] = GELOSDataSet.all_band_names,
         transform: A.Compose | None | list[A.BasicTransform] = None,
         aug: AugmentationSequential = None,
         concat_bands: bool = False,
@@ -108,7 +43,9 @@ class GELOSDataModule(NonGeoDataModule):
             batch_size (int): Batch size for DataLoaders.
             num_workers (int): Number of workers for data loading.
             data_root (str | Path): Root directory for dataset.
-            bands: (Dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
+            means: (dict[str, dict[str, float]]): Dictionary defining modalities and bands with mean values
+            stds: (dict[str, dict[str, float]]): Dictionary defining modalities and bands with std values 
+            bands: (dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
             transform (A.Compose, optional): Transforms for data, defaults to ToTensorV2.
             aug (AugmentationSequential, optional): Augmentation or normalization to apply. Defaults to normalization if not provided.
             concat_bands (bool): Whether to concat all sensors into one 'image' tensor or keep separate
@@ -129,8 +66,8 @@ class GELOSDataModule(NonGeoDataModule):
         self.means = {}
         self.stds = {}
         for modality in self.modalities:
-            self.means[modality] = [MEANS[modality][band] for band in self.bands[modality]]
-            self.stds[modality] = [STDS[modality][band] for band in self.bands[modality]]
+            self.means[modality] = [means[modality][band] for band in self.bands[modality]]
+            self.stds[modality] = [stds[modality][band] for band in self.bands[modality]]
         self.transform = wrap_in_compose_is_list(transform)
         if len(self.bands.keys()) == 1:
             self.aug = (
@@ -161,7 +98,7 @@ class GELOSDataModule(NonGeoDataModule):
 
     def _dataloader_factory(self, stage: str = "predict"):
         if stage != "predict":
-            raise ValueError("GELOS dataset is for prediction only")
+            raise ValueError("GELOS is for prediction only")
         dataset = self.dataset
         batch_size = self.batch_size
         return DataLoader(
