@@ -18,43 +18,34 @@ Repository for Geospatial Exploration of Latent Observation Space (GELOS)
 │   ├── processed      <- The final, canonical data sets for modeling.
 │   └── raw            <- The original, immutable data dump.
 │
-├── docs               <- A default mkdocs project; see www.mkdocs.org for details
+├── docs               <- MkDocs site source; see www.mkdocs.org for details
 │
-├── models             <- Trained and serialized models, model predictions, or model summaries
-│
-├── notebooks          <- Jupyter notebooks. Naming convention is a number (for ordering),
-│                         the creator's initials, and a short `-` delimited description, e.g.
-│                         `1.0-jqp-initial-data-exploration`.
+├── models             <- Model definitions and helpers (e.g., prithvi_eo_v2.py)
 │
 ├── pyproject.toml     <- Project configuration file with package metadata for 
 │                         gelos and configuration for tools like black
 │
 ├── references         <- Data dictionaries, manuals, and all other explanatory materials.
 │
-├── reports            <- Generated analysis as HTML, PDF, LaTeX, etc.
-│   └── figures        <- Generated graphics and figures to be used in reporting
-│
-├── requirements.txt   <- The requirements file for reproducing the analysis environment, e.g.
-│                         generated with `pip freeze > requirements.txt`
-│
-├── setup.cfg          <- Configuration file for flake8
-│
 └── gelos   <- Source code for use in this project.
     │
-    ├── __init__.py             <- Makes gelos a Python module
+    ├── __init__.py                 <- Makes gelos a Python module
     │
-    ├── config.py               <- Store useful variables and configuration
+    ├── config.py                   <- Paths, environment variables, and logging setup
     │
-    ├── dataset.py              <- Scripts to download or generate data
+    ├── embedding_extraction.py     <- Utilities to sample parquet files and slice embeddings
     │
-    ├── features.py             <- Code to create features for modeling
+    ├── embedding_generation.py     <- Typer CLI to run Lightning/Terratorch embedding generation
     │
-    ├── modeling                
-    │   ├── __init__.py 
-    │   ├── predict.py          <- Code to run model inference with trained models          
-    │   └── train.py            <- Code to train models
+    ├── embedding_transformation.py <- Typer CLI to extract embeddings, run t-SNE, and plot results
     │
-    └── plots.py                <- Code to create visualizations
+    ├── gelosdatamodule.py          <- Lightning DataModule wiring the GELOS dataset for inference
+    │
+    ├── gelosdataset.py             <- Multimodal geospatial chip dataset with perturbation and concat options
+    │
+    ├── plotting.py                 <- Plotting helpers (t-SNE scatter, legend patches, formatting)
+    │
+    └── tsne_transform.py           <- t-SNE computation and CSV export helpers
 ```
 
 --------
