@@ -204,7 +204,7 @@ class GELOSDataSet(NonGeoDataset):
             output["image"] = {m: output.pop(m) for m in self.bands.keys() if m in output}
 
         # create id with timestep as output filenames
-        id = str(sample_row["id"]).zfill(6)
+        id = str(sample_row["id"]).zfill(6) + str(sample_row["year"])
         output["filename"] = np.array(id, dtype=str)
         output["file_id"] = sample_row["id"]
 
