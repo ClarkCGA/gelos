@@ -14,7 +14,7 @@ services:
        - ${PROCESSED_DATA_DIR}:${PROCESSED_DATA_DIR}
     command: jupyter lab --ip=0.0.0.0 --allow-root
     ports:
-       - "${HOST_PORT}:8888"
+       - "${JUPYTER_HOST_PORT}:8888"
     shm_size: '32gb'
     deploy:
       resources:

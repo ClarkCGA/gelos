@@ -9,9 +9,9 @@ import torch
 import typer
 import yaml
 
-from gelos.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
+from gelos.config import PROCESSED_DATA_DIR, PROJECT_ROOT, RAW_DATA_DIR
 from gelos.gelosdatamodule import GELOSDataModule
-from config import PROJECT_ROOT
+
 app = typer.Typer()
 
 
@@ -52,7 +52,7 @@ def generate_embeddings(yaml_path: Path) -> None:
 
     output_dir = PROCESSED_DATA_DIR / data_version / model_name / perturb_string
     output_dir.mkdir(exist_ok=True, parents=True)
-    data_root = RAW_DATA_DIR / data_version 
+    data_root = RAW_DATA_DIR / data_version
     marker_file = output_dir / ".embeddings_complete"
     if (marker_file).exists():
         print("embeddings already complete, skipping...")

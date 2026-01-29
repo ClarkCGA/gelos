@@ -11,7 +11,7 @@ import torch
 from torchgeo.datasets import NonGeoDataset
 
 
-class MultimodalToTensor: #TODO: Fix to expect [T, H, W, C]
+class MultimodalToTensor:  # TODO: Fix to expect [T, H, W, C]
     def __init__(self, modalities):
         self.modalities = modalities
 
@@ -20,6 +20,7 @@ class MultimodalToTensor: #TODO: Fix to expect [T, H, W, C]
         for k, v in d.items():
             new_dict[k] = torch.from_numpy(v)
         return new_dict
+
 
 def scale(array: np.array):
     """Scales a numpy array to 0-1 according to maximum value."""
@@ -107,16 +108,15 @@ class GELOSDataSet(NonGeoDataset):
         concat_bands: bool = False,
         repeat_bands: dict[str, int] = None,
         perturb_bands: dict[str, List[str]] = None,
-        perturb_alpha: float = 1
-        
+        perturb_alpha: float = 1,
     ) -> None:
         """
         Initializes an instance of GELOS.
 
         Args:
         data_root (str | Path): root directory where the dataset can be found
-        means (dict[str, dict[str, float]]): Dataset means by sensor and band for scaling perturbations 
-        stds (dict[str, dict[str, float]]): Dataset standard deviations by sensor and band for scaling perturbations 
+        means (dict[str, dict[str, float]]): Dataset means by sensor and band for scaling perturbations
+        stds (dict[str, dict[str, float]]): Dataset standard deviations by sensor and band for scaling perturbations
         bands: (Dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
         transform (A.compose, optional): transform to apply. Defaults to ToTensorV2.
         concat_bands (bool, optional): concatenate all modalities into the channel dimension
@@ -141,7 +141,7 @@ class GELOSDataSet(NonGeoDataset):
             sens: [self.all_band_names[sens].index(band) for band in self.bands[sens]]
             for sens in self.bands.keys()
         }
-        
+
         if self.perturb_bands:
             self.perturb_band_indices = {
                 sens: [self.all_band_names[sens].index(band) for band in self.perturb_bands[sens]]
@@ -154,9 +154,7 @@ class GELOSDataSet(NonGeoDataset):
         if transform is None:
             self.transform = MultimodalToTensor(self.bands.keys())
         else:
-            transform = {
-                s: transform for s in self.bands.keys()
-            }
+            transform = {s: transform for s in self.bands.keys()}
             self.transform = MultimodalTransforms(transform, shared=False)
 
     def __len__(self) -> int:
@@ -166,21 +164,28 @@ class GELOSDataSet(NonGeoDataset):
         sample_row = self.gdf.iloc[index]
 
         output = {}
-        
+
         for sensor in self.bands.keys():
-            sensor_filepaths = [self.data_root / filepath for filepath in sample_row[f"{sensor}_paths"].split(',')]
-            image = self._load_sensor_images(sensor_filepaths, sensor) 
+            sensor_filepaths = [
+                self.data_root / filepath for filepath in sample_row[f"{sensor}_paths"].split(",")
+            ]
+            image = self._load_sensor_images(sensor_filepaths, sensor)
             output[sensor] = image.astype(np.float32)
             # image shape: [T, H, W, C]
-            
+
         if self.repeat_bands:
             for sensor, repeats in self.repeat_bands.items():
-               output[sensor] = np.tile(output[sensor], (repeats, 1, 1, 1)) # repeat along T dimension
-        
+                output[sensor] = np.tile(
+                    output[sensor], (repeats, 1, 1, 1)
+                )  # repeat along T dimension
+
         # Add or replace individual bands with Gaussian noise scaled to each band's dataset-wide mean and std
         if self.perturb_bands:
             for sensor, perturb_band_dict in self.perturb_bands.items():
-                band_dict = {self.bands[sensor].index(band) : alpha for band, alpha in perturb_band_dict.items()}
+                band_dict = {
+                    self.bands[sensor].index(band): alpha
+                    for band, alpha in perturb_band_dict.items()
+                }
                 output = self._perturb_bands(output, sensor, band_dict)
 
         if self.transform:
@@ -193,7 +198,7 @@ class GELOSDataSet(NonGeoDataset):
         elif self.concat_bands:
             # Concatenate bands of all image modalities
             data = [output.pop(m) for m in self.bands.keys() if m in output]
-            output["image"] = torch.cat(data, dim=1) # concatenate into channel dimension
+            output["image"] = torch.cat(data, dim=1)  # concatenate into channel dimension
         else:
             # Tasks expect data to be stored in "image", moving modalities to image dict
             output["image"] = {m: output.pop(m) for m in self.bands.keys() if m in output}
@@ -203,7 +208,6 @@ class GELOSDataSet(NonGeoDataset):
         output["filename"] = np.array(id, dtype=str)
         output["file_id"] = sample_row["id"]
 
-
         return output
 
     def _perturb_bands(self, output, sensor, band_dict):
@@ -212,7 +216,7 @@ class GELOSDataSet(NonGeoDataset):
         for band_index, alpha in band_dict.items():
             loc = self.means[sensor][band_index]
             scale = self.stds[sensor][band_index]
-            
+
             # get size of noise tensor to generate
             size = output[sensor][:, :, :, band_index].shape
             noise = np.random.normal(loc=loc, scale=scale, size=size)
@@ -224,12 +228,12 @@ class GELOSDataSet(NonGeoDataset):
 
     def _load_file(self, path, band_indices: List[int]) -> np.array:
         data = rxr.open_rasterio(path, masked=True).to_numpy()
-        return data[band_indices, :, :].transpose(1,2,0) # [H, W, C]
+        return data[band_indices, :, :].transpose(1, 2, 0)  # [H, W, C]
 
     def _load_sensor_images(self, sensor_filepaths: List[Path], sensor: str) -> np.array:
         band_indices = self.band_indices[sensor]
         sensor_images = [self._load_file(path, band_indices) for path in sensor_filepaths]
-        sensor_image = np.stack(sensor_images, axis=0) # stack into [T, H, W, C]
+        sensor_image = np.stack(sensor_images, axis=0)  # stack into [T, H, W, C]
 
         return sensor_image
 
@@ -240,7 +244,6 @@ class GELOSDataSet(NonGeoDataset):
         show_titles: bool = True,
         suptitle: str | None = None,
     ) -> plt.Figure:
-
         """Plot a sample from the dataset.
 
         Args:
@@ -257,15 +260,20 @@ class GELOSDataSet(NonGeoDataset):
             nrows = len(self.bands.keys())
         else:
             nrows = 1
-        ncols=4
+        ncols = 4
 
-        fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=(ncols * 5, nrows * 5), squeeze=False, constrained_layout=True)
+        fig, axs = plt.subplots(
+            nrows=nrows,
+            ncols=ncols,
+            figsize=(ncols * 5, nrows * 5),
+            squeeze=False,
+            constrained_layout=True,
+        )
 
         if not isinstance(sample["image"], dict):
             # only one modality, setup dict for plotting
             sens = list(self.bands.keys())[0]
             sample["image"] = {sens: sample["image"]}
-
 
         for row, sens in enumerate(self.bands.keys()):
             band_indices = [self.bands[sens].index(band) for band in vis_bands[sens]]
@@ -274,7 +282,7 @@ class GELOSDataSet(NonGeoDataset):
             img = scale(img)
             c, t, h, w = img.shape
             for col, t in enumerate(range(t)):
-                img_t = img[band_indices,t,:,:].transpose(1,2,0)
+                img_t = img[band_indices, t, :, :].transpose(1, 2, 0)
                 axs[row, col].imshow(img_t)
                 axs[row, col].axis("off")
 

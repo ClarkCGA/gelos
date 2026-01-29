@@ -9,23 +9,25 @@ for example), and then how to make the cleaned, final data sets.
 
 GELOS loads all machine-specific paths from environment variables (optionally via `.env`).
 
-Required path variables (set either `GELOS_DATA_ROOT` or each specific path):
+Required path variables:
 
-- `GELOS_DATA_ROOT`
-- `GELOS_RAW_DIR`
-- `GELOS_INTERIM_DIR`
-- `GELOS_PROCESSED_DIR`
-- `GELOS_EXTERNAL_DIR`
+- `EXTERNAL_DATA_DIR`
+- `RAW_DATA_DIR`
+- `INTERIM_DATA_DIR`
+- `PROCESSED_DATA_DIR`
+- `PROJECT_ROOT`
 
-Optional project paths:
+Docker Compose variables:
 
-- `GELOS_PROJECT_ROOT`
-- `GELOS_CONFIG_DIR`
-- `GELOS_MODELS_DIR`
-- `GELOS_REPORTS_DIR`
-- `GELOS_FIGURES_DIR`
+- `JUPYTER_HOST_PORT`
 
-Optional overrides:
+Example `.env`:
 
-- `GELOS_DATA_VERSION` (defaults to `v0.50.0`)
-- `GELOS_ENV_FILE` (path to a custom `.env`)
+```
+EXTERNAL_DATA_DIR=/data/gelos/external/
+INTERIM_DATA_DIR=/data/gelos/interim/
+PROCESSED_DATA_DIR=/data/gelos/processed/
+RAW_DATA_DIR=/data/gelos/raw/
+PROJECT_ROOT=/workspace/gelos/
+JUPYTER_HOST_PORT=8888
+```
