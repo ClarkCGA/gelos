@@ -10,6 +10,7 @@ from terratorch.datasets.transforms import MultimodalTransforms
 import torch.nn.functional as F
 import torch
 from torchgeo.datasets import NonGeoDataset
+
 class MultimodalToTensor: #TODO: Fix to expect [T, H, W, C]
     def __init__(self, modalities):
         self.modalities = modalities
@@ -80,13 +81,30 @@ class GELOSDataSet(NonGeoDataset):
         "swir22",  # Shortwave Infrared 2 (SWIR2, Band 7)
     ]
     DEM_BAND_NAMES = ["DEM"]
+    LANDCOVER_BAND_NAMES = ["landcover"]
+    MASK_BAND_NAMES = ["mask"]
     all_band_names = {
+        "S1RTC": S1RTC_BAND_NAMES,
+        "S2L2A": S2RTC_BAND_NAMES,
+        "landsat": LANDSAT_BAND_NAMES,
+        "DEM": DEM_BAND_NAMES,
+        "landcover": LANDCOVER_BAND_NAMES,
+        "mask": MASK_BAND_NAMES,
+    }
+    lc_band_names = {
         "S1RTC": S1RTC_BAND_NAMES,
         "S2L2A": S2RTC_BAND_NAMES,
         "landsat": LANDSAT_BAND_NAMES,
         "DEM": DEM_BAND_NAMES,
     }
 
+    fire_band_names = {
+        "S1RTC": S1RTC_BAND_NAMES,
+        "S2L2A": S2RTC_BAND_NAMES,
+        "landsat": LANDSAT_BAND_NAMES,
+        "landcover": LANDCOVER_BAND_NAMES,
+        "mask": MASK_BAND_NAMES,
+    }
     rgb_bands = {
         "S1RTC": [],
         "S2L2A": ["RED", "GREEN", "BLUE"],
@@ -94,11 +112,11 @@ class GELOSDataSet(NonGeoDataset):
         "DEM": [],
     }
 
-    BAND_SETS = {"all": all_band_names, "rgb": rgb_bands}
+    BAND_SETS = {"all": all_band_names, "rgb": rgb_bands, "lc": lc_band_names, "fire": fire_band_names}
 
     def __init__(
         self,
-        data_root: str | Path,
+        metadata_path: str | Path,
         bands: dict[str, List[str]] = BAND_SETS["all"],
         means: dict[str, dict[str, float]] = None,
         stds: dict[str, dict[str, float]] = None,
@@ -106,8 +124,7 @@ class GELOSDataSet(NonGeoDataset):
         concat_bands: bool = False,
         repeat_bands: dict[str, int] = None,
         perturb_bands: dict[str, List[str]] = None,
-        perturb_alpha: float = 1
-        
+        perturb_alpha: float = 1,
     ) -> None:
         """
         Initializes an instance of GELOS.
@@ -123,7 +140,8 @@ class GELOSDataSet(NonGeoDataset):
         perturb_bands (dict[str, List[str]], optional): perturb bands with additive gaussian noise. Dictionary defining modalities and bands for perturbation.
         perturb_alpha (float, optional): relative weight given to source data vs perturbation noise. 0 signifies all noise, 1 signifies equal weights
         """
-        self.data_root = Path(data_root)
+        self.metadata_path = Path(metadata_path)
+
         self.bands = bands
         self.means = means
         self.stds = stds
@@ -134,7 +152,7 @@ class GELOSDataSet(NonGeoDataset):
         self.modality_rename_dict = {
             "S2L2A": "sentinel_2",
             "S1RTC": "sentinel_1",
-            "DEM": "dem"
+            "DEM": "dem", 
         }
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
@@ -152,8 +170,7 @@ class GELOSDataSet(NonGeoDataset):
                 for sens in self.perturb_bands.keys()
             }
 
-        self.gdf = gpd.read_file(self.data_root / "gelos_chip_tracker.geojson")
-        self.gdf = self._process_metadata_df()
+        self.gdf = gpd.read_file(metadata_path)
 
         # Adjust transforms based on the number of sensors
         if transform is None:
@@ -238,34 +255,6 @@ class GELOSDataSet(NonGeoDataset):
 
         return sensor_image
 
-
-    def _process_metadata_df(self) -> gpd.GeoDataFrame:
-
-        # for each modality, construct file paths
-        def _construct_file_paths(row, modality: str, data_root: Path) -> List[Path]:
-            modality = self.modality_rename_dict.get(modality, modality)
-            date_list = row[f"{modality}_dates"].split(",")
-            id = row["id"]
-            path_list = [data_root / f"{modality}_{id:06}_{date}.tif" for date in date_list]
-            return path_list
-
-        def _construct_DEM_path(row, data_root: Path) -> List[Path]:
-            id = row["id"]
-            DEM_list = [data_root / f"dem_{id:06}.tif"]
-            return DEM_list
-
-        for modality in self.bands.keys():
-
-            if modality == "DEM":
-                self.gdf["DEM_paths"] = self.gdf.apply(
-                    _construct_DEM_path, data_root=self.data_root, axis=1
-                )
-                continue
-
-            self.gdf[f"{modality}_paths"] = self.gdf.apply(
-                _construct_file_paths, modality=modality, data_root=self.data_root, axis=1
-            )
-        return self.gdf
 
     def plot(
         self,

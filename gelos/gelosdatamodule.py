@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from torchgeo.datamodules import NonGeoDataModule
 import typer
 
-from gelos.gelosdataset import GELOSDataSet
+from gelosdataset import GELOSDataSet
 
 app = typer.Typer()
 
@@ -25,15 +25,16 @@ class GELOSDataModule(NonGeoDataModule):
         self,
         batch_size: int,
         num_workers: int,
-        data_root: str | Path,
+        metadata_path: str | Path,
         means: dict[str, dict[str, float]],
         stds: dict[str, dict[str, float]],
-        bands: dict[str, List[str]] = GELOSDataSet.all_band_names,
+        # bands: dict[str, List[str]],
         transform: A.Compose | None | list[A.BasicTransform] = None,
         aug: AugmentationSequential = None,
         concat_bands: bool = False,
         repeat_bands: dict[str, int] = None,
         perturb_bands: dict[str, dict[str, float]] = None,
+        fire: bool = False,
         **kwargs: Any,
     ) -> None:
         """
@@ -42,7 +43,7 @@ class GELOSDataModule(NonGeoDataModule):
         Args:
             batch_size (int): Batch size for DataLoaders.
             num_workers (int): Number of workers for data loading.
-            data_root (str | Path): Root directory for dataset.
+            metadata_path (str | Path): Path to the metadata file.
             means: (dict[str, dict[str, float]]): Dictionary defining modalities and bands with mean values
             stds: (dict[str, dict[str, float]]): Dictionary defining modalities and bands with std values 
             bands: (dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
@@ -55,8 +56,8 @@ class GELOSDataModule(NonGeoDataModule):
         """
         super().__init__(GELOSDataSet, batch_size, num_workers, **kwargs)
 
-        self.data_root = data_root
-        self.bands = bands
+        self.metadata_path = metadata_path
+        self.bands =  GELOSDataSet.lc_band_names if not fire else GELOSDataSet.fire_band_names
         self.modalities = list(self.bands.keys())
         self.num_workers = num_workers
         self.batch_size = batch_size
@@ -65,7 +66,11 @@ class GELOSDataModule(NonGeoDataModule):
         self.perturb_bands = perturb_bands
         self.means = {}
         self.stds = {}
+        
+        print("Setting up GELOS DataModule with modalities:", self.modalities)
         for modality in self.modalities:
+            if modality == "mask" or modality == "landcover":
+                continue
             self.means[modality] = [means[modality][band] for band in self.bands[modality]]
             self.stds[modality] = [stds[modality][band] for band in self.bands[modality]]
         self.transform = wrap_in_compose_is_list(transform)
@@ -86,7 +91,7 @@ class GELOSDataModule(NonGeoDataModule):
         if stage != "predict":
             raise ValueError("GELOS dataset is for prediction only")
         self.dataset = self.dataset_class(
-            data_root=self.data_root,
+            metadata_path=self.metadata_path,
             bands=self.bands,
             means=self.means,
             stds=self.stds,
