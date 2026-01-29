@@ -1,11 +1,12 @@
 from pathlib import Path
 from typing import Any, List
+
 import albumentations as A
 from kornia.augmentation import AugmentationSequential
 from terratorch.datamodules.generic_multimodal_data_module import (
     MultimodalNormalize,
+    collate_samples,
     wrap_in_compose_is_list,
-    collate_samples
 )
 from terratorch.datamodules.generic_pixel_wise_data_module import Normalize
 from torch.utils.data import DataLoader
@@ -16,11 +17,13 @@ from gelos.gelosdataset import GELOSDataSet
 
 app = typer.Typer()
 
+
 # instantiate GELOS datamodule class
 class GELOSDataModule(NonGeoDataModule):
     """
     This is the datamodule for Geospatial Exploration of Latent Observation Space (GELOS)
     """
+
     def __init__(
         self,
         batch_size: int,
@@ -44,7 +47,7 @@ class GELOSDataModule(NonGeoDataModule):
             num_workers (int): Number of workers for data loading.
             data_root (str | Path): Root directory for dataset.
             means: (dict[str, dict[str, float]]): Dictionary defining modalities and bands with mean values
-            stds: (dict[str, dict[str, float]]): Dictionary defining modalities and bands with std values 
+            stds: (dict[str, dict[str, float]]): Dictionary defining modalities and bands with std values
             bands: (dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
             transform (A.Compose, optional): Transforms for data, defaults to ToTensorV2.
             aug (AugmentationSequential, optional): Augmentation or normalization to apply. Defaults to normalization if not provided.
@@ -63,12 +66,16 @@ class GELOSDataModule(NonGeoDataModule):
         self.concat_bands = concat_bands
         self.repeat_bands = repeat_bands
         self.perturb_bands = perturb_bands
-        self.means = {}
-        self.stds = {}
+        self.means = means or {}  # init empty stats dict if none
+        self.stds = means or {}
         for modality in self.modalities:
             # if a statistics are not passed, default to 0 for mean and 1 for std for all unprovided bands
-            self.means[modality] = [means.get(modality, {}).get(band, 0.0) for band in self.bands[modality]]
-            self.stds[modality] = [stds.get(modality, {}).get(band, 1.0) for band in self.bands[modality]]
+            self.means[modality] = [
+                self.means.get(modality, {}).get(band, 0.0) for band in self.bands[modality]
+            ]
+            self.stds[modality] = [
+                self.stds.get(modality, {}).get(band, 1.0) for band in self.bands[modality]
+            ]
         self.transform = wrap_in_compose_is_list(transform)
         if len(self.bands.keys()) == 1:
             self.aug = (
@@ -77,7 +84,7 @@ class GELOSDataModule(NonGeoDataModule):
                 else aug
             )
         else:
-            self.aug = (MultimodalNormalize(self.means, self.stds) if aug is None else aug)
+            self.aug = MultimodalNormalize(self.means, self.stds) if aug is None else aug
         self.collate_fn = collate_samples
 
     def setup(self, stage: str = "predict") -> None:

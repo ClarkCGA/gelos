@@ -1,15 +1,16 @@
 from pathlib import Path
-import pdb
 from typing import List
-import matplotlib.pyplot as plt
+
 import albumentations as A
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import rioxarray as rxr
 from terratorch.datasets.transforms import MultimodalTransforms
-import torch.nn.functional as F
 import torch
 from torchgeo.datasets import NonGeoDataset
+
+
 class MultimodalToTensor: #TODO: Fix to expect [T, H, W, C]
     def __init__(self, modalities):
         self.modalities = modalities
@@ -131,11 +132,6 @@ class GELOSDataSet(NonGeoDataset):
         self.repeat_bands = repeat_bands
         self.perturb_bands = perturb_bands
         self.perturb_alpha = perturb_alpha
-        self.modality_rename_dict = {
-            "S2L2A": "sentinel_2",
-            "S1RTC": "sentinel_1",
-            "DEM": "dem"
-        }
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
             f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
@@ -153,7 +149,6 @@ class GELOSDataSet(NonGeoDataset):
             }
 
         self.gdf = gpd.read_file(self.data_root / "gelos_chip_tracker.geojson")
-        self.gdf = self._process_metadata_df()
 
         # Adjust transforms based on the number of sensors
         if transform is None:
@@ -173,7 +168,7 @@ class GELOSDataSet(NonGeoDataset):
         output = {}
         
         for sensor in self.bands.keys():
-            sensor_filepaths = sample_row[f"{sensor}_paths"]
+            sensor_filepaths = [self.data_root / filepath for filepath in sample_row[f"{sensor}_paths"].split(',')]
             image = self._load_sensor_images(sensor_filepaths, sensor) 
             output[sensor] = image.astype(np.float32)
             # image shape: [T, H, W, C]
@@ -237,35 +232,6 @@ class GELOSDataSet(NonGeoDataset):
         sensor_image = np.stack(sensor_images, axis=0) # stack into [T, H, W, C]
 
         return sensor_image
-
-
-    def _process_metadata_df(self) -> gpd.GeoDataFrame:
-
-        # for each modality, construct file paths
-        def _construct_file_paths(row, modality: str, data_root: Path) -> List[Path]:
-            modality = self.modality_rename_dict.get(modality, modality)
-            date_list = row[f"{modality}_dates"].split(",")
-            id = row["id"]
-            path_list = [data_root / f"{modality}_{id:06}_{date}.tif" for date in date_list]
-            return path_list
-
-        def _construct_DEM_path(row, data_root: Path) -> List[Path]:
-            id = row["id"]
-            DEM_list = [data_root / f"dem_{id:06}.tif"]
-            return DEM_list
-
-        for modality in self.bands.keys():
-
-            if modality == "DEM":
-                self.gdf["DEM_paths"] = self.gdf.apply(
-                    _construct_DEM_path, data_root=self.data_root, axis=1
-                )
-                continue
-
-            self.gdf[f"{modality}_paths"] = self.gdf.apply(
-                _construct_file_paths, modality=modality, data_root=self.data_root, axis=1
-            )
-        return self.gdf
 
     def plot(
         self,

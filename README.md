@@ -10,48 +10,36 @@ Repository for Geospatial Exploration of Latent Observation Space (GELOS)
 
 GELOS paths are configured exclusively through environment variables (optionally loaded from a `.env` file).
 
-Required path variables (set either `GELOS_DATA_ROOT` or each specific path):
+Data and Project Paths:
+- `EXTERNAL_DIR`
+- `RAW_DIR`
+- `INTERIM_DIR`
+- `PROCESSED_DIR`
+- `PROJECT_ROOT`
 
-- `GELOS_DATA_ROOT` (recommended)
-- `GELOS_RAW_DIR`
-- `GELOS_INTERIM_DIR`
-- `GELOS_PROCESSED_DIR`
-- `GELOS_EXTERNAL_DIR`
-
-Project-related paths (optional, used for defaults):
-
-- `GELOS_PROJECT_ROOT` (enables defaults for `GELOS_CONFIG_DIR`, `GELOS_MODELS_DIR`, `GELOS_REPORTS_DIR`, `GELOS_FIGURES_DIR`)
-- `GELOS_CONFIG_DIR`
-- `GELOS_MODELS_DIR`
-- `GELOS_REPORTS_DIR`
-- `GELOS_FIGURES_DIR`
-
-Other configuration:
-
-- `GELOS_DATA_VERSION` (defaults to `v0.50.0`)
-- `GELOS_ENV_FILE` (optional path to a non-default `.env`)
+Docker Compose Variables:
+- `JUPYTER_HOST_PORT`
 
 Example `.env`:
-
 ```
-GELOS_DATA_ROOT=/mnt/data/gelos
-GELOS_PROJECT_ROOT=/mnt/workspace/Denys/gelos
-GELOS_DATA_VERSION=v0.50.0
+EXTERNAL_DATA_DIR=/data/gelos/external/    <- Data from third party sources.
+INTERIM_DATA_DIR=/data/gelos/interim/      <- Intermediate data that has been transformed.
+PROCESSED_DATA_DIR=/data/gelos/processed/  <- The final, canonical data sets for modeling.
+RAW_DATA_DIR=/data/gelos/raw/              <- The original, immutable data dump.
+PROJECT_ROOT=/workspace/gelos/
+JUPYTER_HOST_PORT=8888
 ```
 
-Docker/Compose uses the same `GELOS_*` paths for volume mounts. Use absolute paths that exist on the host.
+Docker/Compose uses the same paths for volume mounts, and will mount them to identical directories in the container. Use absolute paths that exist on the host.
 
 ## Project Organization
 
 ```
-├── LICENSE            <- Open-source license if one is chosen
-├── Makefile           <- Makefile with convenience commands like `make data` or `make train`
+├── LICENSE            <- Open-source license
+│
+├── Makefile           <- Makefile with convenience commands
+│
 ├── README.md          <- The top-level README for developers using this project.
-├── data
-│   ├── external       <- Data from third party sources.
-│   ├── interim        <- Intermediate data that has been transformed.
-│   ├── processed      <- The final, canonical data sets for modeling.
-│   └── raw            <- The original, immutable data dump.
 │
 ├── docs               <- MkDocs site source; see www.mkdocs.org for details
 │

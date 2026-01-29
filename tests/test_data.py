@@ -14,28 +14,30 @@ def dummy_gelos_data(tmp_path, monkeypatch) -> str:
     monkeypatch.setenv("GELOS_DATA_ROOT", str(data_root))
     base_dir = tmp_path / "gelos"
     base_dir.mkdir()
-    metadata_filename = "cleaned_df.geojson"
+    metadata_filename = "gelos_chip_tracker.geojson"
     metadata_path = base_dir / metadata_filename
     
     # Create a GeoDataFrame that matches the GeoJSON structure
     data = {
         "id": [0],
-        "S2L2A_dates": ["20230218,20230419,20230713,20231230"],
-        "S1RTC_dates": ["20230218,20230419,20230712,20231227"],
-        "landsat_dates": ["20230217,20230524,20230921,20231218"],
-        "land_cover": [2],
+        "year": [2023],
+        "S2L2A_paths": ["S2L2A_000001_20230218.tif,S2L2A_000001_20230419.tif,S2L2A_000001_20230713.tif,S2L2A_000001_20231230.tif"],
+        "S1RTC_paths": ["S1RTC_000001_20230218.tif,S1RTC_000001_20230419.tif,S1RTC_000001_20230712.tif,S1RTC_000001_20231227.tif"],
+        "landsat_paths": ["landsat_000001_20230217.tif,landsat_000001_20230524.tif,landsat_000001_20230921.tif,landsat_000001_20231218.tif"],
+        "DEM_paths": ["DEM_000001.tif"],
     }
-    for S2L2A_dates, id in zip(data['S2L2A_dates'], data['id']):
-        for date in S2L2A_dates.split(','):
-            create_dummy_image(base_dir / f"S2L2A_{id:06}_{date}.tif", (96, 96, 13), range(255))
-    for landsat_dates, id in zip(data['landsat_dates'], data['id']):
-        for date in landsat_dates.split(','):
-            create_dummy_image(base_dir / f"landsat_{id:06}_{date}.tif", (96, 96, 7), range(255))
-    for S1RTC_dates, id in zip(data['S1RTC_dates'], data['id']):
-        for date in S1RTC_dates.split(','):
-            create_dummy_image(base_dir / f"S1RTC_{id:06}_{date}.tif", (96, 96, 7), range(255))
-    for id in data['id']:
-        create_dummy_image(base_dir / f"dem_{id:06}.tif", (96, 96), range(255))
+    for paths in data['S2L2A_paths']:
+        for path in paths.split(','):
+            create_dummy_image(base_dir / path, (96, 96, 13), range(255))
+    for paths in data['S1RTC_paths']:
+        for path in paths.split(','):
+            create_dummy_image(base_dir / path, (96, 96, 2), range(255))
+    for paths in data['landsat_paths']:
+        for path in paths.split(','):
+            create_dummy_image(base_dir / path, (32, 32, 7), range(255))
+    for paths in data['DEM_paths']:
+        for path in paths.split(','):
+            create_dummy_image(base_dir / path, (96, 96), range(255))
 
     # Create a dummy polygon geometry
     polygon = Polygon([
@@ -63,7 +65,7 @@ def test_gelos_datamodule(dummy_gelos_data):
     datamodule.setup("predict")
     predict_loader: DataLoader = datamodule.predict_dataloader()
     batch = next(iter(predict_loader))
-    assert "S1RTC" in batch['image'], "Key S1 not found on predict_dataloader"
-    assert "S2L2A" in batch['image'], "Key S2 not found on predict_dataloader"
+    assert "S1RTC" in batch['image'], "Key S1RTC not found on predict_dataloader"
+    assert "S2L2A" in batch['image'], "Key S2L2A not found on predict_dataloader"
 
     gc.collect()
