@@ -1,4 +1,7 @@
 site_name: GELOS
-# 
 site_author: Denys Godwin
-# 
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Starting New Project: starting-new-project.md

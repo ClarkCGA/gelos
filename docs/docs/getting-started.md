@@ -31,3 +31,7 @@ RAW_DATA_DIR=/data/gelos/raw/
 PROJECT_ROOT=/workspace/gelos/
 JUPYTER_HOST_PORT=8888
 ```
+
+## Next Steps
+
+Now that your environment is configured, check out [Starting a New Embeddings Project](starting-new-project.md) to learn how to prepare your dataset and run the pipeline.

@@ -9,7 +9,7 @@ import torch
 import typer
 import yaml
 
-from gelos.config import PROCESSED_DATA_DIR, PROJECT_ROOT, RAW_DATA_DIR
+from gelos.config import PROCESSED_DATA_DIR, CONFIG_DIR, RAW_DATA_DIR
 from gelos.gelosdatamodule import GELOSDataModule
 
 app = typer.Typer()
@@ -95,7 +95,7 @@ def main(
     if yaml_path:
         yaml_paths = [Path(yaml_path)]
     else:
-        yaml_paths = list(PROJECT_ROOT.glob("*.yaml"))
+        yaml_paths = list(CONFIG_DIR.glob("*.yaml"))
 
     logger.info(f"yamls to process: {yaml_paths}")
     for yaml_path in yaml_paths:
