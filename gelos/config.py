@@ -6,10 +6,10 @@ from loguru import logger
 # Load environment variables from .env file if it exists
 # This loads GELOS_BUCKET, the S3 bucket for the gelos dataset
 load_dotenv()
-GELOS_BUCKET = os.getenv["GELOS_BUCKET"]  
-AWS_SECRET_KEY = os.getenv["AWS_SECRET_KEY"]
-AWS_ACCESS_KEY = os.getenv["AWS_ACCESS_KEY"]
-AWS_REGION = os.getenv["AWS_REGION"]
+GELOS_BUCKET = os.getenv("GELOS_BUCKET")
+AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
+AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
+AWS_REGION = os.getenv("AWS_REGION")
 
 # Paths
 PROJ_ROOT = Path(__file__).resolve().parents[1]
