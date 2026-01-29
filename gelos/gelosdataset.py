@@ -1,5 +1,6 @@
 from pathlib import Path
 import pdb
+import ast
 from typing import List
 import matplotlib.pyplot as plt
 import albumentations as A
@@ -191,6 +192,9 @@ class GELOSDataSet(NonGeoDataset):
         
         for sensor in self.bands.keys():
             sensor_filepaths = sample_row[f"{sensor}_paths"]
+            if not isinstance(sensor_filepaths, (list, tuple)):
+                sensor_filepaths = ast.literal_eval(sensor_filepaths)
+            
             image = self._load_sensor_images(sensor_filepaths, sensor) 
             output[sensor] = image.astype(np.float32)
             # image shape: [T, H, W, C]

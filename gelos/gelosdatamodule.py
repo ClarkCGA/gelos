@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from torchgeo.datamodules import NonGeoDataModule
 import typer
 
-from gelosdataset import GELOSDataSet
+from src.data.dataset import GELOSDataSet
 
 app = typer.Typer()
 
@@ -28,7 +28,7 @@ class GELOSDataModule(NonGeoDataModule):
         metadata_path: str | Path,
         means: dict[str, dict[str, float]],
         stds: dict[str, dict[str, float]],
-        # bands: dict[str, List[str]],
+        bands: dict[str, List[str]] | None = None,
         transform: A.Compose | None | list[A.BasicTransform] = None,
         aug: AugmentationSequential = None,
         concat_bands: bool = False,
@@ -46,18 +46,24 @@ class GELOSDataModule(NonGeoDataModule):
             metadata_path (str | Path): Path to the metadata file.
             means: (dict[str, dict[str, float]]): Dictionary defining modalities and bands with mean values
             stds: (dict[str, dict[str, float]]): Dictionary defining modalities and bands with std values 
-            bands: (dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
+            bands: (dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']. If None, defaults are chosen based on `fire` flag.
             transform (A.Compose, optional): Transforms for data, defaults to ToTensorV2.
             aug (AugmentationSequential, optional): Augmentation or normalization to apply. Defaults to normalization if not provided.
             concat_bands (bool): Whether to concat all sensors into one 'image' tensor or keep separate
             repeat_bands (dict[str, int], optional): repeat bands when loading from disc, intended to repeat single time step modalities e.g. DEM
             perturb_bands (dict[str, dict[str, float]], optional): perturb bands with additive gaussian noise. Dictionary defining modalities and bands with weights for perturbation.
+            fire (bool): If True, use fire band set as default when `bands` is None; otherwise use landcover band set.
             **kwargs: Additional keyword arguments.
         """
         super().__init__(GELOSDataSet, batch_size, num_workers, **kwargs)
 
         self.metadata_path = metadata_path
-        self.bands =  GELOSDataSet.lc_band_names if not fire else GELOSDataSet.fire_band_names
+        # If bands not explicitly provided, choose default based on fire flag
+        if bands is None:
+            self.bands = GELOSDataSet.fire_band_names if fire else GELOSDataSet.lc_band_names
+        else:
+            self.bands = bands
+        self.fire = fire
         self.modalities = list(self.bands.keys())
         self.num_workers = num_workers
         self.batch_size = batch_size
