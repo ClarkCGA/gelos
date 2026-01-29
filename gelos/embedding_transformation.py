@@ -6,8 +6,8 @@ from gelos.embedding_generation import perturb_args_to_string
 import geopandas as gpd
 import pandas as pd
 import yaml
-from gelos.config import PROJ_ROOT, PROCESSED_DATA_DIR, DATA_VERSION, RAW_DATA_DIR
-from gelos.config import REPORTS_DIR, FIGURES_DIR
+from gelos.config import CONFIG_DIR, PROCESSED_DATA_DIR, DATA_VERSION, RAW_DATA_DIR
+from gelos.config import FIGURES_DIR
 from pathlib import Path
 import typer
 from loguru import logger
@@ -104,8 +104,11 @@ def main(
     if yaml_path:
         yaml_paths = [Path(yaml_path)]
     else:
-        yaml_config_directory = PROJ_ROOT / "gelos" / "configs"
-        yaml_paths = list(yaml_config_directory.glob("*noperturb*.yaml*")) # only do tsne transforms for non-perturbed
+        if CONFIG_DIR is None:
+            raise ValueError(
+                "GELOS_CONFIG_DIR is not set. Provide --yaml-path or set GELOS_CONFIG_DIR."
+            )
+        yaml_paths = list(CONFIG_DIR.glob("*noperturb*.yaml*")) # only do tsne transforms for non-perturbed
 
     logger.info(f"yamls to process: {yaml_paths}")
     for yaml_path in yaml_paths:

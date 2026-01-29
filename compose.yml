@@ -8,9 +8,9 @@ services:
       - PYTHONPATH=/app
     volumes:
        - .:/app/ 
-       - ${RAW_PATH}:/app/data/raw/
-       - ${PROCESSED_PATH}:/app/data/processed/
-       - ${EXTERNAL_PATH}:/app/data/external/
+       - ${GELOS_RAW_DIR}:${GELOS_RAW_DIR}
+       - ${GELOS_PROCESSED_DIR}:${GELOS_PROCESSED_DIR}
+       - ${GELOS_EXTERNAL_DIR}:${GELOS_EXTERNAL_DIR}
     command: jupyter lab --ip=0.0.0.0 --allow-root
     ports:
        - "${HOST_PORT}:8888"

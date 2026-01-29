@@ -2,16 +2,13 @@ from pathlib import Path
 import torch
 from gelos.gelosdatamodule import GELOSDataModule
 import yaml
-from gelos import config
 from lightning.pytorch import Trainer
-from pathlib import Path
 from loguru import logger
-from tqdm import tqdm
 import typer
 from typing import Optional
 
 app = typer.Typer()
-from gelos.config import PROJ_ROOT, PROCESSED_DATA_DIR, DATA_VERSION, RAW_DATA_DIR
+from gelos.config import CONFIG_DIR, PROCESSED_DATA_DIR, DATA_VERSION, RAW_DATA_DIR
 from terratorch.tasks import EmbeddingGenerationTask
 from lightning.pytorch.cli import instantiate_class
 
@@ -91,8 +88,11 @@ def main(
     if yaml_path:
         yaml_paths = [Path(yaml_path)]
     else:
-        yaml_config_directory = PROJ_ROOT / "gelos" / "configs"
-        yaml_paths = list(yaml_config_directory.glob("*.yaml"))
+        if CONFIG_DIR is None:
+            raise ValueError(
+                "GELOS_CONFIG_DIR is not set. Provide --yaml-path or set GELOS_CONFIG_DIR."
+            )
+        yaml_paths = list(CONFIG_DIR.glob("*.yaml"))
 
     logger.info(f"yamls to process: {yaml_paths}")
     for yaml_path in yaml_paths:

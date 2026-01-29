@@ -6,6 +6,41 @@
 
 Repository for Geospatial Exploration of Latent Observation Space (GELOS)
 
+## Configuration (Environment Variables)
+
+GELOS paths are configured exclusively through environment variables (optionally loaded from a `.env` file).
+
+Required path variables (set either `GELOS_DATA_ROOT` or each specific path):
+
+- `GELOS_DATA_ROOT` (recommended)
+- `GELOS_RAW_DIR`
+- `GELOS_INTERIM_DIR`
+- `GELOS_PROCESSED_DIR`
+- `GELOS_EXTERNAL_DIR`
+
+Project-related paths (optional, used for defaults):
+
+- `GELOS_PROJECT_ROOT` (enables defaults for `GELOS_CONFIG_DIR`, `GELOS_MODELS_DIR`, `GELOS_REPORTS_DIR`, `GELOS_FIGURES_DIR`)
+- `GELOS_CONFIG_DIR`
+- `GELOS_MODELS_DIR`
+- `GELOS_REPORTS_DIR`
+- `GELOS_FIGURES_DIR`
+
+Other configuration:
+
+- `GELOS_DATA_VERSION` (defaults to `v0.50.0`)
+- `GELOS_ENV_FILE` (optional path to a non-default `.env`)
+
+Example `.env`:
+
+```
+GELOS_DATA_ROOT=/mnt/data/gelos
+GELOS_PROJECT_ROOT=/mnt/workspace/Denys/gelos
+GELOS_DATA_VERSION=v0.50.0
+```
+
+Docker/Compose uses the same `GELOS_*` paths for volume mounts. Use absolute paths that exist on the host.
+
 ## Project Organization
 
 ```

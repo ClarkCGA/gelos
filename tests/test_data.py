@@ -9,7 +9,9 @@ from torch.utils.data import DataLoader
 from utils import create_dummy_image
 from pathlib import Path
 @pytest.fixture
-def dummy_gelos_data(tmp_path) -> str:
+def dummy_gelos_data(tmp_path, monkeypatch) -> str:
+    data_root = tmp_path / "data_root"
+    monkeypatch.setenv("GELOS_DATA_ROOT", str(data_root))
     base_dir = tmp_path / "gelos"
     base_dir.mkdir()
     metadata_filename = "cleaned_df.geojson"

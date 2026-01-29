@@ -26,8 +26,8 @@ class GELOSDataModule(NonGeoDataModule):
         batch_size: int,
         num_workers: int,
         data_root: str | Path,
-        means: dict[str, dict[str, float]],
-        stds: dict[str, dict[str, float]],
+        means: dict[str, dict[str, float]] = None,
+        stds: dict[str, dict[str, float]] = None,
         bands: dict[str, List[str]] = GELOSDataSet.all_band_names,
         transform: A.Compose | None | list[A.BasicTransform] = None,
         aug: AugmentationSequential = None,
@@ -66,8 +66,9 @@ class GELOSDataModule(NonGeoDataModule):
         self.means = {}
         self.stds = {}
         for modality in self.modalities:
-            self.means[modality] = [means[modality][band] for band in self.bands[modality]]
-            self.stds[modality] = [stds[modality][band] for band in self.bands[modality]]
+            # if a statistics are not passed, default to 0 for mean and 1 for std for all unprovided bands
+            self.means[modality] = [means.get(modality, {}).get(band, 0.0) for band in self.bands[modality]]
+            self.stds[modality] = [stds.get(modality, {}).get(band, 1.0) for band in self.bands[modality]]
         self.transform = wrap_in_compose_is_list(transform)
         if len(self.bands.keys()) == 1:
             self.aug = (
