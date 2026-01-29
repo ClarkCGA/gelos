@@ -1,11 +1,12 @@
 from pathlib import Path
 from typing import Any, List
+
 import albumentations as A
 from kornia.augmentation import AugmentationSequential
 from terratorch.datamodules.generic_multimodal_data_module import (
     MultimodalNormalize,
+    collate_samples,
     wrap_in_compose_is_list,
-    collate_samples
 )
 from terratorch.datamodules.generic_pixel_wise_data_module import Normalize
 from torch.utils.data import DataLoader
@@ -16,11 +17,13 @@ from src.data.dataset import GELOSDataSet
 
 app = typer.Typer()
 
+
 # instantiate GELOS datamodule class
 class GELOSDataModule(NonGeoDataModule):
     """
     This is the datamodule for Geospatial Exploration of Latent Observation Space (GELOS)
     """
+
     def __init__(
         self,
         batch_size: int,
@@ -87,7 +90,7 @@ class GELOSDataModule(NonGeoDataModule):
                 else aug
             )
         else:
-            self.aug = (MultimodalNormalize(self.means, self.stds) if aug is None else aug)
+            self.aug = MultimodalNormalize(self.means, self.stds) if aug is None else aug
         self.collate_fn = collate_samples
 
     def setup(self, stage: str = "predict") -> None:

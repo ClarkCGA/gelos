@@ -1,12 +1,16 @@
 import os
-import random
 from pathlib import Path
-import pyarrow as pa
+import random
+
 import numpy as np
+import pyarrow as pa
 import pyarrow.dataset as ds
 from tqdm import tqdm
 
-def sample_files(directory: str | Path, sample_size: int, *, seed: int | None = None) -> list[Path]:
+
+def sample_files(
+    directory: str | Path, sample_size: int, *, seed: int | None = None
+) -> list[Path]:
     rng = random.Random(seed)
     directory = Path(directory)
 
@@ -19,27 +23,25 @@ def sample_files(directory: str | Path, sample_size: int, *, seed: int | None = 
         files.sort()
         return files
 
+
 def select_embedding_indices(
-        embeddings_column: pa.lib.ListArray, 
-        slice_args: list[dict[str, int]]
-        ) -> pa.lib.ListArray:
+    embeddings_column: pa.lib.ListArray, slice_args: list[dict[str, int]]
+) -> pa.lib.ListArray:
     array = embeddings_column
     for arg in slice_args:
         array = pa.compute.list_slice(
-            array,
-            start=arg['start'],
-            stop=arg["stop"],
-            step=arg["step"]
-            )
+            array, start=arg["start"], stop=arg["stop"], step=arg["step"]
+        )
         array = pa.compute.list_flatten(array)
     return array
 
+
 def extract_embeddings(
-        directory: Path | str, 
-        n_sample: int = None,
-        chip_indices: list[int] = None, 
-        slice_args: list[dict[str, int]] = [{"start": 0, "stop": None, "step": 1}]
-        ) -> tuple[np.array]:
+    directory: Path | str,
+    n_sample: int = None,
+    chip_indices: list[int] = None,
+    slice_args: list[dict[str, int]] = [{"start": 0, "stop": None, "step": 1}],
+) -> tuple[np.array]:
     # extract embeddings in numpy format from geoparquet
     if chip_indices:
         files = [directory / f"{str(id).zfill(6)}_embedding.parquet" for id in chip_indices]
@@ -58,6 +60,3 @@ def extract_embeddings(
     embeddings = np.vstack(emb_chunks)
     chip_indices = np.concatenate(id_chunks).astype(int).tolist()
     return embeddings, chip_indices
-
-
-

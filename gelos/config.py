@@ -1,39 +1,35 @@
-from pathlib import Path
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 from loguru import logger
 
 # Load environment variables from .env file if it exists
-# This loads GELOS_BUCKET, the S3 bucket for the gelos dataset
 load_dotenv()
-GELOS_BUCKET = os.getenv("GELOS_BUCKET")
-AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
-AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
-AWS_REGION = os.getenv("AWS_REGION")
 
-# Paths
-PROJ_ROOT = Path(__file__).resolve().parents[1]
-logger.info(f"PROJ_ROOT path is: {PROJ_ROOT}")
 
-DATA_DIR = PROJ_ROOT / "data"
-RAW_DATA_DIR = DATA_DIR / "raw"
-INTERIM_DATA_DIR = DATA_DIR / "interim"
-PROCESSED_DATA_DIR = DATA_DIR / "processed"
-EXTERNAL_DATA_DIR = DATA_DIR / "external"
+def _get_required_path(var_name: str) -> Path:
+    value = os.getenv(var_name)
+    if not value:
+        raise ValueError(
+            "Missing required path environment variables: "
+            "EXTERNAL_DATA_DIR, RAW_DATA_DIR, INTERIM_DATA_DIR, PROCESSED_DATA_DIR, PROJECT_ROOT"
+        )
+    return Path(value).expanduser().resolve()
 
-DATA_VERSION = "v0.50.0"
 
-MODELS_DIR = PROJ_ROOT / "models"
+EXTERNAL_DATA_DIR = _get_required_path("EXTERNAL_DATA_DIR")
+RAW_DATA_DIR = _get_required_path("RAW_DATA_DIR")
+INTERIM_DATA_DIR = _get_required_path("INTERIM_DATA_DIR")
+PROCESSED_DATA_DIR = _get_required_path("PROCESSED_DATA_DIR")
+PROJECT_ROOT = _get_required_path("PROJECT_ROOT")
 
-REPORTS_DIR = PROJ_ROOT / "reports"
-FIGURES_DIR = REPORTS_DIR / "figures"
+CONFIG_DIR = PROJECT_ROOT / "configs"
+MODELS_DIR = PROJECT_ROOT / "models"
+REPORTS_DIR = PROJECT_ROOT / "reports"
+FIGURES_DIR = PROJECT_ROOT / "figures"
 
-# If tqdm is installed, configure loguru with tqdm.write
-# https://github.com/Delgan/loguru/issues/135
-try:
-    from tqdm import tqdm
-
-    logger.remove(0)
-    logger.add(lambda msg: tqdm.write(msg, end=""), colorize=True)
-except ModuleNotFoundError:
-    pass
+logger.info(
+    "GELOS paths loaded: "
+    f"raw={RAW_DATA_DIR}, processed={PROCESSED_DATA_DIR}, external={EXTERNAL_DATA_DIR}"
+)

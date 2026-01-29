@@ -6,17 +6,42 @@
 
 Repository for Geospatial Exploration of Latent Observation Space (GELOS)
 
+## Configuration (Environment Variables)
+
+GELOS paths are configured exclusively through environment variables (optionally loaded from a `.env` file).
+
+Data and Project Paths:
+- `EXTERNAL_DATA_DIR`
+- `RAW_DATA_DIR`
+- `INTERIM_DATA_DIR`
+- `PROCESSED_DATA_DIR`
+- `PROJECT_ROOT`
+
+Docker Compose Variables:
+- `JUPYTER_HOST_PORT`
+
+Example `.env`:
+```
+EXTERNAL_DATA_DIR=/data/gelos/external/    # Data from third party sources.
+INTERIM_DATA_DIR=/data/gelos/interim/      # Intermediate data that has been transformed.
+PROCESSED_DATA_DIR=/data/gelos/processed/  # The final, canonical data sets for modeling.
+RAW_DATA_DIR=/data/gelos/raw/              # The original, immutable data dump.
+PROJECT_ROOT=/workspace/gelos/
+JUPYTER_HOST_PORT=8888
+```
+
+Docker/Compose uses the same paths for volume mounts, and will mount them to identical directories in the container. Use absolute paths that exist on the host.
+
+For details on setting up a new dataset, see [Starting a New Embeddings Project](docs/docs/starting-new-project.md).
+
 ## Project Organization
 
 ```
-├── LICENSE            <- Open-source license if one is chosen
-├── Makefile           <- Makefile with convenience commands like `make data` or `make train`
+├── LICENSE            <- Open-source license
+│
+├── Makefile           <- Makefile with convenience commands
+│
 ├── README.md          <- The top-level README for developers using this project.
-├── data
-│   ├── external       <- Data from third party sources.
-│   ├── interim        <- Intermediate data that has been transformed.
-│   ├── processed      <- The final, canonical data sets for modeling.
-│   └── raw            <- The original, immutable data dump.
 │
 ├── docs               <- MkDocs site source; see www.mkdocs.org for details
 │
