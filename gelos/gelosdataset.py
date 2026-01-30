@@ -203,8 +203,8 @@ class GELOSDataSet(NonGeoDataset):
             # Tasks expect data to be stored in "image", moving modalities to image dict
             output["image"] = {m: output.pop(m) for m in self.bands.keys() if m in output}
 
-        # create id with timestep as output filenames
-        id = str(sample_row["id"]).zfill(6) + str(sample_row["year"])
+        # filename is the name of the output parquet file record, while file_id is metadata within that parquet.
+        id = str(sample_row["id"]).zfill(8)
         output["filename"] = np.array(id, dtype=str)
         output["file_id"] = sample_row["id"]
 
