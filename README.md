@@ -6,31 +6,26 @@
 
 Repository for Geospatial Exploration of Latent Observation Space (GELOS)
 
-## Configuration (Environment Variables)
+## Configuration (Paths)
 
-GELOS paths are configured exclusively through environment variables (optionally loaded from a `.env` file).
+GELOS CLI commands require explicit path arguments. For example:
 
-Data and Project Paths:
-- `EXTERNAL_DATA_DIR`
-- `RAW_DATA_DIR`
-- `INTERIM_DATA_DIR`
-- `PROCESSED_DATA_DIR`
-- `PROJECT_ROOT`
-
-Docker Compose Variables:
-- `JUPYTER_HOST_PORT`
-
-Example `.env`:
 ```
-EXTERNAL_DATA_DIR=/data/gelos/external/    # Data from third party sources.
-INTERIM_DATA_DIR=/data/gelos/interim/      # Intermediate data that has been transformed.
-PROCESSED_DATA_DIR=/data/gelos/processed/  # The final, canonical data sets for modeling.
-RAW_DATA_DIR=/data/gelos/raw/              # The original, immutable data dump.
-PROJECT_ROOT=/workspace/gelos/
-JUPYTER_HOST_PORT=8888
+python gelos/embedding_generation.py \
+    --raw-data-dir /data/gelos/raw \
+    --processed-data-dir /data/gelos/processed \
+    --config-dir /workspace/gelos/configs
 ```
 
-Docker/Compose uses the same paths for volume mounts, and will mount them to identical directories in the container. Use absolute paths that exist on the host.
+```
+python gelos/embedding_transformation.py \
+    --raw-data-dir /data/gelos/raw \
+    --processed-data-dir /data/gelos/processed \
+    --figures-dir /data/gelos/figures \
+    --config-dir /workspace/gelos/configs
+```
+
+Docker/Compose can still use a `.env` file for volume mounts and ports, but the library does not auto-load environment variables. Use absolute paths that exist on the host.
 
 For details on setting up a new dataset, see [Starting a New Embeddings Project](docs/docs/starting-new-project.md).
 
@@ -55,8 +50,6 @@ For details on setting up a new dataset, see [Starting a New Embeddings Project]
 └── gelos   <- Source code for use in this project.
     │
     ├── __init__.py                 <- Makes gelos a Python module
-    │
-    ├── config.py                   <- Paths, environment variables, and logging setup
     │
     ├── embedding_extraction.py     <- Utilities to sample parquet files and slice embeddings
     │

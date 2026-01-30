@@ -9,7 +9,6 @@ import torch
 import typer
 import yaml
 
-from gelos.config import PROCESSED_DATA_DIR, CONFIG_DIR, RAW_DATA_DIR
 from gelos.gelosdatamodule import GELOSDataModule
 
 app = typer.Typer()
@@ -39,7 +38,11 @@ def perturb_args_to_string(perturb):
     return perturb_string
 
 
-def generate_embeddings(yaml_path: Path) -> None:
+def generate_embeddings(
+    yaml_path: Path,
+    raw_data_dir: Path,
+    processed_data_dir: Path,
+) -> None:
     with open(yaml_path, "r") as f:
         yaml_config = yaml.safe_load(f)
 
@@ -50,9 +53,9 @@ def generate_embeddings(yaml_path: Path) -> None:
     perturb = yaml_config["data"]["init_args"].get("perturb_bands", None)
     perturb_string = perturb_args_to_string(perturb)
 
-    output_dir = PROCESSED_DATA_DIR / data_version / model_name / perturb_string
+    output_dir = processed_data_dir / data_version / model_name / perturb_string
     output_dir.mkdir(exist_ok=True, parents=True)
-    data_root = RAW_DATA_DIR / data_version
+    data_root = raw_data_dir / data_version
     marker_file = output_dir / ".embeddings_complete"
     if (marker_file).exists():
         print("embeddings already complete, skipping...")
@@ -85,6 +88,18 @@ def main(
     yaml_path: Optional[Path] = typer.Option(
         None, "--yaml-path", "-y", help="Path to a single yaml config to process."
     ),
+    raw_data_dir: Path = typer.Option(
+        ..., "--raw-data-dir", "-r", help="Root directory for raw data."
+    ),
+    processed_data_dir: Path = typer.Option(
+        ..., "--processed-data-dir", "-p", help="Root directory for processed outputs."
+    ),
+    config_dir: Optional[Path] = typer.Option(
+        None,
+        "--config-dir",
+        "-c",
+        help="Directory containing YAML configs (used when --yaml-path is not set).",
+    ),
 ):
     """
     Generate embeddings from a model and data specified in a yaml config.
@@ -95,11 +110,17 @@ def main(
     if yaml_path:
         yaml_paths = [Path(yaml_path)]
     else:
-        yaml_paths = list(CONFIG_DIR.glob("*.yaml"))
+        if not config_dir:
+            raise typer.BadParameter("--config-dir is required when --yaml-path is not provided.")
+        yaml_paths = list(Path(config_dir).glob("*.yaml"))
 
     logger.info(f"yamls to process: {yaml_paths}")
     for yaml_path in yaml_paths:
-        generate_embeddings(yaml_path)
+        generate_embeddings(
+            yaml_path,
+            raw_data_dir=raw_data_dir,
+            processed_data_dir=processed_data_dir,
+        )
 
 
 if __name__ == "__main__":

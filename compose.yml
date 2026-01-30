@@ -29,6 +29,8 @@ services:
     build: 
       context: .
       target: test
+    environment:
+      - PYTHONPATH=/app
     volumes:
       - .:/app/
     command: make test

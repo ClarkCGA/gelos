@@ -4,31 +4,7 @@ This guide explains how to set up a new project with your own dataset to generat
 
 ## Prerequisites
 
-Ensure you have the GELOS package installed and your environment configured.
-
-## Environment Configuration
-
-GELOS relies on environment variables to locate data and project files. You can set these in your shell or in a `.env` file in the project root.
-
-Required variables:
-
-| Variable | Description |
-|----------|-------------|
-| `EXTERNAL_DATA_DIR` | Path to third-party data sources |
-| `RAW_DATA_DIR` | Path to original, immutable data dump |
-| `INTERIM_DATA_DIR` | Path to intermediate transformed data |
-| `PROCESSED_DATA_DIR` | Path to final canonical data sets |
-| `PROJECT_ROOT` | Path to the project root directory |
-
-**Example `.env`:**
-
-```bash
-EXTERNAL_DATA_DIR=/abs/path/to/data/external
-RAW_DATA_DIR=/abs/path/to/data/raw
-INTERIM_DATA_DIR=/abs/path/to/data/interim
-PROCESSED_DATA_DIR=/abs/path/to/data/processed
-PROJECT_ROOT=/abs/path/to/project_root
-```
+Ensure you have the GELOS package installed.
 
 ## Dataset Structure
 
@@ -36,10 +12,10 @@ GELOS expects a specific directory structure and metadata file format.
 
 ### Directory Layout
 
-Data should be organized by a `data_version` under the `RAW_DATA_DIR`.
+Data should be organized by a `data_version` under your raw data directory.
 
 ```text
-RAW_DATA_DIR/
+<RAW_DATA_DIR>/
 └── {data_version}/
     ├── gelos_chip_tracker.geojson  <-- REQUIRED metadata file
     ├── S2L2A_000001_20230204.tif
@@ -127,7 +103,7 @@ model:
     embed_file_key: filename 
     embedding_pooling: null 
     has_cls: True
-d
+
 # define embedding extraction strategy names and lists of arguments for the embedding extraction function
 embedding_extraction_strategies:
   CLS Token:
@@ -138,28 +114,63 @@ embedding_extraction_strategies:
 
 ### 2. Generate Embeddings
 
-Use `generate_embeddings` to produce embeddings from your raw data.
+Use the embedding generation CLI or function to produce embeddings from your raw data.
+
+**CLI Example:**
+
+```bash
+python gelos/embedding_generation.py \
+  --raw-data-dir /abs/path/to/data/raw \
+  --processed-data-dir /abs/path/to/data/processed \
+  --config-dir /abs/path/to/project_root/configs
+```
 
 ```python
 from pathlib import Path
 from gelos.embedding_generation import generate_embeddings
 
 config_path = Path("configs/p.yaml")
-generate_embeddings(config_path)
+raw_data_dir = Path("/abs/path/to/data/raw")
+processed_data_dir = Path("/abs/path/to/data/processed")
+
+generate_embeddings(
+  config_path,
+  raw_data_dir=raw_data_dir,
+  processed_data_dir=processed_data_dir,
+)
 ```
 
-This will output embeddings to `PROCESSED_DATA_DIR / {data_version} / {model_name}`.
+This will output embeddings to `processed_data_dir / {data_version} / {model_name}`.
 
 ### 3. Transform and Visualize
 
-Use `transform_embeddings` to run t-SNE and generate plots.
+Use the embedding transformation CLI or function to run t-SNE and generate plots.
+
+**CLI Example:**
+
+```bash
+python gelos/embedding_transformation.py \
+  --raw-data-dir /abs/path/to/data/raw \
+  --processed-data-dir /abs/path/to/data/processed \
+  --figures-dir /abs/path/to/data/figures \
+  --config-dir /abs/path/to/project_root/configs
+```
 
 ```python
 from pathlib import Path
 from gelos.embedding_transformation import transform_embeddings
 
 config_path = Path("configs/prithvieov2300.yaml")
-transform_embeddings(config_path)
+raw_data_dir = Path("/abs/path/to/data/raw")
+processed_data_dir = Path("/abs/path/to/data/processed")
+figures_dir = Path("/abs/path/to/data/figures")
+
+transform_embeddings(
+  config_path,
+  raw_data_dir=raw_data_dir,
+  processed_data_dir=processed_data_dir,
+  figures_dir=figures_dir,
+)
 ```
 
-Outputs and figures will be saved to `FIGURES_DIR / {data_version}`.
+Outputs and figures will be saved to `figures_dir / {data_version}`.

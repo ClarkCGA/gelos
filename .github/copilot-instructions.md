@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-GELOS is a Python project for Geospatial Exploration of Latent Observation Space. It follows a cookiecutter data science layout with a `gelos` package containing dataset/datamodule wiring, embedding generation/extraction/transformation utilities, t-SNE computation, and plotting helpers. Model definitions live under `models/`, documentation is built with MkDocs in `docs/`, and tests live in `tests/`. Configuration and paths are centralized in `gelos/config.py`, with CLIs for embedding workflows.
+GELOS is a Python project for Geospatial Exploration of Latent Observation Space. It follows a cookiecutter data science layout with a `gelos` package containing dataset/datamodule wiring, embedding generation/extraction/transformation utilities, t-SNE computation, and plotting helpers. Model definitions live under `models/`, documentation is built with MkDocs in `docs/`, and tests live in `tests/`. Paths are provided explicitly to CLI commands or library functions.
 
 ## AI-Assisted Development Workflow
 
@@ -113,16 +113,6 @@ git checkout -b feature/issue-XX-description
 Only after the feature branch is created, start making changes.
 
 **Step 5: Code Quality Checks**
-Run all quality checks before completion:
-```bash
-# First auto-format and commit any formatting changes
-npm run format
-git add .
-git commit -m "style: format code"  # Only if there were formatting changes
-
-# Then run final verification checks
-npm run format:check && npm run lint && npm run build && npm test
-```
 
 **Step 6: Push & Create PR**
 ```bash
@@ -160,10 +150,6 @@ git checkout -b feature/issue-45-supabase-subscriptions-schema
 # ... make code changes ...
 
 # 5. Run code quality checks before completion
-npm run format                    # Auto-format code
-git add .                         # Stage formatting changes
-git commit -m "style: format code" # Commit formatting (only if changes made)
-npm run format:check && npm run lint && npm run build && npm test
 
 # 6. Push and create PR
 git push origin feature/issue-45-supabase-subscriptions-schema

@@ -9,16 +9,11 @@ from torch.utils.data import DataLoader
 from utils import create_dummy_image
 from pathlib import Path
 @pytest.fixture
-def dummy_gelos_data(tmp_path, monkeypatch) -> str:
+def dummy_gelos_data(tmp_path) -> str:
     base_dir = tmp_path / "gelos"
     base_dir.mkdir()
     project_root = tmp_path / "project_root"
     project_root.mkdir()
-    monkeypatch.setenv("RAW_DATA_DIR", str(base_dir))
-    monkeypatch.setenv("PROCESSED_DATA_DIR", str(tmp_path / "processed"))
-    monkeypatch.setenv("EXTERNAL_DATA_DIR", str(tmp_path / "external"))
-    monkeypatch.setenv("INTERIM_DATA_DIR", str(tmp_path / "interim"))
-    monkeypatch.setenv("PROJECT_ROOT", str(project_root))
     metadata_filename = "gelos_chip_tracker.geojson"
     metadata_path = base_dir / metadata_filename
     
