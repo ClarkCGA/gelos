@@ -1,4 +1,6 @@
 from pathlib import Path
+import pdb
+import ast
 from typing import List
 
 import albumentations as A
@@ -10,8 +12,7 @@ from terratorch.datasets.transforms import MultimodalTransforms
 import torch
 from torchgeo.datasets import NonGeoDataset
 
-
-class MultimodalToTensor:  # TODO: Fix to expect [T, H, W, C]
+class MultimodalToTensor: #TODO: Fix to expect [T, H, W, C]
     def __init__(self, modalities):
         self.modalities = modalities
 
@@ -82,13 +83,30 @@ class GELOSDataSet(NonGeoDataset):
         "swir22",  # Shortwave Infrared 2 (SWIR2, Band 7)
     ]
     DEM_BAND_NAMES = ["DEM"]
+    LANDCOVER_BAND_NAMES = ["landcover"]
+    MASK_BAND_NAMES = ["mask"]
     all_band_names = {
+        "S1RTC": S1RTC_BAND_NAMES,
+        "S2L2A": S2RTC_BAND_NAMES,
+        "landsat": LANDSAT_BAND_NAMES,
+        "DEM": DEM_BAND_NAMES,
+        "landcover": LANDCOVER_BAND_NAMES,
+        "mask": MASK_BAND_NAMES,
+    }
+    lc_band_names = {
         "S1RTC": S1RTC_BAND_NAMES,
         "S2L2A": S2RTC_BAND_NAMES,
         "landsat": LANDSAT_BAND_NAMES,
         "DEM": DEM_BAND_NAMES,
     }
 
+    fire_band_names = {
+        "S1RTC": S1RTC_BAND_NAMES,
+        "S2L2A": S2RTC_BAND_NAMES,
+        "landsat": LANDSAT_BAND_NAMES,
+        "landcover": LANDCOVER_BAND_NAMES,
+        "mask": MASK_BAND_NAMES,
+    }
     rgb_bands = {
         "S1RTC": [],
         "S2L2A": ["RED", "GREEN", "BLUE"],
@@ -96,11 +114,11 @@ class GELOSDataSet(NonGeoDataset):
         "DEM": [],
     }
 
-    BAND_SETS = {"all": all_band_names, "rgb": rgb_bands}
+    BAND_SETS = {"all": all_band_names, "rgb": rgb_bands, "lc": lc_band_names, "fire": fire_band_names}
 
     def __init__(
         self,
-        data_root: str | Path,
+        metadata_path: str | Path,
         bands: dict[str, List[str]] = BAND_SETS["all"],
         means: dict[str, dict[str, float]] = None,
         stds: dict[str, dict[str, float]] = None,
@@ -124,7 +142,8 @@ class GELOSDataSet(NonGeoDataset):
         perturb_bands (dict[str, List[str]], optional): perturb bands with additive gaussian noise. Dictionary defining modalities and bands for perturbation.
         perturb_alpha (float, optional): relative weight given to source data vs perturbation noise. 0 signifies all noise, 1 signifies equal weights
         """
-        self.data_root = Path(data_root)
+        self.metadata_path = Path(metadata_path)
+
         self.bands = bands
         self.means = means
         self.stds = stds
@@ -132,6 +151,11 @@ class GELOSDataSet(NonGeoDataset):
         self.repeat_bands = repeat_bands
         self.perturb_bands = perturb_bands
         self.perturb_alpha = perturb_alpha
+        self.modality_rename_dict = {
+            "S2L2A": "sentinel_2",
+            "S1RTC": "sentinel_1",
+            "DEM": "dem", 
+        }
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
             f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
@@ -148,7 +172,7 @@ class GELOSDataSet(NonGeoDataset):
                 for sens in self.perturb_bands.keys()
             }
 
-        self.gdf = gpd.read_file(self.data_root / "gelos_chip_tracker.geojson")
+        self.gdf = gpd.read_file(metadata_path)
 
         # Adjust transforms based on the number of sensors
         if transform is None:
@@ -166,10 +190,11 @@ class GELOSDataSet(NonGeoDataset):
         output = {}
 
         for sensor in self.bands.keys():
-            sensor_filepaths = [
-                self.data_root / filepath for filepath in sample_row[f"{sensor}_paths"].split(",")
-            ]
-            image = self._load_sensor_images(sensor_filepaths, sensor)
+            sensor_filepaths = sample_row[f"{sensor}_paths"]
+            if not isinstance(sensor_filepaths, (list, tuple)):
+                sensor_filepaths = ast.literal_eval(sensor_filepaths)
+            
+            image = self._load_sensor_images(sensor_filepaths, sensor) 
             output[sensor] = image.astype(np.float32)
             # image shape: [T, H, W, C]
 
@@ -236,6 +261,7 @@ class GELOSDataSet(NonGeoDataset):
         sensor_image = np.stack(sensor_images, axis=0)  # stack into [T, H, W, C]
 
         return sensor_image
+
 
     def plot(
         self,
