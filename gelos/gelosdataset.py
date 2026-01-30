@@ -149,7 +149,8 @@ class GELOSDataSet(NonGeoDataset):
             }
 
         self.gdf = gpd.read_file(self.data_root / "gelos_chip_tracker.geojson")
-
+        # Get zfill length to match the longest id in the dataset
+        self.zfill_length = int(self.gdf["id"].astype(str).str.len().max())
         # Adjust transforms based on the number of sensors
         if transform is None:
             self.transform = MultimodalToTensor(self.bands.keys())
@@ -204,7 +205,7 @@ class GELOSDataSet(NonGeoDataset):
             output["image"] = {m: output.pop(m) for m in self.bands.keys() if m in output}
 
         # filename is the name of the output parquet file record, while file_id is metadata within that parquet.
-        id = str(sample_row["id"]).zfill(8)
+        id = str(sample_row["id"]).zfill(self.zfill_length)
         output["filename"] = np.array(id, dtype=str)
         output["file_id"] = sample_row["id"]
 

@@ -68,4 +68,5 @@ def test_gelos_datamodule(dummy_gelos_data):
     assert "S1RTC" in batch['image'], "Key S1RTC not found on predict_dataloader"
     assert "S2L2A" in batch['image'], "Key S2L2A not found on predict_dataloader"
 
+
     gc.collect()
