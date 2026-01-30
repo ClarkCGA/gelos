@@ -30,9 +30,8 @@ The `gelos_chip_tracker.geojson` must be a valid GeoJSON file containing specifi
 **Required Columns:**
 
 - `id`: Unique identifier for the chip (int or string).
-- `year`: Year of the observation (int).
 - `geometry`: Polygon geometry of the chip.
-- `{sensor}_paths`: Comma-separated list of filenames relative to the `data_version` directory. Even if you only have one image, it must be string (e.g. `"image.tif"`).
+- `{sensor}_paths`: Comma-separated list of filenames relative to the `data_version` directory. Even if you only have one image, it must be string (e.g. `"DEM_001.tif"`).
 - `color`: Hex color code string (e.g., `"#FF0000"`) for plotting clusters/classes.
 
 **Example Definitions:**
