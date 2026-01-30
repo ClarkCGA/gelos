@@ -9,7 +9,7 @@ import yaml
 
 from gelos.embedding_extraction import extract_embeddings
 from gelos.embedding_generation import perturb_args_to_string
-from gelos.plotting import legend_patches, plot_from_tsne
+from gelos.plotting import plot_from_tsne
 from gelos.tsne_transform import save_tsne_as_csv, tsne_from_embeddings
 
 app = typer.Typer()

@@ -6,9 +6,24 @@
 
 Repository for Geospatial Exploration of Latent Observation Space (GELOS)
 
-## Configuration (Paths)
+## Installing
 
-GELOS CLI commands require explicit path arguments. For example:
+Currently, as the repo is private to Clark CGA, it can be installed from the repository using pip or uv with the appropriate credentials.
+
+Installing from remote repo directly:
+```
+pip install git+https://<your-github-personal-access-token>@github.com/ClarkCGA/gelos
+```
+
+Cloning and installing:
+```
+git clone https://github.com/ClarkCGA/gelos
+pip install gelos/
+```
+
+## Running gelos scripts
+
+GELOS CLI commands require explicit path arguments. For example, to run all yamls in a directory:
 
 ```
 python gelos/embedding_generation.py \
@@ -17,12 +32,21 @@ python gelos/embedding_generation.py \
     --config-dir /workspace/gelos/configs
 ```
 
-```
-python gelos/embedding_transformation.py \
-    --raw-data-dir /data/gelos/raw \
-    --processed-data-dir /data/gelos/processed \
-    --figures-dir /data/gelos/figures \
-    --config-dir /workspace/gelos/configs
+GELOS can also be imported as modules into python scripts, as in this example which generates embeddings according to one config yaml:
+
+```python
+from pathlib import Path
+from gelos.embedding_generation import generate_embeddings
+
+config_path = Path("configs/prithvieov2300.yaml")
+raw_data_dir = Path("/abs/path/to/data/raw")
+processed_data_dir = Path("/abs/path/to/data/processed")
+
+generate_embeddings(
+  config_path,
+  raw_data_dir=raw_data_dir,
+  processed_data_dir=processed_data_dir,
+)
 ```
 
 Docker/Compose can still use a `.env` file for volume mounts and ports, but the library does not auto-load environment variables. Use absolute paths that exist on the host.
