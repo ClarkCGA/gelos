@@ -1,27 +1,18 @@
 Getting started
 ===============
 
-This is where you describe how to get set up on a clean install, including the
-commands necessary to get the raw data (using the `sync_data_from_s3` command,
-for example), and then how to make the cleaned, final data sets.
-
 ## Environment Configuration
 
-GELOS loads all machine-specific paths from environment variables (optionally via `.env`).
-
-Required path variables:
+If you use Docker Compose, you can set variables like these for host paths and ports:
 
 - `EXTERNAL_DATA_DIR`
 - `RAW_DATA_DIR`
 - `INTERIM_DATA_DIR`
 - `PROCESSED_DATA_DIR`
 - `PROJECT_ROOT`
-
-Docker Compose variables:
-
 - `JUPYTER_HOST_PORT`
 
-Example `.env`:
+Example `.env` used by Docker Compose:
 
 ```
 EXTERNAL_DATA_DIR=/data/gelos/external/
@@ -31,6 +22,13 @@ RAW_DATA_DIR=/data/gelos/raw/
 PROJECT_ROOT=/workspace/gelos/
 JUPYTER_HOST_PORT=8888
 ```
+
+## Dataset Paths and Configs
+
+Dataset paths are not pulled from the YAML config. GELOS expects explicit paths to be passed via
+CLI arguments or function parameters (for example, `--raw-data-dir` and `--processed-data-dir`).
+Keep dataset paths in your execution command or wrapper script, and keep YAML configs focused on
+model and data configuration.
 
 ## Next Steps
 

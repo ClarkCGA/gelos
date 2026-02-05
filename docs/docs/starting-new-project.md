@@ -98,8 +98,6 @@ model:
     output_format: parquet
     embed_file_key: filename 
     layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
-    output_format: parquet
-    embed_file_key: filename 
     embedding_pooling: null 
     has_cls: True
 
