@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import rioxarray as rxr
 from terratorch.datasets.transforms import MultimodalTransforms
+import torch.nn.functional as F
 import torch
 from torchgeo.datasets import NonGeoDataset
 
@@ -294,3 +295,138 @@ class GELOSDataSet(NonGeoDataset):
             plt.suptitle(suptitle)
 
         return fig
+
+############ ---- GELOS CROP DATASET ---- ############
+
+class GELOSCropDataSet(NonGeoDataset):
+    """
+    Dataset intended for embedding extraction and exploration.
+    Contains "S2-Agri-Patch" Sentinel 2 parcel-based crop type dataset.
+    https://zenodo.org/records/5815523
+
+    Dataset:
+
+    .npy files with 4 dimentional arrays: (24,10,32,32)[time, bands, height, width]
+    we subset with 4 time steps with 4 indices for sampling: [3, 8, 15, 22] corresponding to dates [20170314,20170612,20170806,20171010]
+    
+    .csv chip tracker with chip-level land cover classification
+    
+    """
+
+    # 10 bands of Sentinel-2 used in S2-Agri-Patch dataset
+    ALL_S2_BANDS = [
+        "BLUE",
+        "GREEN",
+        "RED",
+        "RED_EDGE_1",
+        "RED_EDGE_2", 
+        "RED_EDGE_3",
+        "NIR_BROAD",
+        "NIR_NARROW",
+        "SWIR_1",
+        "SWIR_2",
+    ]
+
+    # Default 6 bands to use
+    S2_BAND_NAMES = [
+        "BLUE",
+        "GREEN",
+        "RED",
+        "NIR_NARROW",
+        "SWIR_1",
+        "SWIR_2",
+    ]
+    
+    all_band_names = {
+        "S2L2A": ALL_S2_BANDS,
+    }
+
+    rgb_bands = {
+        "S2L2A": ["RED", "GREEN", "BLUE"],
+    }
+
+    BAND_SETS = {"all": {"S2L2A": S2_BAND_NAMES}, "rgb": rgb_bands}
+
+    def __init__(
+        self,
+        data_root: str | Path,
+        bands: dict[str, List[str]] = BAND_SETS["all"],
+        transform: A.Compose | None = None,
+        concat_bands: bool = False,
+        perturb_bands: dict[str, List[str]] = None,
+        target_size: int = None
+    ) -> None:
+        """
+        Initializes an instance.
+
+        Args:
+        data_root (str | Path): root directory where the dataset can be found
+        bands: (Dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
+        transform (A.compose, optional): transform to apply. Defaults to ToTensorV2.
+        concat_bands (bool, optional): concatenate all modalities into the channel dimension
+        perturb_bands (dict[str, List[str]], optional): perturb bands with additive gaussian noise. Dictionary defining modalities and bands for perturbation.
+        """
+        self.data_root = Path(data_root)
+        self.bands = bands
+        self.concat_bands = concat_bands
+        self.perturb_bands = perturb_bands
+        self.target_size = target_size
+
+        assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
+            f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
+        )
+
+        self.band_indices = {
+            sens: [self.all_band_names[sens].index(band) for band in self.bands[sens]]
+            for sens in self.bands.keys()
+        }
+
+        self.gdf = gpd.read_file(Path("/workspace/Yao-Ting/crop-embeddings/data/cleaned_df.csv"))
+
+        if transform is None:
+            # If not specify any augmentations, convert all arrays to tensors.
+            self.transform = MultimodalToTensor(self.bands.keys())
+        else:
+            # augmentations are applied per modality.
+            transform = {
+                s: transform for s in self.bands.keys()
+            }
+            # shared=False: do not share random augmentation parameters across modalities.
+            self.transform = MultimodalTransforms(transform, shared=False)
+
+    def __len__(self) -> int:
+        return len(self.gdf)   
+
+    def __getitem__(self, index: int) -> dict:
+        sample_row = self.gdf.iloc[index]
+
+        output = {}
+        # Select time indices
+        TIME_IDX = [3, 8, 15, 22]
+        for sensor in self.bands.keys():
+            sensor_filepaths = sample_row[f"{sensor}_paths"]
+            image = np.load(sensor_filepaths)  # [time, bands, height, width] 
+
+            # select time indices [4, B, H, W]
+            image = image[TIME_IDX, ...] 
+
+            # select band indices [4, 6, H, W]
+            band_indices = self.band_indices[sensor]
+            image = image[:, band_indices, :, :]
+            
+            # transpose to [time, height, width, band]
+            image = np.transpose(image, (0, 2, 3, 1))     
+
+            output[sensor] = image.astype(np.float32)
+        
+        if self.transform:
+            output = self.transform(output)
+
+        # Single sensor only
+        sensor = list(output.keys())[0]
+        output["image"] = output.pop(sensor)
+        
+        chip_id = str(sample_row["id"]).zfill(6)
+        output["filename"] = chip_id
+
+        return output
