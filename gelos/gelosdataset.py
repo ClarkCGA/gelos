@@ -1,5 +1,4 @@
 from pathlib import Path
-import pdb
 import ast
 from typing import List
 
@@ -173,6 +172,7 @@ class GELOSDataSet(NonGeoDataset):
             }
 
         self.gdf = gpd.read_file(metadata_path)
+        self.zfill_length = int(self.gdf["id"].astype(str).str.len().max())
 
         # Adjust transforms based on the number of sensors
         if transform is None:
@@ -229,9 +229,9 @@ class GELOSDataSet(NonGeoDataset):
             output["image"] = {m: output.pop(m) for m in self.bands.keys() if m in output}
 
         # create id with timestep as output filenames
-        id = str(sample_row["id"]).zfill(6) + str(sample_row["year"])
+        id = str(sample_row["id"]).zfill(self.zfill_length)
         output["filename"] = np.array(id, dtype=str)
-        output["file_id"] = sample_row["id"]
+        output["file_id"] = np.array(sample_row["id"], dtype=str)
 
         return output
 

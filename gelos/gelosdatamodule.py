@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from torchgeo.datamodules import NonGeoDataModule
 import typer
 
-from src.data.dataset import GELOSDataSet
+from gelos.gelosdataset import GELOSDataSet
 
 app = typer.Typer()
 
