@@ -9,7 +9,7 @@ import torch
 import typer
 import yaml
 
-from gelos.gelosdatamodule import GELOSDataModule
+from gelos.gelosdatamodule import GELOSDataModule, GELOSCropDataModule
 
 app = typer.Typer()
 
@@ -42,6 +42,7 @@ def generate_embeddings(
     yaml_path: Path,
     raw_data_dir: Path,
     processed_data_dir: Path,
+    datamodule_cls=GELOSDataModule,
 ) -> None:
     with open(yaml_path, "r") as f:
         yaml_config = yaml.safe_load(f)
@@ -72,7 +73,7 @@ def generate_embeddings(
             for class_path in yaml_config["data"]["init_args"]["transform"]
         ]
 
-    gelos_datamodule = GELOSDataModule(**yaml_config["data"]["init_args"])
+    gelos_datamodule = datamodule_cls(**yaml_config["data"]["init_args"])
     task = LenientEmbeddingGenerationTask(**yaml_config["model"]["init_args"])
 
     device = "gpu" if torch.cuda.is_available() else "cpu"
