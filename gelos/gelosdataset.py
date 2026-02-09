@@ -381,7 +381,7 @@ class GELOSCropDataSet(NonGeoDataset):
             for sens in self.bands.keys()
         }
 
-        self.gdf = gpd.read_file(Path("/workspace/Yao-Ting/crop-embeddings/data/cleaned_df.csv"))
+        self.gdf = gpd.read_file(Path("/home/elis/Github/crop-embeddings/data/cleaned_df.csv"))
 
         if transform is None:
             # If not specify any augmentations, convert all arrays to tensors.
