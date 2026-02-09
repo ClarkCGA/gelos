@@ -237,11 +237,7 @@ class GELOSCropDataModule(NonGeoDataModule):
 
     def on_after_batch_transfer(self, batch, dataloader_idx: int = 0):
         """
-        Ensure model-expected channel count after normalization.
-
-        The datamodule applies `Normalize` during `on_after_batch_transfer`.
-        Duplicate or trim the channel dimension here (after normalization)
-        so `means`/`stds` broadcasting works correctly.
+        Apply parent augmentations/normalization after batch transfer.
         """
         # let parent apply augmentations/normalization first
         try:
@@ -249,36 +245,5 @@ class GELOSCropDataModule(NonGeoDataModule):
         except Exception:
             # If parent has no hook, ignore
             pass
-
-        if "image" not in batch:
-            return batch
-
-        img = batch["image"]
-        # infer channel axis: commonly B x C x T x H x W
-        if img.ndim == 5:
-            channel_axis = 1
-        elif img.ndim == 4:
-            # either B x C x H x W or B x T x C x H
-            if img.shape[1] in (6, 12):
-                channel_axis = 1
-            else:
-                channel_axis = 2
-        else:
-            channel_axis = 1
-
-        current = img.shape[channel_axis]
-        target = 12
-        if current != target:
-            if current > target:
-                slices = [slice(None)] * img.ndim
-                slices[channel_axis] = slice(0, target)
-                img = img[tuple(slices)]
-            else:
-                reps = -(-target // current)
-                img = torch.cat([img] * reps, dim=channel_axis)
-                slices = [slice(None)] * img.ndim
-                slices[channel_axis] = slice(0, target)
-                img = img[tuple(slices)]
-            batch["image"] = img
 
         return batch
