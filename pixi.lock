@@ -2229,7 +2229,7 @@ packages:
 - pypi: ./
   name: gelos
   version: 0.0.1
-  sha256: 8ffc3653b9589e2b97441f80509e44cae8af398df34a28d2ed824ddd9a239384
+  sha256: 5d83f37848c031c3adaa187a5e1dd42951d5d33c7a88ac2d3c416e6bbaca1b36
   requires_python: ~=3.11.0
 - conda: https://conda.anaconda.org/conda-forge/noarch/geopandas-1.1.2-pyhd8ed1ab_0.conda
   sha256: 7c3e5dc62c0b3d067a6f517ea9176e9d52682499d4afb78704354a60f37c5444
