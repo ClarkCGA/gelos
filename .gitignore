@@ -195,3 +195,6 @@ cython_debug/
 
 # Trash
 *.Trash-0*
+
+.agents/
+.agent-module/
