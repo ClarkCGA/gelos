@@ -1,29 +1,4 @@
 services:
-  notebook:
-    image: gelos:latest
-    build: .
-    env_file:
-      - .env
-    environment:
-      - PYTHONPATH=/app
-    volumes:
-       - .:/app/ 
-       - ${EXTERNAL_DATA_DIR}:${EXTERNAL_DATA_DIR}
-       - ${RAW_DATA_DIR}:${RAW_DATA_DIR}
-       - ${INTERIM_DATA_DIR}:${INTERIM_DATA_DIR}
-       - ${PROCESSED_DATA_DIR}:${PROCESSED_DATA_DIR}
-    command: jupyter lab --ip=0.0.0.0 --allow-root
-    ports:
-       - "${JUPYTER_HOST_PORT}:8888"
-    shm_size: '32gb'
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
   test:
     image: gelos-test:latest
     build: 
@@ -33,4 +8,4 @@ services:
       - PYTHONPATH=/app
     volumes:
       - .:/app/
-    command: make test
+    command: pixi run make test
