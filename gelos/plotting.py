@@ -1,5 +1,5 @@
 from pathlib import Path
-
+from typing import Any
 import geopandas as gpd
 from matplotlib.patches import Patch
 import matplotlib.pyplot as plt
@@ -13,21 +13,26 @@ def format_lat_lon(lat: float, lon: float) -> str:
     return f"{abs(lat):.2f}°{lat_hemisphere}, {abs(lon):.2f}°{lon_hemisphere}"
 
 
-def plot_from_tsne(
+def plot_from_tsne( #TODO: make colors a parameter, map to gdf, parameterize everything
     embeddings_tsne: np.array,
     chip_gdf: gpd.GeoDataFrame,
     model_title: str,
     extraction_strategy: str,
     embedding_layer: str,
     legend_patches: list[Patch],
+    category_column: Any,
+    color_dict: dict[Any, str],
     chip_indices: list[int],
     axis_lim: int = 90,
     output_dir: str | Path = None,
+    legend_loc: str = "upper left"
 ) -> None:
     """
     plot a tSNE transform of embeddings colored according to land cover
     """
+    chip_gdf["color"] = chip_gdf[category_column].map(color_dict)
     colors = chip_gdf.loc[chip_indices]["color"]
+
 
     plt.figure(figsize=(10, 8))
     plt.scatter(embeddings_tsne[:, 1], -embeddings_tsne[:, 0], c=colors, s=2)
@@ -38,7 +43,7 @@ def plot_from_tsne(
     if axis_lim:
         plt.xlim([-axis_lim, axis_lim])
         plt.ylim([-axis_lim, axis_lim])
-    plt.legend(handles=legend_patches, loc="upper left", fontsize=10, framealpha=0.9)
+    plt.legend(handles=legend_patches, loc=legend_loc, fontsize=10, framealpha=0.9)
 
     if output_dir:
         model_title_lower = model_title.replace(" ", "").lower()

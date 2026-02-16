@@ -32,7 +32,6 @@ def scale(array: np.array):
     array_norm = np.clip(array_scaled, 0, 1)
     return array_norm
 
-
 class GELOSDataSet(NonGeoDataset):
     """
     Dataset intended for embedding extraction and exploration.
@@ -132,6 +131,7 @@ class GELOSDataSet(NonGeoDataset):
         self.repeat_bands = repeat_bands
         self.perturb_bands = perturb_bands
         self.perturb_alpha = perturb_alpha
+        self.whateveryouwant
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
             f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
@@ -167,14 +167,16 @@ class GELOSDataSet(NonGeoDataset):
         output = {}
 
         for sensor in self.bands.keys():
-            sensor_filepaths = [
-                self.data_root / filepath for filepath in sample_row[f"{sensor}_paths"].split(",")
-            ]
-            image = self._load_sensor_images(sensor_filepaths, sensor)
-            output[sensor] = image.astype(np.float32)
-            # image shape: [T, H, W, C]
+            images = get_sensor_images()
+            # sensor_filepaths = [
+            #     self.data_root / filepath for filepath in sample_row[f"{sensor}_paths"].split(",")
+            # ]
+            # image = self._load_sensor_images(sensor_filepaths, sensor)
+            # output[sensor] = image.astype(np.float32)
+            # # image shape: [T, H, W, C]
 
         if self.repeat_bands:
+            
             for sensor, repeats in self.repeat_bands.items():
                 output[sensor] = np.tile(
                     output[sensor], (repeats, 1, 1, 1)
@@ -210,6 +212,10 @@ class GELOSDataSet(NonGeoDataset):
         output["file_id"] = sample_row["id"]
 
         return output
+    
+    # @abstract
+    # def _get_sensor_images(self, sensor):
+    #     pass
 
     def _perturb_bands(self, output, sensor, band_dict):
         # perturb given bands of one sensor output

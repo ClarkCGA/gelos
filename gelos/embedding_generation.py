@@ -72,7 +72,7 @@ def generate_embeddings(
             for class_path in yaml_config["data"]["init_args"]["transform"]
         ]
 
-    gelos_datamodule = GELOSDataModule(**yaml_config["data"]["init_args"])
+    gelos_datamodule = GELOSDataModule(**yaml_config["data"]["init_args"]) # TODO: Make generic
     task = LenientEmbeddingGenerationTask(**yaml_config["model"]["init_args"])
 
     device = "gpu" if torch.cuda.is_available() else "cpu"
