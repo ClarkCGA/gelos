@@ -197,7 +197,5 @@ cython_debug/
 *.Trash-0*
 
 .agents/
-.agent-module/
 .claude/
 CLAUDE.md
-*copilot-instructions.md*

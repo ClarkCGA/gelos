@@ -3,6 +3,7 @@ from typing import Optional
 
 import geopandas as gpd
 from loguru import logger
+from matplotlib.patches import Patch
 import pandas as pd
 import typer
 import yaml
@@ -20,6 +21,7 @@ def transform_embeddings(
     raw_data_dir: Path,
     processed_data_dir: Path,
     figures_dir: Path,
+    legend_patches: dict[str, Patch],
 ) -> None:
     with open(yaml_path, "r") as f:
         yaml_config = yaml.safe_load(f)
@@ -53,7 +55,7 @@ def transform_embeddings(
                 / f"{model_title_lower}_{extraction_strategy_lower}_{embedding_layer_lower}_tsne.csv"
             )
 
-            if csv_path.exists() and 1 == 0:
+            if csv_path.exists():
                 logger.info(f"{str(csv_path)} already exists, loading embeddings from file")
                 loaded_embeddings = pd.read_csv(csv_path)
                 embeddings_tsne = loaded_embeddings[

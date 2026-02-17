@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any
+
 import geopandas as gpd
 from matplotlib.patches import Patch
 import matplotlib.pyplot as plt
@@ -13,7 +14,7 @@ def format_lat_lon(lat: float, lon: float) -> str:
     return f"{abs(lat):.2f}°{lat_hemisphere}, {abs(lon):.2f}°{lon_hemisphere}"
 
 
-def plot_from_tsne( #TODO: make colors a parameter, map to gdf, parameterize everything
+def plot_from_tsne( 
     embeddings_tsne: np.array,
     chip_gdf: gpd.GeoDataFrame,
     model_title: str,
@@ -25,14 +26,13 @@ def plot_from_tsne( #TODO: make colors a parameter, map to gdf, parameterize eve
     chip_indices: list[int],
     axis_lim: int = 90,
     output_dir: str | Path = None,
-    legend_loc: str = "upper left"
+    legend_loc: str = "upper left",
 ) -> None:
     """
     plot a tSNE transform of embeddings colored according to land cover
     """
     chip_gdf["color"] = chip_gdf[category_column].map(color_dict)
     colors = chip_gdf.loc[chip_indices]["color"]
-
 
     plt.figure(figsize=(10, 8))
     plt.scatter(embeddings_tsne[:, 1], -embeddings_tsne[:, 0], c=colors, s=2)
