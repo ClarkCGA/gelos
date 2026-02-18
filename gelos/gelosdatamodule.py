@@ -20,10 +20,10 @@ class GELOSDataModule(NonGeoDataModule):
 
     def __init__(
         self,
+        data_root: str | Path,
         batch_size: int,
         num_workers: int,
-        data_root: str | Path,
-        dataset_class: type | None = None,
+        dataset_class: type,
         means: dict[str, dict[str, float]] | None = None,
         stds: dict[str, dict[str, float]] | None = None,
         bands: dict[str, List[str]] | None = None,

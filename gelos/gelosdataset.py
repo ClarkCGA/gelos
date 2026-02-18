@@ -49,16 +49,14 @@ class GELOSDataSet(NonGeoDataset):
         perturb_alpha: float = 1,
     ) -> None:
 
-        super().__init__(
-            bands=bands,
-            all_band_names=all_band_names,
-            means=means,
-            stds=stds,
-            concat_bands=concat_bands,
-            repeat_bands=repeat_bands,
-            perturb_bands=perturb_bands,
-            perturb_alpha=perturb_alpha,
-        )
+        self.bands=bands
+        self.all_band_names=all_band_names
+        self.means=means
+        self.stds=stds
+        self.concat_bands=concat_bands
+        self.repeat_bands=repeat_bands
+        self.perturb_bands=perturb_bands
+        self.perturb_alpha=perturb_alpha
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
             f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"

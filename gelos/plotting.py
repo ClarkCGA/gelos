@@ -14,7 +14,7 @@ def format_lat_lon(lat: float, lon: float) -> str:
     return f"{abs(lat):.2f}°{lat_hemisphere}, {abs(lon):.2f}°{lon_hemisphere}"
 
 
-def plot_from_tsne( 
+def plot_from_tsne(
     embeddings_tsne: np.array,
     chip_gdf: gpd.GeoDataFrame,
     model_title: str,
