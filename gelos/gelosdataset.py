@@ -46,8 +46,6 @@ class GELOSDataSet(NonGeoDataset):
         self,
         bands: dict[str, list[str]],
         all_band_names: dict[str, list[str]],
-        means: dict[str, dict[str, float]] | None = None,
-        stds: dict[str, dict[str, float]] | None = None,
         transform: A.Compose | None = None,
         concat_bands: bool = False,
         repeat_bands: dict[str, int] | None = None,
@@ -56,8 +54,6 @@ class GELOSDataSet(NonGeoDataset):
 
         self.bands=bands
         self.all_band_names=all_band_names
-        self.means=means
-        self.stds=stds
         self.concat_bands=concat_bands
         self.repeat_bands=repeat_bands
         self.perturb_bands=perturb_bands
