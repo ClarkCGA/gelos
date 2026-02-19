@@ -41,7 +41,7 @@ class GELOSDataModule(NonGeoDataModule):
             batch_size (int): Batch size for DataLoaders.
             num_workers (int): Number of workers for data loading.
             data_root (str | Path): Root directory for dataset.
-            dataset_class (type, optional): Dataset class to use. Defaults to GELOSLCDataset.
+            dataset_class (type, optional): Dataset class to use.
             means: (dict[str, dict[str, float]]): Dictionary defining modalities and bands with mean values
             stds: (dict[str, dict[str, float]]): Dictionary defining modalities and bands with std values
             bands: (dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
