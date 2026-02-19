@@ -92,6 +92,8 @@ def transform_embeddings(
                 model_title,
                 extraction_strategy,
                 embedding_layer,
+                category_column,
+                color_dict,
                 legend_patches,
                 chip_indices,
                 axis_lim=None,
@@ -132,8 +134,8 @@ def main(
         if not config_dir:
             raise typer.BadParameter("--config-dir is required when --yaml-path is not provided.")
         yaml_paths = list(
-            Path(config_dir).glob("*noperturb*.yaml*")
-        )  # only do tsne transforms for non-perturbed
+            Path(config_dir).glob("*.yaml")
+        )  
 
     logger.info(f"yamls to process: {yaml_paths}")
     for yaml_path in yaml_paths:
