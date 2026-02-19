@@ -51,6 +51,42 @@ class ExampleGELOSDataSet(GELOSDataSet):
         "DEM": DEM_BAND_NAMES,
     }
 
+    means = {
+        "S2L2A": {
+            "coastal": 0.0,
+            "blue": 0.0,
+            "green": 0.0,
+            "red": 0.0,
+            "rededge1": 0.0,
+            "rededge2": 0.0,
+            "rededge3": 0.0,
+            "nir": 0.0,
+            "nir08": 0.0,
+            "swir16": 0.0,
+            "swir22": 0.0,
+        },
+        "S1RTC": {"VV": 0.0, "VH": 0.0},
+        "DEM": {"DEM": 0.0},
+    }
+
+    stds = {
+        "S2L2A": {
+            "coastal": 1.0,
+            "blue": 1.0,
+            "green": 1.0,
+            "red": 1.0,
+            "rededge1": 1.0,
+            "rededge2": 1.0,
+            "rededge3": 1.0,
+            "nir": 1.0,
+            "nir08": 1.0,
+            "swir16": 1.0,
+            "swir22": 1.0,
+        },
+        "S1RTC": {"VV": 1.0, "VH": 1.0},
+        "DEM": {"DEM": 1.0},
+    }
+
     BAND_SETS = {
         "all": all_band_names,
         "rgb": {"S2L2A": ["red", "green", "blue"]},
@@ -63,8 +99,6 @@ class ExampleGELOSDataSet(GELOSDataSet):
         self,
         data_root: str | Path,
         bands: dict[str, list[str]] | None = None,
-        means: dict[str, dict[str, float]] | None = None,
-        stds: dict[str, dict[str, float]] | None = None,
         transform: A.Compose | None = None,
         concat_bands: bool = False,
         repeat_bands: dict[str, int] | None = None,
@@ -76,8 +110,6 @@ class ExampleGELOSDataSet(GELOSDataSet):
         super().__init__(
             bands=bands,
             all_band_names=self.all_band_names,
-            means=means,
-            stds=stds,
             transform=transform,
             concat_bands=concat_bands,
             repeat_bands=repeat_bands,

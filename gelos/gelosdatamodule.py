@@ -64,16 +64,25 @@ class GELOSDataModule(NonGeoDataModule):
         self.concat_bands = concat_bands
         self.repeat_bands = repeat_bands
         self.perturb_bands = perturb_bands
-        self.means = means or {}
-        self.stds = stds or {}
+        
+        # handle passing stats with missing values, check against dataset class
+        # if none are found, mean defaults to 0 and std defaults to 1
+        means = means or {}
+        stds = stds or {}
+        class_means = getattr(dataset_class, 'means', {})
+        class_stds = getattr(dataset_class, 'stds', {})
+        self.means = {}
+        self.stds = {}
         for modality in self.modalities:
-            # if statistics are not passed, default to 0 for mean and 1 for std for all unprovided bands
             self.means[modality] = [
-                self.means.get(modality, {}).get(band, 0.0) for band in self.bands[modality]
+                means.get(modality, class_means.get(modality, {})).get(band, 0.0)
+                for band in self.bands[modality]
             ]
             self.stds[modality] = [
-                self.stds.get(modality, {}).get(band, 1.0) for band in self.bands[modality]
+                stds.get(modality, class_stds.get(modality, {})).get(band, 1.0)
+                for band in self.bands[modality]
             ]
+
         self.transform = wrap_in_compose_is_list(transform)
         if len(self.bands.keys()) == 1:
             self.aug = (
@@ -94,8 +103,6 @@ class GELOSDataModule(NonGeoDataModule):
         self.dataset = self.dataset_class(
             data_root=self.data_root,
             bands=self.bands,
-            means=self.means,
-            stds=self.stds,
             transform=self.transform,
             concat_bands=self.concat_bands,
             repeat_bands=self.repeat_bands,

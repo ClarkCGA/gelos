@@ -10,10 +10,13 @@ Ensure you have the GELOS package installed.
 
 GELOSDataSet (from gelos.gelosdataset) defines a parent class which ensures outputs consistent with what the terratorch embedding generation pipeline requires. It also contains reusable methods for noise ablation and band repetition, which is sometimes needed for dataset conformity with specific models. For example, when yearly data such as DEM is passed alongside multitemporal data to Terramind V1 Base, the model requires that the DEM is repeated so that there are an equal number of time steps for all data sources. The parent class ensures all projects in this framework create outputs that can be transformed, visualized and analyzed with the same downstream modules.
 
-In order to use the downstream modules, create a custom class instance which inherits from gelos.GELOSDataSet. Your custom dataset class must define the following elements:
+In order to use the downstream modules, create a custom class instance which inherits from ```gelos.GELOSDataSet```. For an example implementation within this repository, see TestGELOSDataSet in ```tests.test_data.py``` 
+
+Your custom dataset class must define the following elements:
 
 1. For each data source, a list of band names for that data source.
 2. An all band names dict in format {"data_source": list[band_names] for each data_source}
+  a. Optionally, add dataset statistics - GELOSDataModule will fall back to these if mean and std are not passed as arguments when initializing. These should be in format {"data_source": {"band":float(mean)} for each data source and mean/std}
 3. If you use a custom init(), also call super.__init__() to get necessary parameters
 4. Methods:
   - __len__(self) -> int
@@ -26,7 +29,6 @@ In order to use the downstream modules, create a custom class instance which inh
   - _get_sample_id(self, index: int) -> tuple[str, Any]
     - This method gets the sample ID based on the index, and names the output parquet based on that ID.
 
-For an example implementation within this repository, see TestGELOSDataSet in tests.test_data.py
 
 ## Running the Pipeline
 
