@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import rioxarray as rxr
 import torch
+from jsonargparse import ArgumentParser
 
 from gelos.gelosdatamodule import GELOSDataModule
 from gelos.gelosdataset import GELOSDataSet
@@ -320,28 +321,24 @@ def test_example_config_instantiates(data_root):
 
     import yaml
 
-    config_path = Path(__file__).parent / "fixtures" / "example_config.yaml"
-    init_args = yaml.safe_load(config_path.read_text())["data"]["init_args"].copy()
+    yaml_path = Path(__file__).parent / "fixtures" / "example_config.yaml"
 
-    # Resolve dataset_class string → actual class
-    module_path, class_name = init_args["dataset_class"].rsplit(".", 1)
-    init_args["dataset_class"] = getattr(importlib.import_module(module_path), class_name)
+    with open(yaml_path, "r") as f:
+        yaml_config = yaml.safe_load(f)
 
-    # Resolve transform list of {class_path, init_args} dicts → instantiated objects
-    if isinstance(init_args.get("transform"), list):
-        resolved = []
-        for t in init_args["transform"]:
-            mod_path, cls_name = t["class_path"].rsplit(".", 1)
-            cls = getattr(importlib.import_module(mod_path), cls_name)
-            resolved.append(cls(**t.get("init_args", {})))
-        init_args["transform"] = resolved
+    parser = ArgumentParser()
+    parser.add_class_arguments(GELOSDataModule, "data")
 
-    init_args["data_root"] = data_root
+    data_init_args = yaml_config['data']['init_args']
+    data_init_args['data_root'] = str(data_root)
 
-    dm = GELOSDataModule(**init_args)
-    dm.setup(stage="predict")
-    assert len(dm.dataset) == N_SAMPLES
+    cfg = parser.parse_object({"data": data_init_args})
+    init = parser.instantiate_classes(cfg)
+    gelos_datamodule = init.data
 
-    batch = next(iter(dm.predict_dataloader()))
+    gelos_datamodule.setup(stage="predict")
+    assert len(gelos_datamodule.dataset) == N_SAMPLES
+
+    batch = next(iter(gelos_datamodule.predict_dataloader()))
     assert "image" in batch
     gc.collect()
