@@ -307,3 +307,41 @@ def test_datamodule_setup_and_iterate(data_root):
     assert "filename" in batch
     assert "file_id" in batch
     gc.collect()
+
+
+def test_example_config_instantiates(data_root):
+    """tests/fixtures/example_config.yaml can instantiate GELOSDataModule and produce batches.
+
+    Validates that the documented YAML config stays in sync with the code:
+    class paths are importable, band names are valid, and the DataModule can
+    set up and iterate.
+    """
+    import importlib
+
+    import yaml
+
+    config_path = Path(__file__).parent / "fixtures" / "example_config.yaml"
+    init_args = yaml.safe_load(config_path.read_text())["data"]["init_args"].copy()
+
+    # Resolve dataset_class string → actual class
+    module_path, class_name = init_args["dataset_class"].rsplit(".", 1)
+    init_args["dataset_class"] = getattr(importlib.import_module(module_path), class_name)
+
+    # Resolve transform list of {class_path, init_args} dicts → instantiated objects
+    if isinstance(init_args.get("transform"), list):
+        resolved = []
+        for t in init_args["transform"]:
+            mod_path, cls_name = t["class_path"].rsplit(".", 1)
+            cls = getattr(importlib.import_module(mod_path), cls_name)
+            resolved.append(cls(**t.get("init_args", {})))
+        init_args["transform"] = resolved
+
+    init_args["data_root"] = data_root
+
+    dm = GELOSDataModule(**init_args)
+    dm.setup(stage="predict")
+    assert len(dm.dataset) == N_SAMPLES
+
+    batch = next(iter(dm.predict_dataloader()))
+    assert "image" in batch
+    gc.collect()

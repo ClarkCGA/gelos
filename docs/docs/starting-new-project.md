@@ -30,70 +30,11 @@ For an example implementation within this repository, see TestGELOSDataSet in te
 
 ## Running the Pipeline
 
-The pipeline is driven by a YAML configuration file.
-
 ### 1. Create a Configuration File
 
+The pipeline is driven by a YAML configuration file. For an example, see tests/fixtures/example_config.yaml
+
 Create a YAML file with a unique, descriptive name (e.g., `configs/prithvieov2300.yaml`) defining your model and data parameters.
-
-```yaml
-seed_everything: 0
-trainer:
-  accelerator: auto
-  strategy: auto
-  devices: auto
-  num_nodes: 1
-  callbacks: []
-  max_epochs: 0
-
-data:
-  class_path: gelos.gelosdatamodule.GELOSDataModule
-  init_args:
-    class_path: your.dataset.CustomGELOSDataSet # module script for your custom dataset
-    batch_size: 1
-    num_workers: 0
-    bands:
-      S2L2A:
-        - BLUE
-        - GREEN
-        - RED
-        - NIR_NARROW
-        - SWIR_1
-        - SWIR_2
-    transform:
-      - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
-      - class_path: albumentations.pytorch.transforms.ToTensorV2
-      - class_path: terratorch.datasets.transforms.UnflattenTemporalFromChannels
-        init_args:
-          n_timesteps: 4
-
-model:
-  class_path: terratorch.tasks.EmbeddingGenerationTask
-  title: Prithvi EO V2 300M
-  init_args:
-    model: prithvi_eo_v2_300
-    model_args:
-      bands:
-        - BLUE
-        - GREEN
-        - RED
-        - NIR_NARROW
-        - SWIR_1
-        - SWIR_2
-      pretrained: true
-    output_format: parquet
-    embed_file_key: filename 
-    layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
-    embedding_pooling: null 
-    has_cls: True
-
-# define embedding extraction strategy names and lists of arguments for the embedding extraction function
-embedding_extraction_strategies:
-  CLS Token:
-    - start: 0
-      stop: 1
-      step: 1
-```
 
 ### 2. Generate Embeddings
 
