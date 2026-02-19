@@ -2,13 +2,12 @@ from pathlib import Path
 from typing import Optional
 
 from lightning.pytorch import Trainer
-from lightning.pytorch.cli import instantiate_class
 from loguru import logger
 from terratorch.tasks import EmbeddingGenerationTask
 import torch
 import typer
 import yaml
-
+from jsonargparse import ArgumentParser
 from gelos.gelosdatamodule import GELOSDataModule
 
 app = typer.Typer()
@@ -61,21 +60,20 @@ def generate_embeddings(
         print("embeddings already complete, skipping...")
         return
 
-    # add variables to yaml config so it can be passed to classes
-    yaml_config["data"]["init_args"]["data_root"] = data_root
-    yaml_config["model"]["init_args"]["output_dir"] = output_dir
+    parser = ArgumentParser()
+    parser.add_class_arguments(GELOSDataModule, "data")
+    parser.add_class_arguments(LenientEmbeddingGenerationTask, "model")
 
-    # instantiate transform classes if they exist
-    if "transform" in yaml_config["data"]["init_args"].keys():
-        yaml_config["data"]["init_args"]["transform"] = [
-            instantiate_class(args=(), init=class_path)
-            for class_path in yaml_config["data"]["init_args"]["transform"]
-        ]
+    data_init_args = yaml_config['data']['init_args']
+    data_init_args['data_root'] = str(data_root)
+    model_init_args = yaml_config['model']['init_args']
+    model_init_args['output_dir'] = str(output_dir)
 
-    gelos_datamodule = GELOSDataModule(**yaml_config["data"]["init_args"])
-    task = LenientEmbeddingGenerationTask(**yaml_config["model"]["init_args"])
-
-    device = "gpu" if torch.cuda.is_available() else "cpu"
+    cfg = parser.parse_object({"data": data_init_args, "model": model_init_args})
+    init = parser.instantiate_classes(cfg)
+    gelos_datamodule = init.data
+    task = init.model
+    device = 'gpu' if torch.cuda.is_available() else 'cpu'
     trainer = Trainer(accelerator=device, devices=1)
 
     trainer.predict(model=task, datamodule=gelos_datamodule)
