@@ -1,7 +1,7 @@
 from abc import abstractmethod
 from pathlib import Path
 from typing import Any
-
+from einops import rearrange
 import albumentations as A
 import numpy as np
 from terratorch.datasets.transforms import MultimodalTransforms
@@ -10,6 +10,11 @@ from torchgeo.datasets import NonGeoDataset
 
 
 class MultimodalToTensor:
+    """
+    Default Transform
+    Stacking and unstacking in with terratorch.datasets.transforms ALSO rearranges from [T, H, W, C] to [C, T, H, W]
+    Therefore, we must do the same here if we are not using them.
+    """
     def __init__(self, modalities):
         self.modalities = modalities
 
@@ -17,6 +22,7 @@ class MultimodalToTensor:
         new_dict = {}
         for k, v in d.items():
             new_dict[k] = torch.from_numpy(v)
+            new_dict[k] = rearrange(new_dict[k], "time height width channels -> channels time height width")
         return new_dict
 
 
@@ -132,7 +138,7 @@ class GELOSDataSet(NonGeoDataset):
         else:
             output["image"] = {m: output.pop(m) for m in self.bands.keys() if m in output}
 
-        # Add required pipeline metadata
+        # filename is the name of the output parquet file record, while file_id is metadata within that parquet.a
         filename, file_id = self._get_sample_id(index)
         output["filename"] = np.array(filename, dtype=str)
         output["file_id"] = file_id
