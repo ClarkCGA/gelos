@@ -51,8 +51,7 @@ class GELOSDataSet(NonGeoDataset):
         transform: A.Compose | None = None,
         concat_bands: bool = False,
         repeat_bands: dict[str, int] | None = None,
-        perturb_bands: dict[str, list[str]] | None = None,
-        perturb_alpha: float = 1,
+        perturb_bands: dict[str, dict[str, float]] | None = None,
     ) -> None:
 
         self.bands=bands
@@ -62,7 +61,6 @@ class GELOSDataSet(NonGeoDataset):
         self.concat_bands=concat_bands
         self.repeat_bands=repeat_bands
         self.perturb_bands=perturb_bands
-        self.perturb_alpha=perturb_alpha
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
             f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
@@ -72,12 +70,6 @@ class GELOSDataSet(NonGeoDataset):
             sens: [self.all_band_names[sens].index(band) for band in self.bands[sens]]
             for sens in self.bands.keys()
         }
-
-        if self.perturb_bands:
-            self.perturb_band_indices = {
-                sens: [self.all_band_names[sens].index(band) for band in self.perturb_bands[sens]]
-                for sens in self.perturb_bands.keys()
-            }
 
         # Adjust transforms based on the number of sensors
         if transform is None:
@@ -119,11 +111,11 @@ class GELOSDataSet(NonGeoDataset):
 
         if self.perturb_bands:
             for sensor, perturb_band_dict in self.perturb_bands.items():
-                band_dict = {
+                band_indices_dict = {
                     self.bands[sensor].index(band): alpha
                     for band, alpha in perturb_band_dict.items()
                 }
-                output = self._perturb_bands(output, sensor, band_dict)
+                output = self._perturb_bands(output, sensor, band_indices_dict)
 
         if self.transform:
             output = self.transform(output)
@@ -154,12 +146,10 @@ class GELOSDataSet(NonGeoDataset):
 
     def _perturb_bands(self, output, sensor, band_dict):
         for band_index, alpha in band_dict.items():
-            loc = self.means[sensor][band_index]
-            scale = self.stds[sensor][band_index]
 
             size = output[sensor][:, :, :, band_index].shape
-            noise = np.random.normal(loc=loc, scale=scale, size=size)
             original_band = output[sensor][:, :, :, band_index]
-            combined_noise = (noise * alpha) + (original_band * (1 - alpha))
-            output[sensor][:, :, :, band_index] = combined_noise
+            noise = np.random.normal(loc=np.mean(original_band), scale=np.std(original_band), size=size)
+            output[sensor][..., band_index] = (1 - alpha) * original_band + alpha * noise
+
         return output

@@ -68,8 +68,7 @@ class ExampleGELOSDataSet(GELOSDataSet):
         transform: A.Compose | None = None,
         concat_bands: bool = False,
         repeat_bands: dict[str, int] | None = None,
-        perturb_bands: dict[str, list[str]] | None = None,
-        perturb_alpha: float = 1,
+        perturb_bands: dict[str, dict[str, float]] | None = None,
     ) -> None:
         if bands is None:
             bands = self.all_band_names
@@ -83,7 +82,6 @@ class ExampleGELOSDataSet(GELOSDataSet):
             concat_bands=concat_bands,
             repeat_bands=repeat_bands,
             perturb_bands=perturb_bands,
-            perturb_alpha=perturb_alpha,
         )
 
         self.data_root = Path(data_root)
@@ -249,6 +247,31 @@ def test_getitem_multi_sensor_concat(data_root):
     ds = ExampleGELOSDataSet(data_root=data_root, bands=bands, concat_bands=True)
     sample = ds[0]
     assert isinstance(sample["image"], torch.Tensor)
+    gc.collect()
+
+
+
+# ---------------------------------------------------------------------------
+# Tests: perturb_bands
+# ---------------------------------------------------------------------------
+
+
+def test_perturb_bands(data_root):
+    """perturb bands adds gaussian noise based on the band distrubtion of a single chip"""
+    bands = {"S2L2A": ["blue", "green", "red"], "DEM": ["DEM"]}
+    perturb_bands = {"S2L2A": {"blue": 0.1}} 
+    perturb_ds = ExampleGELOSDataSet(
+        data_root=data_root, bands=bands, perturb_bands=perturb_bands
+    )
+    non_perturb_ds = ExampleGELOSDataSet(
+        data_root=data_root, bands=bands,
+    )
+    
+    non_perturb_sample = non_perturb_ds[0]
+    perturb_sample = perturb_ds[0]
+    s2l2a_equal = non_perturb_sample["image"]["S2L2A"] == perturb_sample["image"]["S2L2A"]
+    dem_equal = non_perturb_sample["image"]["DEM"] == perturb_sample["image"]["DEM"]
+    assert dem_equal.all() and not s2l2a_equal.all() 
     gc.collect()
 
 
