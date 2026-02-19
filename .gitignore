@@ -197,4 +197,6 @@ cython_debug/
 *.Trash-0*
 
 .agents/
-.agent-module/
+agents/
+.claude/
+CLAUDE.md

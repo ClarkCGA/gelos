@@ -1,17 +1,20 @@
+from abc import abstractmethod
 from pathlib import Path
-from typing import List
-
+from typing import Any
+from einops import rearrange
 import albumentations as A
-import geopandas as gpd
-import matplotlib.pyplot as plt
 import numpy as np
-import rioxarray as rxr
 from terratorch.datasets.transforms import MultimodalTransforms
 import torch
 from torchgeo.datasets import NonGeoDataset
 
 
-class MultimodalToTensor:  # TODO: Fix to expect [T, H, W, C]
+class MultimodalToTensor:
+    """
+    Default Transform
+    Stacking and unstacking in with terratorch.datasets.transforms ALSO rearranges from [T, H, W, C] to [C, T, H, W]
+    Therefore, we must do the same here if we are not using them.
+    """
     def __init__(self, modalities):
         self.modalities = modalities
 
@@ -19,119 +22,47 @@ class MultimodalToTensor:  # TODO: Fix to expect [T, H, W, C]
         new_dict = {}
         for k, v in d.items():
             new_dict[k] = torch.from_numpy(v)
+            new_dict[k] = rearrange(new_dict[k], "time height width channels -> channels time height width")
         return new_dict
-
-
-def scale(array: np.array):
-    """Scales a numpy array to 0-1 according to maximum value."""
-    if array.max() > 1.0:
-        array_scaled = array / 4000
-    else:
-        array_scaled = array * 5
-
-    array_norm = np.clip(array_scaled, 0, 1)
-    return array_norm
 
 
 class GELOSDataSet(NonGeoDataset):
     """
-    Dataset intended for embedding extraction and exploration.
-    Contains Sentinel 1 and 2 data, DEM, and Landsat 8 and 9 data.
+    Abstract base class for GELOS datasets.
 
-    Dataset Format:
+    Defines the contract for the embedding pipeline: output dict must contain
+    ``image``, ``filename``, and ``file_id`` keys. Provides reusable logic for
+    band validation, perturbation, band repeating, transform dispatch, and
+    output formatting.
 
-    .tif files for Sentinel 1, Sentinel 2, DEM, and Landsat 8 and 9 data
-    .csv chip tracker with chip-level land cover classification
-
-    Dataset Features:
-    TBD Dataset Size
-    4 time steps for each land cover chip
+    Subclasses must implement:
+        - ``__len__``
+        - ``_get_file_paths``
+        - ``_load_file``
+        - ``_get_sample_id``
     """
-
-    S2RTC_BAND_NAMES = [
-        "COASTAL_AEROSOL",
-        "BLUE",
-        "GREEN",
-        "RED",
-        "RED_EDGE_1",
-        "RED_EDGE_2",
-        "RED_EDGE_3",
-        "NIR_BROAD",
-        "NIR_NARROW",
-        "WATER_VAPOR",
-        "SWIR_1",
-        "SWIR_2",
-    ]
-    S1RTC_BAND_NAMES = [
-        "VV",
-        "VH",
-        # TODO 2025-10-17 GELOS v0.40 does not differentiate ASC and DSC S1 passes
-        # "ASC_VV",
-        # "ASC_VH",
-        # "DSC_VV",
-        # "DSC_VH",
-        # "VV_VH",
-    ]
-    LANDSAT_BAND_NAMES = [
-        "coastal",  # Coastal/Aerosol (Band 1)
-        "blue",  # Blue (Band 2)
-        "green",  # Green (Band 3)
-        "red",  # Red (Band 4)
-        "nir08",  # Near Infrared (NIR, Band 5)
-        "swir16",  # Shortwave Infrared 1 (SWIR1, Band 6)
-        "swir22",  # Shortwave Infrared 2 (SWIR2, Band 7)
-    ]
-    DEM_BAND_NAMES = ["DEM"]
-    all_band_names = {
-        "S1RTC": S1RTC_BAND_NAMES,
-        "S2L2A": S2RTC_BAND_NAMES,
-        "landsat": LANDSAT_BAND_NAMES,
-        "DEM": DEM_BAND_NAMES,
-    }
-
-    rgb_bands = {
-        "S1RTC": [],
-        "S2L2A": ["RED", "GREEN", "BLUE"],
-        "landsat": ["red", "green", "blue"],
-        "DEM": [],
-    }
-
-    BAND_SETS = {"all": all_band_names, "rgb": rgb_bands}
 
     def __init__(
         self,
-        data_root: str | Path,
-        bands: dict[str, List[str]] = BAND_SETS["all"],
-        means: dict[str, dict[str, float]] = None,
-        stds: dict[str, dict[str, float]] = None,
+        bands: dict[str, list[str]],
+        all_band_names: dict[str, list[str]],
+        means: dict[str, dict[str, float]] | None = None,
+        stds: dict[str, dict[str, float]] | None = None,
         transform: A.Compose | None = None,
         concat_bands: bool = False,
-        repeat_bands: dict[str, int] = None,
-        perturb_bands: dict[str, List[str]] = None,
+        repeat_bands: dict[str, int] | None = None,
+        perturb_bands: dict[str, list[str]] | None = None,
         perturb_alpha: float = 1,
     ) -> None:
-        """
-        Initializes an instance of GELOS.
 
-        Args:
-        data_root (str | Path): root directory where the dataset can be found
-        means (dict[str, dict[str, float]]): Dataset means by sensor and band for scaling perturbations
-        stds (dict[str, dict[str, float]]): Dataset standard deviations by sensor and band for scaling perturbations
-        bands: (Dict[str, List[str]], optional): Dictionary with format "modality" : List['band_a', 'band_b']
-        transform (A.compose, optional): transform to apply. Defaults to ToTensorV2.
-        concat_bands (bool, optional): concatenate all modalities into the channel dimension
-        repeat_bands (dict[str, int], optional): repeat bands when loading from disc, intended to repeat single time step modalities e.g. DEM
-        perturb_bands (dict[str, List[str]], optional): perturb bands with additive gaussian noise. Dictionary defining modalities and bands for perturbation.
-        perturb_alpha (float, optional): relative weight given to source data vs perturbation noise. 0 signifies all noise, 1 signifies equal weights
-        """
-        self.data_root = Path(data_root)
-        self.bands = bands
-        self.means = means
-        self.stds = stds
-        self.concat_bands = concat_bands
-        self.repeat_bands = repeat_bands
-        self.perturb_bands = perturb_bands
-        self.perturb_alpha = perturb_alpha
+        self.bands=bands
+        self.all_band_names=all_band_names
+        self.means=means
+        self.stds=stds
+        self.concat_bands=concat_bands
+        self.repeat_bands=repeat_bands
+        self.perturb_bands=perturb_bands
+        self.perturb_alpha=perturb_alpha
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
             f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
@@ -148,9 +79,6 @@ class GELOSDataSet(NonGeoDataset):
                 for sens in self.perturb_bands.keys()
             }
 
-        self.gdf = gpd.read_file(self.data_root / "gelos_chip_tracker.geojson")
-        # Get zfill length to match the longest id in the dataset
-        self.zfill_length = int(self.gdf["id"].astype(str).str.len().max())
         # Adjust transforms based on the number of sensors
         if transform is None:
             self.transform = MultimodalToTensor(self.bands.keys())
@@ -158,29 +86,37 @@ class GELOSDataSet(NonGeoDataset):
             transform = {s: transform for s in self.bands.keys()}
             self.transform = MultimodalTransforms(transform, shared=False)
 
+    @abstractmethod
     def __len__(self) -> int:
-        return len(self.gdf)
+        """Return the number of samples in the dataset."""
+        ...
+
+    @abstractmethod
+    def _get_file_paths(self, index: int, sensor: str) -> list[Path]:
+        """Return file paths for the given sample index and sensor."""
+        ...
+
+    @abstractmethod
+    def _load_file(self, path: Path, band_indices: list[int]) -> np.ndarray:
+        """Load a single file and return array with shape [H, W, C]."""
+        ...
+
+    @abstractmethod
+    def _get_sample_id(self, index: int) -> tuple[str, Any]:
+        """Return (filename_string, file_id) for the sample at index."""
+        ...
 
     def __getitem__(self, index: int) -> dict:
-        sample_row = self.gdf.iloc[index]
-
         output = {}
 
         for sensor in self.bands.keys():
-            sensor_filepaths = [
-                self.data_root / filepath for filepath in sample_row[f"{sensor}_paths"].split(",")
-            ]
-            image = self._load_sensor_images(sensor_filepaths, sensor)
+            image = self._load_sensor_images(index, sensor)
             output[sensor] = image.astype(np.float32)
-            # image shape: [T, H, W, C]
 
         if self.repeat_bands:
             for sensor, repeats in self.repeat_bands.items():
-                output[sensor] = np.tile(
-                    output[sensor], (repeats, 1, 1, 1)
-                )  # repeat along T dimension
+                output[sensor] = np.tile(output[sensor], (repeats, 1, 1, 1))
 
-        # Add or replace individual bands with Gaussian noise scaled to each band's dataset-wide mean and std
         if self.perturb_bands:
             for sensor, perturb_band_dict in self.perturb_bands.items():
                 band_dict = {
@@ -192,105 +128,38 @@ class GELOSDataSet(NonGeoDataset):
         if self.transform:
             output = self.transform(output)
 
+        # Format image output
         if len(self.bands.keys()) == 1:
-            # Rename the single sensor key to "image"
             sensor = list(output.keys())[0]
             output["image"] = output.pop(sensor)
         elif self.concat_bands:
-            # Concatenate bands of all image modalities
             data = [output.pop(m) for m in self.bands.keys() if m in output]
-            output["image"] = torch.cat(data, dim=1)  # concatenate into channel dimension
+            output["image"] = torch.cat(data, dim=1)
         else:
-            # Tasks expect data to be stored in "image", moving modalities to image dict
             output["image"] = {m: output.pop(m) for m in self.bands.keys() if m in output}
 
-        # filename is the name of the output parquet file record, while file_id is metadata within that parquet.
-        id = str(sample_row["id"]).zfill(self.zfill_length)
-        output["filename"] = np.array(id, dtype=str)
-        output["file_id"] = sample_row["id"]
+        # filename is the name of the output parquet file record, while file_id is metadata within that parquet.a
+        filename, file_id = self._get_sample_id(index)
+        output["filename"] = np.array(filename, dtype=str)
+        output["file_id"] = file_id
 
         return output
 
+    def _load_sensor_images(self, index: int, sensor: str) -> np.ndarray:
+        """Load and stack sensor images into [T, H, W, C] array."""
+        file_paths = self._get_file_paths(index, sensor)
+        band_indices = self.band_indices[sensor]
+        sensor_images = [self._load_file(path, band_indices) for path in file_paths]
+        return np.stack(sensor_images, axis=0)
+
     def _perturb_bands(self, output, sensor, band_dict):
-        # perturb given bands of one sensor output
-        # get mean and std of given band of sensor
         for band_index, alpha in band_dict.items():
             loc = self.means[sensor][band_index]
             scale = self.stds[sensor][band_index]
 
-            # get size of noise tensor to generate
             size = output[sensor][:, :, :, band_index].shape
             noise = np.random.normal(loc=loc, scale=scale, size=size)
             original_band = output[sensor][:, :, :, band_index]
             combined_noise = (noise * alpha) + (original_band * (1 - alpha))
-            # combine noise back into output
             output[sensor][:, :, :, band_index] = combined_noise
         return output
-
-    def _load_file(self, path, band_indices: List[int]) -> np.array:
-        data = rxr.open_rasterio(path, masked=True).to_numpy()
-        return data[band_indices, :, :].transpose(1, 2, 0)  # [H, W, C]
-
-    def _load_sensor_images(self, sensor_filepaths: List[Path], sensor: str) -> np.array:
-        band_indices = self.band_indices[sensor]
-        sensor_images = [self._load_file(path, band_indices) for path in sensor_filepaths]
-        sensor_image = np.stack(sensor_images, axis=0)  # stack into [T, H, W, C]
-
-        return sensor_image
-
-    def plot(
-        self,
-        sample: dict[str, torch.Tensor],
-        vis_bands: dict[str, dict[str, int]] = rgb_bands,
-        show_titles: bool = True,
-        suptitle: str | None = None,
-    ) -> plt.Figure:
-        """Plot a sample from the dataset.
-
-        Args:
-            sample: a sample returned by :meth:`__getitem__`
-            bands: bands from sensors to visualize in composites
-            show_titles: flag indicating whether to show titles above each panel
-            suptitle: optional suptitle to use for figure
-
-        Returns:
-            a matplotlib Figure with the rendered sample
-        """
-        # Determine if the sample contains multiple sensors or a single sensor
-        if isinstance(sample["image"], dict):
-            nrows = len(self.bands.keys())
-        else:
-            nrows = 1
-        ncols = 4
-
-        fig, axs = plt.subplots(
-            nrows=nrows,
-            ncols=ncols,
-            figsize=(ncols * 5, nrows * 5),
-            squeeze=False,
-            constrained_layout=True,
-        )
-
-        if not isinstance(sample["image"], dict):
-            # only one modality, setup dict for plotting
-            sens = list(self.bands.keys())[0]
-            sample["image"] = {sens: sample["image"]}
-
-        for row, sens in enumerate(self.bands.keys()):
-            band_indices = [self.bands[sens].index(band) for band in vis_bands[sens]]
-            print(band_indices)
-            img = sample["image"][sens].numpy()
-            img = scale(img)
-            c, t, h, w = img.shape
-            for col, t in enumerate(range(t)):
-                img_t = img[band_indices, t, :, :].transpose(1, 2, 0)
-                axs[row, col].imshow(img_t)
-                axs[row, col].axis("off")
-
-        if show_titles:
-            axs[row, 0].set_title(sens)
-
-        if suptitle is not None:
-            plt.suptitle(suptitle)
-
-        return fig

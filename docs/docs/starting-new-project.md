@@ -6,108 +6,35 @@ This guide explains how to set up a new project with your own dataset to generat
 
 Ensure you have the GELOS package installed.
 
-## Dataset Structure
+## Creating a Subclass of GELOSDataSet
 
-GELOS expects a specific directory structure and metadata file format.
+GELOSDataSet (from gelos.gelosdataset) defines a parent class which ensures outputs consistent with what the terratorch embedding generation pipeline requires. It also contains reusable methods for noise ablation and band repetition, which is sometimes needed for dataset conformity with specific models. For example, when yearly data such as DEM is passed alongside multitemporal data to Terramind V1 Base, the model requires that the DEM is repeated so that there are an equal number of time steps for all data sources. The parent class ensures all projects in this framework create outputs that can be transformed, visualized and analyzed with the same downstream modules.
 
-### Directory Layout
+In order to use the downstream modules, create a custom class instance which inherits from gelos.GELOSDataSet. Your custom dataset class must define the following elements:
 
-Data should be organized by a `data_version` under your raw data directory.
+1. For each data source, a list of band names for that data source.
+2. An all band names dict in format {"data_source": list[band_names] for each data_source}
+3. If you use a custom init(), also call super.__init__() to get necessary parameters
+4. Methods:
+  - __len__(self) -> int
+    - This method is required for progress bars
+  - _get_file_paths(self, index: int, sensor: str) -> list[Path]
+    - This method returns paths to load for a given index of the dataloader for one sensor
+  - _load_file(self, path: Path, band_indices: list[int]) -> np.ndarray
+    - This method loads files from the get_file_paths and gets the correct band indices
+    - Band indices are determined programmatically based on the yaml and band names dicts defined based on requirement 1.
+  - _get_sample_id(self, index: int) -> tuple[str, Any]
+    - This method gets the sample ID based on the index, and names the output parquet based on that ID.
 
-```text
-<RAW_DATA_DIR>/
-└── {data_version}/
-    ├── gelos_chip_tracker.geojson  <-- REQUIRED metadata file
-    ├── S2L2A_000001_20230204.tif
-    ├── S2L2A_000000_20230605.tif
-    └── ...
-```
-
-### Chip Tracker Format
-
-The `gelos_chip_tracker.geojson` must be a valid GeoJSON file containing specific columns in its properties.
-
-**Required Columns:**
-
-- `id`: Unique identifier for the chip (int or string).
-- `geometry`: Polygon geometry of the chip.
-- `{sensor}_paths`: Comma-separated list of filenames relative to the `data_version` directory. Even if you only have one image, it must be string (e.g. `"DEM_001.tif"`).
-- `color`: Hex color code string (e.g., `"#FF0000"`) for plotting clusters/classes.
-
-**Example Definitions:**
-
-If you are using Sentinel-2 (S2L2A), your columns might look like:
-
-| id | year | S2L2A_paths | color | geometry |
-|----|------|-------------|-------|----------|
-| 1 | 2023 | "S2L2A_000321_20230204.tif,S2L2A_000321_20230507.tif" | "#00FF00" | POLYGON(...) |
+For an example implementation within this repository, see TestGELOSDataSet in tests.test_data.py
 
 ## Running the Pipeline
 
-The pipeline is driven by a YAML configuration file.
-
 ### 1. Create a Configuration File
 
+The pipeline is driven by a YAML configuration file. For an example, see tests/fixtures/example_config.yaml
+
 Create a YAML file with a unique, descriptive name (e.g., `configs/prithvieov2300.yaml`) defining your model and data parameters.
-
-```yaml
-# lightning.pytorch==2.1.1
-seed_everything: 0
-trainer:
-  accelerator: auto
-  strategy: auto
-  devices: auto
-  num_nodes: 1
-  callbacks: []
-  max_epochs: 0
-
-data:
-  class_path: gelos.gelosdatamodule.GELOSDataModule
-  init_args:
-    batch_size: 1
-    num_workers: 0
-    bands:
-      S2L2A:
-        - BLUE
-        - GREEN
-        - RED
-        - NIR_NARROW
-        - SWIR_1
-        - SWIR_2
-    transform:
-      - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
-      - class_path: albumentations.pytorch.transforms.ToTensorV2
-      - class_path: terratorch.datasets.transforms.UnflattenTemporalFromChannels
-        init_args:
-          n_timesteps: 4
-
-model:
-  class_path: terratorch.tasks.EmbeddingGenerationTask
-  title: Prithvi EO V2 300M
-  init_args:
-    model: prithvi_eo_v2_300
-    model_args:
-      bands:
-        - BLUE
-        - GREEN
-        - RED
-        - NIR_NARROW
-        - SWIR_1
-        - SWIR_2
-      pretrained: true
-    output_format: parquet
-    embed_file_key: filename 
-    layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
-    embedding_pooling: null 
-    has_cls: True
-
-# define embedding extraction strategy names and lists of arguments for the embedding extraction function
-embedding_extraction_strategies:
-  CLS Token:
-    - start: 0
-      stop: 1
-      step: 1
-```
 
 ### 2. Generate Embeddings
 

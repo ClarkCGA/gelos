@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import geopandas as gpd
 from matplotlib.patches import Patch
@@ -20,13 +21,17 @@ def plot_from_tsne(
     extraction_strategy: str,
     embedding_layer: str,
     legend_patches: list[Patch],
+    category_column: Any,
+    color_dict: dict[Any, str],
     chip_indices: list[int],
     axis_lim: int = 90,
     output_dir: str | Path = None,
+    legend_loc: str = "upper left",
 ) -> None:
     """
     plot a tSNE transform of embeddings colored according to land cover
     """
+    chip_gdf["color"] = chip_gdf[category_column].map(color_dict)
     colors = chip_gdf.loc[chip_indices]["color"]
 
     plt.figure(figsize=(10, 8))
@@ -38,7 +43,7 @@ def plot_from_tsne(
     if axis_lim:
         plt.xlim([-axis_lim, axis_lim])
         plt.ylim([-axis_lim, axis_lim])
-    plt.legend(handles=legend_patches, loc="upper left", fontsize=10, framealpha=0.9)
+    plt.legend(handles=legend_patches, loc=legend_loc, fontsize=10, framealpha=0.9)
 
     if output_dir:
         model_title_lower = model_title.replace(" ", "").lower()
