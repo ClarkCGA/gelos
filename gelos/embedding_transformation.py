@@ -16,6 +16,20 @@ from gelos.tsne_transform import save_tsne_as_csv, tsne_from_embeddings
 app = typer.Typer()
 
 
+def load_chip_tracker(path: Path) -> pd.DataFrame:
+    """Load a chip tracker file as a DataFrame, dispatching on file extension.
+
+    Supports .geojson/.json (via geopandas) and .csv (via pandas).
+    """
+    suffix = path.suffix.lower()
+    if suffix in (".geojson", ".json"):
+        return gpd.read_file(path)
+    elif suffix == ".csv":
+        return pd.read_csv(path)
+    else:
+        raise ValueError(f"Unsupported chip tracker format '{suffix}'. Use .geojson, .json, or .csv")
+
+
 def _build_style_from_config(style_cfg: dict) -> tuple[str, dict, list[Patch]]:
     """Extract category_column, color_dict, and legend_patches from the style config section."""
     category_column = style_cfg["category_column"]
@@ -48,7 +62,8 @@ def transform_embeddings(
     output_dir = processed_data_dir / data_version / model_name / perturb_string
 
     data_root = raw_data_dir / data_version
-    chip_gdf = gpd.read_file(data_root / "gelos_chip_tracker.geojson")
+    chip_tracker_file = yaml_config["chip_tracker"]
+    chip_gdf = load_chip_tracker(data_root / chip_tracker_file)
     figures_dir = figures_dir / data_version
     figures_dir.mkdir(exist_ok=True, parents=True)
 

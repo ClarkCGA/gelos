@@ -1,3 +1,4 @@
+chip_tracker: gelos_chip_tracker.geojson
 seed_everything: 0
 trainer:
   accelerator: auto
