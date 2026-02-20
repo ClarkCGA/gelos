@@ -78,4 +78,13 @@ embedding_extraction_strategies:
   All Embeddings:
     - start: 0
       stop: null
-      step: 1
+      step: 
+
+style:
+  category_column: "lulc"
+  colors:
+    "1": "#419bdf"    # Water
+    "2": "#397d49"    # Trees
+  labels:
+    "1": "Water"
+    "2": "Trees"
