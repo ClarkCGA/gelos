@@ -16,16 +16,28 @@ from gelos.tsne_transform import save_tsne_as_csv, tsne_from_embeddings
 app = typer.Typer()
 
 
+def _build_style_from_config(style_cfg: dict) -> tuple[str, dict, list[Patch]]:
+    """Extract category_column, color_dict, and legend_patches from the style config section."""
+    category_column = style_cfg["category_column"]
+    color_dict = style_cfg["colors"]
+    legend_patches = [
+        Patch(color=color, label=style_cfg["labels"][k]) for k, color in color_dict.items()
+    ]
+    return category_column, color_dict, legend_patches
+
+
 def transform_embeddings(
     yaml_path: Path,
     raw_data_dir: Path,
     processed_data_dir: Path,
     figures_dir: Path,
-    legend_patches: dict[str, Patch],
 ) -> None:
     with open(yaml_path, "r") as f:
         yaml_config = yaml.safe_load(f)
     logger.info(f"processing {yaml_path}")
+
+    style_cfg = yaml_config["style"]
+    category_column, color_dict, legend_patches = _build_style_from_config(style_cfg)
 
     data_version = yaml_config["data_version"]
     model_name = yaml_config["model"]["init_args"]["model"]
@@ -92,9 +104,9 @@ def transform_embeddings(
                 model_title,
                 extraction_strategy,
                 embedding_layer,
+                legend_patches,
                 category_column,
                 color_dict,
-                legend_patches,
                 chip_indices,
                 axis_lim=None,
                 output_dir=figures_dir,
