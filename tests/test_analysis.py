@@ -17,7 +17,6 @@ from gelos.transforms import TRANSFORMS, pca_from_embeddings, tsne_from_embeddin
 # Fixtures
 # ---------------------------------------------------------------------------
 
-RNG = np.random.RandomState(42)
 N_SAMPLES = 100
 N_FEATURES = 64
 N_CLASSES = 3
@@ -26,7 +25,8 @@ N_CLASSES = 3
 @pytest.fixture()
 def synthetic_embeddings():
     """Random embeddings (100, 64) with chip_indices 0..99."""
-    embeddings = RNG.rand(N_SAMPLES, N_FEATURES).astype(np.float32)
+    rng = np.random.RandomState(42)
+    embeddings = rng.rand(N_SAMPLES, N_FEATURES).astype(np.float32)
     chip_indices = list(range(N_SAMPLES))
     return embeddings, chip_indices
 
@@ -103,7 +103,8 @@ def test_pca_variance_threshold(synthetic_embeddings):
 
 def test_tsne_output_shape():
     """t-SNE returns (N, 2) with default params."""
-    embeddings = RNG.rand(50, 10).astype(np.float32)
+    rng = np.random.RandomState(42)
+    embeddings = rng.rand(50, 10).astype(np.float32)
     result = tsne_from_embeddings(embeddings, perplexity=5, verbose=0)
     assert result.shape == (50, 2)
     gc.collect()

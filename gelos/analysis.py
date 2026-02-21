@@ -9,11 +9,10 @@ import pandas as pd
 import typer
 import yaml
 from loguru import logger
-from matplotlib.patches import Patch
 
 from gelos.extraction import extract_embeddings
 from gelos.models import MODELS
-from gelos.plotting import PLOTS
+from gelos.plotting import PLOTS, build_style_from_config
 from gelos.transforms import TRANSFORMS
 
 app = typer.Typer()
@@ -31,17 +30,6 @@ def load_chip_tracker(path: Path) -> pd.DataFrame:
         return pd.read_csv(path)
     else:
         raise ValueError(f"Unsupported chip tracker format '{suffix}'. Use .geojson, .json, or .csv")
-
-
-def _build_style_from_config(style_cfg: dict) -> tuple[str, dict, list[Patch]]:
-    """Extract category_column, color_dict, and legend_patches from the style config section."""
-    category_column = style_cfg["category_column"]
-    color_dict = style_cfg["colors"]
-    legend_patches = [
-        Patch(color=color, label=style_cfg["labels"][k]) for k, color in color_dict.items()
-    ]
-    
-    return category_column, color_dict, legend_patches
 
 
 def _save_transform_result(
@@ -86,7 +74,7 @@ def run_analysis(
         raw_data_dir: Root directory for raw data.
         embedding_dir: Root directory for embeddings.
         processed_data_dir: Root directory for processed outputs.
-        figures_dir: Root directory for generated figures.
+        figures_base_dir: Root directory for generated figures.
 
     Returns:
         Nested dict of results keyed by ``{layer}_{strategy}_{step_type}``.
@@ -97,7 +85,7 @@ def run_analysis(
 
     config_stem = yaml_path.stem
     style_cfg = yaml_config["style"]
-    category_column, _, _ = _build_style_from_config(style_cfg)
+    category_column, _, _ = build_style_from_config(style_cfg)
 
     data_version = yaml_config["data_version"]
     experiment_name = yaml_config["experiment_name"]
@@ -112,6 +100,13 @@ def run_analysis(
     chip_gdf = chip_gdf.set_index(chip_id_column)
     figures_dir = figures_base_dir / data_version
     figures_dir.mkdir(exist_ok=True, parents=True)
+
+    if not input_dir.exists():
+        logger.error(
+            f"embedding directory {input_dir} does not exist. "
+            f"Run generation first to produce embeddings."
+        )
+        return {}
 
     embeddings_directories = [item for item in input_dir.iterdir() if item.is_dir()]
     all_results = {}

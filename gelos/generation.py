@@ -45,7 +45,7 @@ def generate_embeddings(
     with open(yaml_path, "r") as f:
         yaml_config = yaml.safe_load(f)
 
-    print(yaml.dump(yaml_config))
+    logger.info(f"config:\n{yaml.dump(yaml_config)}")
 
     config_stem = yaml_path.stem
     data_version = yaml_config["data_version"]
@@ -55,7 +55,7 @@ def generate_embeddings(
     data_root = raw_data_dir / data_version
     marker_file = output_dir / ".embeddings_complete"
     if (marker_file).exists():
-        print("embeddings already complete, skipping...")
+        logger.info("embeddings already complete, skipping...")
         return
 
     parser = ArgumentParser()
@@ -76,7 +76,7 @@ def generate_embeddings(
 
     trainer.predict(model=task, datamodule=gelos_datamodule)
     marker_file.touch()
-    print("marking embeddings as complete")
+    logger.info("marking embeddings as complete")
 
 
 @app.command()

@@ -39,11 +39,13 @@ def select_embedding_indices(
 def extract_embeddings(
     directory: Path | str,
     n_sample: int = None,
-    chip_indices: list[int] = None,
-    slice_args: list[dict[str, int]] = [{"start": 0, "stop": None, "step": 1}],
-) -> tuple[np.array]:
+    chip_indices: list[int] | None = None,
+    slice_args: list[dict[str, int]] | None = None,
+) -> tuple[np.ndarray, list[int]]:
     # extract embeddings in numpy format from geoparquet
     # TODO: Take embedding shapes and automatically determine slicing args
+    if slice_args is None:
+        slice_args = [{"start": 0, "stop": None, "step": 1}]
     if chip_indices:
         files = [directory / f"{str(id).zfill(6)}_embedding.parquet" for id in chip_indices]
     else:

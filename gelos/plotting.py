@@ -17,7 +17,7 @@ def format_lat_lon(lat: float, lon: float) -> str:
 
 
 def plot_from_tsne(
-    embeddings_tsne: np.array,
+    embeddings_tsne: np.ndarray,
     chip_gdf: gpd.GeoDataFrame,
     experiment_name: str,
     strategy_title: str,
@@ -32,10 +32,9 @@ def plot_from_tsne(
     """
     plot a tSNE transform of embeddings colored according to land cover
     """
-    chip_gdf["color"] = chip_gdf[category_column].map(color_dict)
-    colors = chip_gdf.loc[chip_indices]["color"]
+    colors = chip_gdf[category_column].loc[chip_indices].map(color_dict)
 
-    plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(10, 8))
     plt.scatter(embeddings_tsne[:, 1], -embeddings_tsne[:, 0], c=colors, s=2)
     plt.suptitle(f"t-SNE Visualization of Embeddings for {experiment_name}", fontsize=14)
     plt.title(strategy_title)
@@ -50,6 +49,17 @@ def plot_from_tsne(
         plt.savefig(output_path, dpi=600, bbox_inches="tight")
     else:
         plt.show()
+    plt.close(fig)
+
+
+def build_style_from_config(style_cfg: dict) -> tuple[str, dict, list[Patch]]:
+    """Extract category_column, color_dict, and legend_patches from the style config section."""
+    category_column = style_cfg["category_column"]
+    color_dict = style_cfg["colors"]
+    legend_patches = [
+        Patch(color=color, label=style_cfg["labels"][k]) for k, color in color_dict.items()
+    ]
+    return category_column, color_dict, legend_patches
 
 
 def tsne_scatter(
@@ -76,9 +86,7 @@ def tsne_scatter(
         embedding_layer: Name of the embedding layer.
         **params: Additional keyword arguments forwarded to ``plot_from_tsne``.
     """
-    from gelos.analysis import _build_style_from_config
-
-    category_column, color_dict, legend_patches = _build_style_from_config(style_cfg)
+    category_column, color_dict, legend_patches = build_style_from_config(style_cfg)
     plot_from_tsne(
         transformed,
         chip_gdf,

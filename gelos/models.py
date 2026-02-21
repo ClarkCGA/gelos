@@ -162,7 +162,9 @@ def run_random_forest_cv(
         random_state: Random state for reproducibility.
 
     Returns:
-        Dict with ``accuracy``, ``per_class``, and ``predictions`` keys.
+        Dict with ``accuracy`` (mean across all folds/repeats),
+        ``per_class`` (from last repeat only), and ``predictions``
+        (from last repeat only) keys.
     """
     logger.info(
         f"running random forest CV: n_estimators={n_estimators}, "
@@ -172,8 +174,9 @@ def run_random_forest_cv(
         n_splits=n_splits, n_repeats=n_repeats, random_state=random_state
     )
 
+    total_folds = n_splits * n_repeats
+    last_repeat_start = total_folds - n_splits
     fold_accuracies = []
-    # Use the last repeat's predictions for per-class metrics
     last_preds = np.zeros_like(labels)
 
     for fold, (train_idx, test_idx) in enumerate(rskf.split(embeddings, labels)):
@@ -186,7 +189,8 @@ def run_random_forest_cv(
         clf.fit(X_train, y_train)
         preds = clf.predict(X_test)
         fold_accuracies.append(float(accuracy_score(y_test, preds)))
-        last_preds[test_idx] = preds
+        if fold >= last_repeat_start:
+            last_preds[test_idx] = preds
 
     overall_acc = float(np.mean(fold_accuracies))
     per_class = _per_class_accuracy(labels, last_preds)
