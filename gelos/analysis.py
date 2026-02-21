@@ -53,7 +53,7 @@ def _save_transform_result(
 ) -> None:
     """Save transform output to CSV for caching."""
     cols = {
-        f"{prefix}_{transform_type}_{i}": result[:, i] for i in range(result.shape[1])
+        f"dim_{i}": result[:, i] for i in range(result.shape[1])
     }
     df = pd.DataFrame({"id": chip_indices, **cols})
     df.to_csv(cache_path, index=False)
@@ -73,7 +73,7 @@ def run_pipeline(
     raw_data_dir: Path,
     embedding_dir: Path,
     processed_data_dir: Path,
-    figures_dir: Path,
+    figures_base_dir: Path,
 ) -> dict:
     """Run the config-driven embedding pipeline.
 
@@ -110,6 +110,7 @@ def run_pipeline(
     chip_id_column = yaml_config["chip_id_column"]
     chip_gdf = load_chip_tracker(data_root / chip_tracker_file)
     chip_gdf = chip_gdf.set_index(chip_id_column)
+    figures_dir = figures_base_dir / data_version
     figures_dir.mkdir(exist_ok=True, parents=True)
 
     embeddings_directories = [item for item in input_dir.iterdir() if item.is_dir()]
@@ -155,6 +156,7 @@ def run_pipeline(
                     t_fn = TRANSFORMS[t_type]
                     result = t_fn(embeddings, **t_params)
                     transform_results[t_type] = result
+                    layer_dir.mkdir(exist_ok=True, parents=True)
                     _save_transform_result(
                         result, chip_indices, cache_path, t_type, prefix
                     )
@@ -240,7 +242,7 @@ def main(
     processed_data_dir: Path = typer.Option(
         '/app/data/processed', "--processed-data-dir", "-p", help="Root directory for processed outputs."
     ),
-    figures_dir: Path = typer.Option(
+    figures_base_dir: Path = typer.Option(
         '/app/reports/figures', "--figures-dir", "-f", help="Root directory for generated figures."
     ),
     config_dir: Optional[Path] = typer.Option(

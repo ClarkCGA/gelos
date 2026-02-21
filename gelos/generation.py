@@ -91,7 +91,7 @@ def main(
         "/app/data/interim", "--embedding-dir", "-p", help="Root directory for embedding outputs."
     ),
     config_dir: Optional[Path] = typer.Option(
-        "/app/figures",
+        "/app/configs",
         "--config-dir",
         "-c",
         help="Directory containing YAML configs (used when --yaml-path is not set).",
