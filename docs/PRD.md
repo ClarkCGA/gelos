@@ -80,16 +80,16 @@ GELOS (Geospatial Exploration of Latent Observation Space) is a pip-installable 
 
 ## 10. API Specification
 **CLI Entry Points** (initial MVP):
-- `gelos.embedding_generation` CLI
+- `gelos.generation` CLI
   - Inputs: YAML config path or config directory
   - Output: Embedding files and completion marker
-- `gelos.embedding_transformation` CLI
+- `gelos.analysis` CLI
   - Inputs: YAML config path or config directory
-  - Output: CSV t-SNE data and plots
+  - Output: Transform results, plots, and model evaluation CSVs
 
 **Python API (examples):**
 - `generate_embeddings(yaml_path: Path) -> None`
-- `transform_embeddings(yaml_path: Path, chip_gdf, figures_dir) -> None`
+- `run_pipeline(yaml_path: Path, raw_data_dir, processed_data_dir, figures_dir) -> dict`
 
 ## 11. Success Criteria
 **MVP Success Definition:**

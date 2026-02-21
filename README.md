@@ -26,7 +26,7 @@ pip install gelos/
 GELOS CLI commands require explicit path arguments. For example, to run all yamls in a directory:
 
 ```
-python gelos/embedding_generation.py \
+python gelos/generation.py \
     --raw-data-dir /data/gelos/raw \
     --processed-data-dir /data/gelos/processed \
     --config-dir /workspace/gelos/configs
@@ -36,7 +36,7 @@ GELOS can also be imported as modules into python scripts, as in this example wh
 
 ```python
 from pathlib import Path
-from gelos.embedding_generation import generate_embeddings
+from gelos.generation import generate_embeddings
 
 config_path = Path("configs/prithvieov2300.yaml")
 raw_data_dir = Path("/abs/path/to/data/raw")
@@ -75,19 +75,21 @@ For details on setting up a new dataset, see [Starting a New Embeddings Project]
     │
     ├── __init__.py                 <- Makes gelos a Python module
     │
-    ├── embedding_extraction.py     <- Utilities to sample parquet files and slice embeddings
+    ├── analysis.py                 <- Typer CLI + config-driven pipeline: transforms, plots, and models
     │
-    ├── embedding_generation.py     <- Typer CLI to run Lightning/Terratorch embedding generation
+    ├── extraction.py               <- Utilities to sample parquet files and slice embeddings
     │
-    ├── embedding_transformation.py <- Typer CLI to extract embeddings, run t-SNE, and plot results
+    ├── generation.py               <- Typer CLI to run Lightning/Terratorch embedding generation
     │
     ├── gelosdatamodule.py          <- Lightning DataModule wiring the GELOS dataset for inference
     │
     ├── gelosdataset.py             <- Multimodal geospatial chip dataset with perturbation and concat options
     │
-    ├── plotting.py                 <- Plotting helpers (t-SNE scatter, legend patches, formatting)
+    ├── models.py                   <- MODELS registry: KNN, linear probe, random forest classification
     │
-    └── tsne_transform.py           <- t-SNE computation and CSV export helpers
+    ├── plotting.py                 <- PLOTS registry: t-SNE scatter plots colored by land cover class
+    │
+    └── transforms.py               <- TRANSFORMS registry: t-SNE, PCA, and CSV export helpers
 ```
 
 --------

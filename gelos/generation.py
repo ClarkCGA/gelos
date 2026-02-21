@@ -47,12 +47,10 @@ def generate_embeddings(
 
     print(yaml.dump(yaml_config))
 
-    model_name = yaml_config["model"]["init_args"]["model"]
+    config_stem = yaml_path.stem
     data_version = yaml_config["data_version"]
-    perturb = yaml_config["data"]["init_args"].get("perturb_bands", None)
-    perturb_string = perturb_args_to_string(perturb)
 
-    output_dir = processed_data_dir / data_version / model_name / perturb_string
+    output_dir = processed_data_dir / config_stem
     output_dir.mkdir(exist_ok=True, parents=True)
     data_root = raw_data_dir / data_version
     marker_file = output_dir / ".embeddings_complete"

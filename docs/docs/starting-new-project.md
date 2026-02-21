@@ -45,7 +45,7 @@ Use the embedding generation CLI or function to produce embeddings from your raw
 **CLI Example:**
 
 ```bash
-python gelos/embedding_generation.py \
+python gelos/generation.py \
   --raw-data-dir /abs/path/to/data/raw \
   --processed-data-dir /abs/path/to/data/processed \
   --config-dir /abs/path/to/project_root/configs
@@ -53,7 +53,7 @@ python gelos/embedding_generation.py \
 
 ```python
 from pathlib import Path
-from gelos.embedding_generation import generate_embeddings
+from gelos.generation import generate_embeddings
 
 config_path = Path("configs/p.yaml")
 raw_data_dir = Path("/abs/path/to/data/raw")
@@ -75,7 +75,7 @@ Use the embedding transformation CLI or function to run t-SNE and generate plots
 **CLI Example:**
 
 ```bash
-python gelos/embedding_transformation.py \
+python gelos/analysis.py \
   --raw-data-dir /abs/path/to/data/raw \
   --processed-data-dir /abs/path/to/data/processed \
   --figures-dir /abs/path/to/data/figures \
@@ -84,14 +84,14 @@ python gelos/embedding_transformation.py \
 
 ```python
 from pathlib import Path
-from gelos.embedding_transformation import transform_embeddings
+from gelos.analysis import run_pipeline
 
 config_path = Path("configs/prithvieov2300.yaml")
 raw_data_dir = Path("/abs/path/to/data/raw")
 processed_data_dir = Path("/abs/path/to/data/processed")
 figures_dir = Path("/abs/path/to/data/figures")
 
-transform_embeddings(
+run_pipeline(
   config_path,
   raw_data_dir=raw_data_dir,
   processed_data_dir=processed_data_dir,

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 
@@ -17,15 +19,14 @@ def format_lat_lon(lat: float, lon: float) -> str:
 def plot_from_tsne(
     embeddings_tsne: np.array,
     chip_gdf: gpd.GeoDataFrame,
-    model_title: str,
-    extraction_strategy: str,
-    embedding_layer: str,
+    experiment_name: str,
+    strategy_title: str,
     legend_patches: list[Patch],
     category_column: Any,
     color_dict: dict[Any, str],
     chip_indices: list[int],
     axis_lim: int = 90,
-    output_dir: str | Path = None,
+    output_path: str | Path = None,
     legend_loc: str = "upper left",
 ) -> None:
     """
@@ -36,8 +37,8 @@ def plot_from_tsne(
 
     plt.figure(figsize=(10, 8))
     plt.scatter(embeddings_tsne[:, 1], -embeddings_tsne[:, 0], c=colors, s=2)
-    plt.suptitle(f"t-SNE Visualization of Embeddings for {model_title}", fontsize=14)
-    plt.title(extraction_strategy)
+    plt.suptitle(f"t-SNE Visualization of Embeddings for {experiment_name}", fontsize=14)
+    plt.title(strategy_title)
     plt.xlabel("t-SNE Dimension 1", fontsize=12)
     plt.ylabel("t-SNE Dimension 2", fontsize=12)
     if axis_lim:
@@ -45,14 +46,53 @@ def plot_from_tsne(
         plt.ylim([-axis_lim, axis_lim])
     plt.legend(handles=legend_patches, loc=legend_loc, fontsize=10, framealpha=0.9)
 
-    if output_dir:
-        model_title_lower = model_title.replace(" ", "").lower()
-        extraction_strategy_lower = extraction_strategy.replace(" ", "").lower()
-        embedding_layer_lower = embedding_layer.replace("_", "").lower()
-        figure_path = (
-            output_dir
-            / f"{model_title_lower}_{extraction_strategy_lower}_{embedding_layer_lower}_tsneplot.png"
-        )
-        plt.savefig(figure_path, dpi=600, bbox_inches="tight")
+    if output_path:
+        plt.savefig(output_path, dpi=600, bbox_inches="tight")
     else:
         plt.show()
+
+
+def tsne_scatter(
+    transformed: np.ndarray,
+    chip_gdf: gpd.GeoDataFrame,
+    chip_indices: list[int],
+    style_cfg: dict,
+    output_path: Path,
+    experiment_name: str,
+    strategy_title: str,
+    embedding_layer: str,
+    **params: Any,
+) -> None:
+    """Registry-compatible wrapper around ``plot_from_tsne``.
+
+    Args:
+        transformed: t-SNE coordinates of shape (N, 2).
+        chip_gdf: GeoDataFrame with chip metadata.
+        chip_indices: Indices into chip_gdf for this embedding set.
+        style_cfg: Style section from the YAML config.
+        output_path: Full path for the output figure.
+        experiment_name: Human-readable experiment name for plot title.
+        strategy_title: Display title for the extraction strategy.
+        embedding_layer: Name of the embedding layer.
+        **params: Additional keyword arguments forwarded to ``plot_from_tsne``.
+    """
+    from gelos.analysis import _build_style_from_config
+
+    category_column, color_dict, legend_patches = _build_style_from_config(style_cfg)
+    plot_from_tsne(
+        transformed,
+        chip_gdf,
+        experiment_name,
+        strategy_title,
+        legend_patches,
+        category_column,
+        color_dict,
+        chip_indices,
+        output_path=output_path,
+        **params,
+    )
+
+
+PLOTS: dict[str, callable] = {
+    "tsne_scatter": tsne_scatter,
+}

@@ -59,6 +59,7 @@ python-dotenv = "*"
 mkdocs = "*"
 timm = "~=1.0.24"
 einops = "*"
+loguru = "*"
 
 [tool.pixi.pypi-dependencies]
 mkdocs = "*"
