@@ -237,7 +237,7 @@ def main(
         '/app/figures', "--figures-dir", "-f", help="Root directory for generated figures."
     ),
     config_dir: Optional[Path] = typer.Option(
-        None,
+        '/app/configs',
         "--config-dir",
         "-c",
         help="Directory containing YAML configs (used when --yaml-path is not set).",
