@@ -103,7 +103,9 @@ def run_pipeline(
 
     data_root = raw_data_dir / data_version
     chip_tracker_file = yaml_config["chip_tracker"]
+    chip_id_column = yaml_config["chip_id_column"]
     chip_gdf = load_chip_tracker(data_root / chip_tracker_file)
+    chip_gdf = chip_gdf.set_index(chip_id_column)
     figures_dir.mkdir(exist_ok=True, parents=True)
 
     embeddings_directories = [item for item in output_dir.iterdir() if item.is_dir()]

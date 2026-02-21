@@ -1,6 +1,7 @@
 experiment_name: "Terramind V1 Base - No Perturbation"
 data_version: "v0.50.1"
 chip_tracker: "gelos_chip_tracker.geojson"
+chip_id_column: "id"
 
 seed_everything: 0
 trainer:
@@ -66,7 +67,6 @@ model:
 
 
 # each strategy defines extraction args (slice_args) and optional analysis steps (transforms, plots, models)
-# if transforms/plots are omitted, defaults to t-SNE + scatter plot
 embedding_extraction_strategies:
   # since terramind embeddings are nested lists, the first args dict gets all time steps, the second gets patch at idx 18 (center)
   all_steps_middle_patch:

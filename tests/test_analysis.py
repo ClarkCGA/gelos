@@ -223,3 +223,36 @@ def test_pipeline_unknown_model_raises():
 def test_pipeline_unknown_plot_raises():
     """Referencing an unregistered plot type raises KeyError."""
     assert "nonexistent" not in PLOTS
+
+
+# ---------------------------------------------------------------------------
+# Tests: chip_id_column join
+# ---------------------------------------------------------------------------
+
+
+def test_chip_id_column_sets_index(tmp_path, synthetic_labels):
+    """load_chip_tracker + set_index(chip_id_column) enables .loc lookup by file_id."""
+    from gelos.analysis import load_chip_tracker
+
+    # IDs starting from 1 (not 0) to ensure .loc uses the index, not row position
+    ids = list(range(1, N_SAMPLES + 1))
+    gdf = gpd.GeoDataFrame(
+        {
+            "id": ids,
+            "lulc": synthetic_labels,
+            "geometry": [Point(float(i), float(i)) for i in ids],
+        },
+        crs="EPSG:4326",
+    )
+    geojson_path = tmp_path / "chip_tracker.geojson"
+    gdf.to_file(geojson_path, driver="GeoJSON")
+
+    loaded = load_chip_tracker(geojson_path)
+    loaded = loaded.set_index("id")
+
+    # Simulate what run_pipeline does: look up labels by chip_indices from extract_embeddings
+    chip_indices = [1, 5, 10]
+    labels = loaded["lulc"].loc[chip_indices].to_numpy()
+    assert len(labels) == 3
+    expected = gdf.set_index("id")["lulc"].loc[chip_indices].to_numpy()
+    np.testing.assert_array_equal(labels, expected)
