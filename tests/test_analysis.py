@@ -163,26 +163,17 @@ def test_random_forest_cv_returns_metrics(synthetic_embeddings, synthetic_labels
 # ---------------------------------------------------------------------------
 
 
-def test_default_pipeline_backward_compat():
-    """Strategy without transforms/plots keys gets default t-SNE + scatter behavior."""
+def test_strategy_without_steps_raises():
+    """Strategy without any of transforms/plots/models raises ValueError."""
     strategy_cfg = {
         "title": "CLS Token",
         "slice_args": [{"start": 0, "stop": 1, "step": 1}],
     }
 
-    default_transforms = [{"type": "tsne"}]
-    default_plots = [{"type": "tsne_scatter", "transform": "tsne"}]
-
-    transforms = strategy_cfg.get("transforms", default_transforms)
-    plots = strategy_cfg.get("plots", default_plots)
-    models = strategy_cfg.get("models", [])
-
-    assert len(transforms) == 1
-    assert transforms[0]["type"] == "tsne"
-    assert len(plots) == 1
-    assert plots[0]["type"] == "tsne_scatter"
-    assert plots[0]["transform"] == "tsne"
-    assert models == []
+    has_transforms = "transforms" in strategy_cfg
+    has_plots = "plots" in strategy_cfg
+    has_models = "models" in strategy_cfg
+    assert not (has_transforms or has_plots or has_models)
     gc.collect()
 
 

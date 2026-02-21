@@ -124,6 +124,17 @@ def run_pipeline(
             strategy_title = strategy_cfg.get("title", strategy_key)
             prefix = f"{config_stem}_{strategy_key}_{embedding_layer}"
 
+            # --- Validate strategy has at least one analysis step ---
+            has_transforms = "transforms" in strategy_cfg
+            has_plots = "plots" in strategy_cfg
+            has_models = "models" in strategy_cfg
+            if not (has_transforms or has_plots or has_models):
+                logger.warning(
+                    f"strategy '{strategy_key}' has no 'transforms', 'plots', or "
+                    f"'models' defined, skipping"
+                )
+                continue
+
             # --- Extract embeddings ---
             logger.info(
                 f"extracting embeddings: layer={embedding_layer}, "
@@ -133,10 +144,9 @@ def run_pipeline(
                 embeddings_directory, slice_args=slice_args
             )
 
-            # --- Run transforms (default: t-SNE if none specified) ---
+            # --- Run transforms ---
             transform_results: dict[str, np.ndarray] = {"raw": embeddings}
-            default_transforms = [{"type": "tsne"}]
-            for t_cfg in strategy_cfg.get("transforms", default_transforms):
+            for t_cfg in strategy_cfg.get("transforms", []):
                 t_type = t_cfg["type"]
                 t_params = t_cfg.get("params", {})
                 layer_dir = output_dir / embedding_layer
@@ -161,9 +171,8 @@ def run_pipeline(
                         result, chip_indices, cache_path, t_type, prefix
                     )
 
-            # --- Run plots (default: t-SNE scatter if none specified) ---
-            default_plots = [{"type": "tsne_scatter", "transform": "tsne"}]
-            for p_cfg in strategy_cfg.get("plots", default_plots):
+            # --- Run plots ---
+            for p_cfg in strategy_cfg.get("plots", []):
                 p_type = p_cfg["type"]
                 p_params = p_cfg.get("params", {})
                 source = p_cfg.get("transform", "raw")
@@ -196,7 +205,7 @@ def run_pipeline(
                     **p_params,
                 )
 
-            # --- Run models (none by default) ---
+            # --- Run models ---
             for m_cfg in strategy_cfg.get("models", []):
                 m_type = m_cfg["type"]
                 m_params = m_cfg.get("params", {})
@@ -243,7 +252,7 @@ def main(
         '/app/data/processed', "--processed-data-dir", "-p", help="Root directory for processed outputs."
     ),
     figures_base_dir: Path = typer.Option(
-        '/app/reports/figures', "--figures-dir", "-f", help="Root directory for generated figures."
+        '/app/reports/figures', "--figures-base-dir", "-f", help="Root directory for generated figures."
     ),
     config_dir: Optional[Path] = typer.Option(
         '/app/configs',
@@ -270,7 +279,7 @@ def main(
             raw_data_dir=raw_data_dir,
             embedding_dir=embedding_dir,
             processed_data_dir=processed_data_dir,
-            figures_dir=figures_dir,
+            figures_base_dir=figures_base_dir,
         )
 
 
