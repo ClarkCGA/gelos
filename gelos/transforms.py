@@ -65,34 +65,6 @@ def pca_from_embeddings(
     pca = PCA(n_components=n_components, random_state=random_state)
     return pca.fit_transform(embeddings)
 
-
-def save_tsne_as_csv(
-    embeddings_tsne: np.ndarray,
-    chip_indices: list[int],
-    model_title: str,
-    extraction_strategy: str,
-    embedding_layer: str,
-    output_dir: str | Path = None,
-) -> None:
-    """Save t-SNE coordinates to a CSV file with standardized column names."""
-    model_title_lower = model_title.replace(" ", "").lower()
-    extraction_strategy_lower = extraction_strategy.replace(" ", "").lower()
-    embedding_layer_lower = embedding_layer.replace("_", "").lower()
-    csv_path = (
-        output_dir
-        / f"{model_title_lower}_{extraction_strategy_lower}_{embedding_layer_lower}_tsne.csv"
-    )
-
-    embeddings_df = pd.DataFrame(
-        {
-            "id": chip_indices,
-            f"{model_title_lower}_{extraction_strategy_lower}_tsne_x": embeddings_tsne[:, 0],
-            f"{model_title_lower}_{extraction_strategy_lower}_tsne_y": embeddings_tsne[:, 1],
-        }
-    ).set_index("id")
-    embeddings_df.to_csv(csv_path)
-
-
 TRANSFORMS: dict[str, callable] = {
     "tsne": tsne_from_embeddings,
     "pca": pca_from_embeddings,

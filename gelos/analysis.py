@@ -99,7 +99,7 @@ def run_pipeline(
     data_version = yaml_config["data_version"]
     experiment_name = yaml_config["experiment_name"]
     embedding_extraction_strategies = yaml_config["embedding_extraction_strategies"]
-    output_dir = processed_data_dir / config_stem
+    output_dir = processed_data_dir / data_version / config_stem
 
     data_root = raw_data_dir / data_version
     chip_tracker_file = yaml_config["chip_tracker"]
@@ -228,13 +228,13 @@ def main(
         None, "--yaml-path", "-y", help="Path to a single yaml config to process."
     ),
     raw_data_dir: Path = typer.Option(
-        ..., "--raw-data-dir", "-r", help="Root directory for raw data."
+        '/app/data/raw', "--raw-data-dir", "-r", help="Root directory for raw data."
     ),
     processed_data_dir: Path = typer.Option(
-        ..., "--processed-data-dir", "-p", help="Root directory for processed outputs."
+        '/app/data/processed', "--processed-data-dir", "-p", help="Root directory for processed outputs."
     ),
     figures_dir: Path = typer.Option(
-        ..., "--figures-dir", "-f", help="Root directory for generated figures."
+        '/app/figures', "--figures-dir", "-f", help="Root directory for generated figures."
     ),
     config_dir: Optional[Path] = typer.Option(
         None,
@@ -252,8 +252,6 @@ def main(
     if yaml_path:
         yaml_paths = [Path(yaml_path)]
     else:
-        if not config_dir:
-            raise typer.BadParameter("--config-dir is required when --yaml-path is not provided.")
         yaml_paths = list(Path(config_dir).glob("*.yaml"))
 
     logger.info(f"yamls to process: {yaml_paths}")
