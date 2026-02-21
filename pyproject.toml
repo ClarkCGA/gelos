@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "gelos"
-version = "0.0.1"
+version = "1.0.0"
 description = "Repository for Geospatial Exploration of Latent Observation Space (GELOS)"
 authors = [
   { name = "Denys Godwin" },
@@ -34,7 +34,7 @@ force-sort-within-sections = true
 [tool.pixi.workspace]
 name = "gelos"
 description = "Repository for Geospatial Exploration of Latent Observation Space (GELOS)"
-version = "0.1.0"
+version = "1.0.0"
 channels = ["conda-forge"]
 platforms = ["linux-64"]
 
@@ -43,7 +43,7 @@ python = "~=3.11.0"
 pytest = "*"
 ruff = "*"
 pip = "*"
-terratorch = "==1.1.1"
+terratorch = "1.1.1*"
 pyarrow = "~=23.0.0"
 typer = "*"
 tqdm = "*"
@@ -60,6 +60,23 @@ mkdocs = "*"
 timm = "~=1.0.24"
 einops = "*"
 loguru = "*"
+
+# CPU-only pytorch for the default environment
+[tool.pixi.feature.cpu.dependencies]
+pytorch-cpu = "*"
+
+# CUDA feature: use `pixi shell -e cuda` for local GPU support
+[tool.pixi.feature.cuda]
+channels = ["conda-forge", "pytorch"]
+
+[tool.pixi.feature.cuda.dependencies]
+pytorch = {version = "2.*", channel = "pytorch"}
+torchvision = {version = "*", channel = "pytorch"}
+pytorch-cuda = {version = "12.*", channel = "pytorch"}
+
+[tool.pixi.environments]
+default = {features = ["cpu"], solve-group = "default"}
+cuda = {features = ["cuda"], solve-group = "cuda"}
 
 [tool.pixi.pypi-dependencies]
 mkdocs = "*"

@@ -4,8 +4,8 @@ services:
     build: 
       context: .
       target: test
-    environment:
-      - PYTHONPATH=/app
-    volumes:
-      - .:/app/
-    command: pixi run make test
+  prod:
+    image: gelos-prod:latest
+    build:
+      context: .
+      target: prod

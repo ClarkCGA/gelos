@@ -68,7 +68,7 @@ def _load_cached_transform(cache_path: Path) -> tuple[np.ndarray, list[int]]:
     return df[data_cols].to_numpy(), chip_indices
 
 
-def run_pipeline(
+def run_analysis(
     yaml_path: Path,
     raw_data_dir: Path,
     embedding_dir: Path,
@@ -136,13 +136,26 @@ def run_pipeline(
                 continue
 
             # --- Extract embeddings ---
-            logger.info(
-                f"extracting embeddings: layer={embedding_layer}, "
-                f"strategy={strategy_key}"
-            )
-            embeddings, chip_indices = extract_embeddings(
-                embeddings_directory, slice_args=slice_args
-            )
+            layer_dir = output_dir / embedding_layer
+            emb_cache = layer_dir / f"{prefix}_embeddings.npy"
+            idx_cache = layer_dir / f"{prefix}_chip_indices.npy"
+
+            if emb_cache.exists() and idx_cache.exists():
+                logger.info(f"loading cached embeddings from {emb_cache}")
+                embeddings = np.load(emb_cache)
+                chip_indices = np.load(idx_cache).tolist()
+            else:
+                logger.info(
+                    f"extracting embeddings: layer={embedding_layer}, "
+                    f"strategy={strategy_key}"
+                )
+                embeddings, chip_indices = extract_embeddings(
+                    embeddings_directory, slice_args=slice_args
+                )
+                layer_dir.mkdir(exist_ok=True, parents=True)
+                np.save(emb_cache, embeddings)
+                np.save(idx_cache, np.array(chip_indices))
+                logger.info(f"cached embeddings to {emb_cache}")
 
             # --- Run transforms ---
             transform_results: dict[str, np.ndarray] = {"raw": embeddings}
@@ -274,7 +287,7 @@ def main(
 
     logger.info(f"yamls to process: {yaml_paths}")
     for yaml_path in yaml_paths:
-        run_pipeline(
+        run_analysis(
             yaml_path,
             raw_data_dir=raw_data_dir,
             embedding_dir=embedding_dir,
