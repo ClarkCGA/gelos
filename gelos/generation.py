@@ -40,7 +40,7 @@ def perturb_args_to_string(perturb):
 def generate_embeddings(
     yaml_path: Path,
     raw_data_dir: Path,
-    processed_data_dir: Path,
+    embedding_dir: Path,
 ) -> None:
     with open(yaml_path, "r") as f:
         yaml_config = yaml.safe_load(f)
@@ -50,7 +50,7 @@ def generate_embeddings(
     config_stem = yaml_path.stem
     data_version = yaml_config["data_version"]
 
-    output_dir = processed_data_dir / data_version / config_stem
+    output_dir = embedding_dir / data_version / config_stem
     output_dir.mkdir(exist_ok=True, parents=True)
     data_root = raw_data_dir / data_version
     marker_file = output_dir / ".embeddings_complete"
@@ -85,10 +85,10 @@ def main(
         None, "--yaml-path", "-y", help="Path to a single yaml config to process."
     ),
     raw_data_dir: Path = typer.Option(
-        "/app/data/raw" "--raw-data-dir", "-r", help="Root directory for raw data."
+        "/app/data/raw", "--raw-data-dir", "-r", help="Root directory for raw data."
     ),
-    processed_data_dir: Path = typer.Option(
-        "/app/data/processsed", "--processed-data-dir", "-p", help="Root directory for processed outputs."
+    embedding_dir: Path = typer.Option(
+        "/app/data/interim", "--embedding-dir", "-p", help="Root directory for embedding outputs."
     ),
     config_dir: Optional[Path] = typer.Option(
         "/app/figures",
@@ -113,7 +113,7 @@ def main(
         generate_embeddings(
             yaml_path,
             raw_data_dir=raw_data_dir,
-            processed_data_dir=processed_data_dir,
+            embedding_dir=embedding_dir,
         )
 
 

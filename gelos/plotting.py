@@ -25,7 +25,7 @@ def plot_from_tsne(
     category_column: Any,
     color_dict: dict[Any, str],
     chip_indices: list[int],
-    axis_lim: int = 90,
+    axis_lim: int = 120,
     output_path: str | Path = None,
     legend_loc: str = "upper left",
 ) -> None:

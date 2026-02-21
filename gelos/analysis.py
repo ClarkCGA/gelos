@@ -40,6 +40,7 @@ def _build_style_from_config(style_cfg: dict) -> tuple[str, dict, list[Patch]]:
     legend_patches = [
         Patch(color=color, label=style_cfg["labels"][k]) for k, color in color_dict.items()
     ]
+    
     return category_column, color_dict, legend_patches
 
 
@@ -70,6 +71,7 @@ def _load_cached_transform(cache_path: Path) -> tuple[np.ndarray, list[int]]:
 def run_pipeline(
     yaml_path: Path,
     raw_data_dir: Path,
+    embedding_dir: Path,
     processed_data_dir: Path,
     figures_dir: Path,
 ) -> dict:
@@ -82,6 +84,7 @@ def run_pipeline(
     Args:
         yaml_path: Path to the YAML experiment config.
         raw_data_dir: Root directory for raw data.
+        embedding_dir: Root directory for embeddings.
         processed_data_dir: Root directory for processed outputs.
         figures_dir: Root directory for generated figures.
 
@@ -100,6 +103,7 @@ def run_pipeline(
     experiment_name = yaml_config["experiment_name"]
     embedding_extraction_strategies = yaml_config["embedding_extraction_strategies"]
     output_dir = processed_data_dir / data_version / config_stem
+    input_dir = embedding_dir / data_version / config_stem
 
     data_root = raw_data_dir / data_version
     chip_tracker_file = yaml_config["chip_tracker"]
@@ -108,7 +112,7 @@ def run_pipeline(
     chip_gdf = chip_gdf.set_index(chip_id_column)
     figures_dir.mkdir(exist_ok=True, parents=True)
 
-    embeddings_directories = [item for item in output_dir.iterdir() if item.is_dir()]
+    embeddings_directories = [item for item in input_dir.iterdir() if item.is_dir()]
     all_results = {}
 
     for embeddings_directory in embeddings_directories:
@@ -230,11 +234,14 @@ def main(
     raw_data_dir: Path = typer.Option(
         '/app/data/raw', "--raw-data-dir", "-r", help="Root directory for raw data."
     ),
+    embedding_dir: Path = typer.Option(
+        "/app/data/interim", "--embedding-dir", "-e", help="Root directory for embedding outputs."
+    ),
     processed_data_dir: Path = typer.Option(
         '/app/data/processed', "--processed-data-dir", "-p", help="Root directory for processed outputs."
     ),
     figures_dir: Path = typer.Option(
-        '/app/figures', "--figures-dir", "-f", help="Root directory for generated figures."
+        '/app/reports/figures', "--figures-dir", "-f", help="Root directory for generated figures."
     ),
     config_dir: Optional[Path] = typer.Option(
         '/app/configs',
@@ -259,6 +266,7 @@ def main(
         run_pipeline(
             yaml_path,
             raw_data_dir=raw_data_dir,
+            embedding_dir=embedding_dir,
             processed_data_dir=processed_data_dir,
             figures_dir=figures_dir,
         )
