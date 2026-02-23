@@ -37,11 +37,24 @@ def perturb_args_to_string(perturb):
     return perturb_string
 
 
-def generate_embeddings(
+def setup_embedding_run(
     yaml_path: Path,
     raw_data_dir: Path,
     embedding_dir: Path,
-) -> None:
+) -> tuple[GELOSDataModule, LenientEmbeddingGenerationTask, Trainer, Path]:
+    """Parse a YAML config and instantiate all objects needed for one embedding run.
+
+    Useful in notebooks where you want to inspect or modify the datamodule, task,
+    or trainer before calling ``trainer.predict(model=task, datamodule=datamodule)``.
+
+    Args:
+        yaml_path: Path to the YAML experiment config.
+        raw_data_dir: Root directory for raw data.
+        embedding_dir: Root directory for embedding outputs.
+
+    Returns:
+        Tuple of (datamodule, task, trainer, output_dir).
+    """
     with open(yaml_path, "r") as f:
         yaml_config = yaml.safe_load(f)
 
@@ -53,28 +66,44 @@ def generate_embeddings(
     output_dir = embedding_dir / data_version / config_stem
     output_dir.mkdir(exist_ok=True, parents=True)
     data_root = raw_data_dir / data_version
-    marker_file = output_dir / ".embeddings_complete"
-    if (marker_file).exists():
-        logger.info("embeddings already complete, skipping...")
-        return
 
     parser = ArgumentParser()
     parser.add_class_arguments(GELOSDataModule, "data")
     parser.add_class_arguments(LenientEmbeddingGenerationTask, "model")
 
-    data_init_args = yaml_config['data']['init_args']
-    data_init_args['data_root'] = str(data_root)
-    model_init_args = yaml_config['model']['init_args']
-    model_init_args['output_dir'] = str(output_dir)
+    data_init_args = yaml_config["data"]["init_args"]
+    data_init_args["data_root"] = str(data_root)
+    model_init_args = yaml_config["model"]["init_args"]
+    model_init_args["output_dir"] = str(output_dir)
 
     cfg = parser.parse_object({"data": data_init_args, "model": model_init_args})
     init = parser.instantiate_classes(cfg)
-    gelos_datamodule = init.data
-    task = init.model
-    device = 'gpu' if torch.cuda.is_available() else 'cpu'
+
+    device = "gpu" if torch.cuda.is_available() else "cpu"
     trainer = Trainer(accelerator=device, devices=1)
 
-    trainer.predict(model=task, datamodule=gelos_datamodule)
+    return init.data, init.model, trainer, output_dir
+
+
+def generate_embeddings(
+    yaml_path: Path,
+    raw_data_dir: Path,
+    embedding_dir: Path,
+    overwrite: bool = False,
+) -> None:
+    
+    datamodule, task, trainer, output_dir = setup_embedding_run(
+        yaml_path, raw_data_dir, embedding_dir
+    )
+
+    marker_file = output_dir / ".embeddings_complete"
+    if marker_file.exists() and not overwrite:
+        logger.info("embeddings already complete, skipping...")
+        return
+    elif marker_file.exists() and overwrite:
+        logger.info("starting overwrite of existing embeddings...")
+
+    trainer.predict(model=task, datamodule=datamodule)
     marker_file.touch()
     logger.info("marking embeddings as complete")
 
@@ -96,6 +125,7 @@ def main(
         "-c",
         help="Directory containing YAML configs (used when --yaml-path is not set).",
     ),
+    overwrite: Optional[bool] = typer.Option(False, "--overwrite", help="Overwrite existing embeddings"),
 ):
     """
     Generate embeddings from a model and data specified in a yaml config.
