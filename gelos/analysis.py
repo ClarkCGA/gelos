@@ -126,10 +126,8 @@ def run_analysis(
             if not (has_transforms or has_plots or has_models):
                 logger.warning(
                     f"strategy '{strategy_key}' has no 'transforms', 'plots', or "
-                    f"'models' defined, skipping"
+                    f"'models' defined"
                 )
-                continue
-
             # --- Extract embeddings ---
             layer_dir = output_dir / embedding_layer
             emb_cache = layer_dir / f"{prefix}_embeddings.npy"

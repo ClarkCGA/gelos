@@ -47,11 +47,14 @@ def extract_embeddings(
     if slice_args is None:
         slice_args = [{"start": 0, "stop": None, "step": 1}]
     if chip_indices:
-        files = [directory / f"{str(id).zfill(6)}_embedding.parquet" for id in chip_indices]
+        logger.info(f"filtering embeddings by {len(chip_indices)} file_ids via column")
+        files = sample_files(directory, None, seed=42)
+        row_filter = ds.field("file_id").isin(chip_indices)
     else:
         files = sample_files(directory, n_sample, seed=42)
+        row_filter = None
     dataset = ds.dataset(files, format="parquet")
-    scanner = dataset.scanner(columns=["embedding", "file_id"])
+    scanner = dataset.scanner(columns=["embedding", "file_id"], filter=row_filter)
     emb_chunks, id_chunks = [], []
     batches = scanner.to_batches()
     for batch in tqdm(batches, desc="Processing embeddings"):
