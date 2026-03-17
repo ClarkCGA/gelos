@@ -8,11 +8,10 @@ Repository for Geospatial Exploration of Latent Observation Space (GELOS)
 
 ## Installing
 
-Currently, as the repo is private to Clark CGA, it can be installed from the repository using pip or uv with the appropriate credentials.
 
 Installing from remote repo directly:
 ```
-pip install git+https://<your-github-personal-access-token>@github.com/ClarkCGA/gelos
+pip install git+https://ClarkCGA/gelos
 ```
 
 Cloning and installing:
