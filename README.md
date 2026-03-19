@@ -6,8 +6,19 @@
 
 Repository for Geospatial Exploration of Latent Observation Space (GELOS)
 
-## Installing
+## Adapting GELOS to a new dataset
 
+GELOS is intended to be a reusable embedding generation, exploration, and analysis pipeline for any dataset which has categorical information at the chip level. An exmample implementation of this to a land cover dataset can be found at https://github.com/ClarkCGA/gelos-lc. In order to apply this pipeline to a new dataset:
+
+### 1. Start a separate repository for your project which will use GELOS.
+
+### 2. Write a custom dataloader for your dataset
+
+which inherits from gelos.gelosdatamodule.GELOSDataSet. This repository contains a barebones implementation of this as ExampleGELOSDataSet in tests/test_data.py. 
+
+### 3. 
+
+## Installing
 
 Installing from remote repo directly:
 ```
