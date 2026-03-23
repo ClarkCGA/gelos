@@ -2,7 +2,8 @@ name: Deploy Docs
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -10,9 +11,18 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
-      - uses: prefix-dev/setup-pixi@v0.8.0
-      - run: pixi run mkdocs gh-deploy --config-file docs/mkdocs.yml --force
+          python-version: 3.x
+
+      - name: Install dependencies
+        run: pip install mkdocs
+
+      - name: Deploy to GitHub Pages
+        run: mkdocs gh-deploy --force
