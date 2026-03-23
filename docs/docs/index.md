@@ -1,15 +1,9 @@
-# GELOS documentation!
+# GELOS
 
-## Description
+Repository for Geospatial Exploration of Latent Observation Space (GELOS) — a pip-installable Python library for generating, extracting, transforming, and visualizing embeddings from multi-modal, multi-temporal satellite imagery.
 
-Repository for Geospatial Exploration of Latent Observation Space (GELOS)
+## Documentation
 
-## Configuration
-
-GELOS reads all machine-specific paths from environment variables (optionally via `.env`).
-See the Getting Started page for the required keys and examples.
-
-## Commands
-
-The Makefile contains the central entry points for common tasks related to this project.
+- [Getting Started](getting-started.md) — installation, environment setup, writing a custom dataset, and running the pipeline
+- [Configuration Reference](configuration.md) — fully annotated YAML config with all available options for transforms, plots, and models
 
