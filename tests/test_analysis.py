@@ -60,8 +60,10 @@ def test_transforms_registry_keys():
     """TRANSFORMS registry has tsne and pca entries."""
     assert "tsne" in TRANSFORMS
     assert "pca" in TRANSFORMS
+    assert "umap" in TRANSFORMS
     assert callable(TRANSFORMS["tsne"])
     assert callable(TRANSFORMS["pca"])
+    assert callable(TRANSFORMS["umap"])
 
 
 def test_models_registry_keys():
@@ -105,10 +107,18 @@ def test_tsne_output_shape():
     """t-SNE returns (N, 2) with default params."""
     rng = np.random.RandomState(42)
     embeddings = rng.rand(50, 10).astype(np.float32)
-    result = tsne_from_embeddings(embeddings, perplexity=5, verbose=0)
+    result = tsne_from_embeddings(embeddings, perplexity=5, verbose=False)
     assert result.shape == (50, 2)
     gc.collect()
 
+
+def test_umap_output_shape():
+    """UMAP returns (N, 2) with default params."""
+    rng = np.random.RandomState(42)
+    embeddings = rng.rand(50, 10).astype(np.float32)
+    result = umap_from_embeddings(embeddings, verbose=False)
+    assert result.shape == (50, 2)
+    gc.collect()
 
 # ---------------------------------------------------------------------------
 # Tests: Model functions
