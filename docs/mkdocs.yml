@@ -1,7 +1,9 @@
 site_name: GELOS
 site_author: Denys Godwin
+site_url: https://ClarkCGA.github.io/gelos/
+repo_url: https://github.com/ClarkCGA/gelos
 
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
-  - Starting New Project: starting-new-project.md
+  - Configuration Reference: configuration.md
