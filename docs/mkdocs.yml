@@ -2,6 +2,7 @@ site_name: GELOS
 site_author: Denys Godwin
 site_url: https://ClarkCGA.github.io/gelos/
 repo_url: https://github.com/ClarkCGA/gelos
+docs_dir: docs
 
 nav:
   - Home: index.md
