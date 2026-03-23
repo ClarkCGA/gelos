@@ -6,6 +6,8 @@
 
 Repository for Geospatial Exploration of Latent Observation Space (GELOS)
 
+Read the full documentation on using for a project at the [GELOS Docs](https://clarkcga.github.io/gelos/getting-started/) site!
+
 ## Installing
 
 Pin to a specific release tag:
