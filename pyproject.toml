@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "gelos"
-version = "2.0.0"
+version = "0.2.0"
 description = "Repository for Geospatial Exploration of Latent Observation Space (GELOS)"
 authors = [
   { name = "Denys Godwin" },
@@ -34,7 +34,7 @@ force-sort-within-sections = true
 [tool.pixi.workspace]
 name = "gelos"
 description = "Repository for Geospatial Exploration of Latent Observation Space (GELOS)"
-version = "2.0.0"
+version = "0.1.0"
 channels = ["conda-forge"]
 platforms = ["linux-64"]
 
