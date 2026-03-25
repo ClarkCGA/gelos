@@ -10,7 +10,7 @@ from shapely.geometry import Point
 
 from gelos.models import MODELS, run_knn_cv, run_linear_probe_cv, run_random_forest_cv
 from gelos.plotting import PLOTS
-from gelos.transforms import TRANSFORMS, pca_from_embeddings, tsne_from_embeddings
+from gelos.transforms import TRANSFORMS, pca_from_embeddings, tsne_from_embeddings, umap_from_embeddings
 
 
 # ---------------------------------------------------------------------------
@@ -76,9 +76,9 @@ def test_models_registry_keys():
 
 
 def test_plots_registry_keys():
-    """PLOTS registry has tsne_scatter entry."""
-    assert "tsne_scatter" in PLOTS
-    assert callable(PLOTS["tsne_scatter"])
+    """PLOTS registry has scatter_2d entry."""
+    assert "scatter_2d" in PLOTS
+    assert callable(PLOTS["scatter_2d"])
 
 
 # ---------------------------------------------------------------------------

@@ -60,6 +60,7 @@ mkdocs = "*"
 timm = "~=1.0.24"
 einops = "*"
 loguru = "*"
+umap-learn = ">=0.5.11,<0.6"
 
 # CPU-only pytorch for the default environment
 [tool.pixi.feature.cpu.dependencies]

@@ -17,7 +17,6 @@ from gelos.transforms import TRANSFORMS
 
 app = typer.Typer()
 
-
 def load_chip_tracker(path: Path) -> pd.DataFrame:
     """Load a chip tracker file as a DataFrame, dispatching on file extension.
 
@@ -181,21 +180,21 @@ def run_analysis(
             for p_cfg in strategy_cfg.get("plots", []):
                 p_type = p_cfg["type"]
                 p_params = p_cfg.get("params", {})
-                source = p_cfg.get("transform", "raw")
+                t_type = p_cfg.get("transform", "raw")
 
                 if p_type not in PLOTS:
                     raise KeyError(
                         f"plot '{p_type}' not found in registry. "
                         f"Available: {list(PLOTS.keys())}"
                     )
-                if source not in transform_results:
+                if t_type not in transform_results:
                     logger.warning(
-                        f"plot '{p_type}' references transform '{source}' which "
+                        f"plot '{p_type}' references transform '{t_type}' which "
                         f"was not run, skipping"
                     )
                     continue
 
-                data = transform_results[source]
+                data = transform_results[t_type]
                 output_path = figures_dir / f"{prefix}_{p_type}.png"
                 logger.info(f"plotting {p_type} for {strategy_key}")
                 p_fn = PLOTS[p_type]
@@ -204,10 +203,11 @@ def run_analysis(
                     chip_gdf,
                     chip_indices,
                     style_cfg,
-                    output_path,
                     experiment_name,
                     strategy_title,
+                    t_type,
                     embedding_layer,
+                    output_path,
                     **p_params,
                 )
 
