@@ -85,16 +85,16 @@ embedding_extraction_strategies:
       - start: 0                      # extract only the first token (CLS)
         stop: 1
         step: 1
-    # Available transforms: tsne, pca
+    # Available transforms: tsne, pca, umap
     transforms:
       - type: tsne
       - type: pca
         params:
           n_components: 2
-    # Available plots: tsne_scatter
+    # Available plots: scatter_2d
     plots:
-      - type: tsne_scatter
-        transform: tsne                # which transform result to plot
+      - type: scatter_2d
+        transform: umap                # which transform result to plot
         params:
           axis_lim: 120                # optional plot params
     # Available models: knn, linear_probe, random_forest
@@ -166,12 +166,13 @@ Available **transforms**:
 |------|-------------|------------|
 | `tsne` | t-SNE dimensionality reduction | `n_components` (default 2), `perplexity` (default 50), `max_iter` (default 1000) |
 | `pca` | PCA dimensionality reduction | `n_components` (int for fixed, float for variance threshold; default 0.95) |
+| `pca` | UMAP dimensionality reduction | `n_components` (default 2) |
 
 Available **plots**:
 
 | Type | Description | Key params |
 |------|-------------|------------|
-| `tsne_scatter` | Scatter plot colored by category | `axis_lim` (default 120), `legend_loc` (default "upper left") |
+| `scatter_2d` | Scatter plot colored by category | `axis_lim` (default 120), `legend_loc` (default "upper left") |
 
 Available **models**:
 
