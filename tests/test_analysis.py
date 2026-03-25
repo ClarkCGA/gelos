@@ -10,7 +10,7 @@ from shapely.geometry import Point
 
 from gelos.models import MODELS, run_knn_cv, run_linear_probe_cv, run_random_forest_cv
 from gelos.plotting import PLOTS
-from gelos.transforms import TRANSFORMS, pca_from_embeddings, tsne_from_embeddings
+from gelos.transforms import TRANSFORMS, pca_from_embeddings, tsne_from_embeddings, umap_from_embeddings
 
 
 # ---------------------------------------------------------------------------
@@ -60,8 +60,10 @@ def test_transforms_registry_keys():
     """TRANSFORMS registry has tsne and pca entries."""
     assert "tsne" in TRANSFORMS
     assert "pca" in TRANSFORMS
+    assert "umap" in TRANSFORMS
     assert callable(TRANSFORMS["tsne"])
     assert callable(TRANSFORMS["pca"])
+    assert callable(TRANSFORMS["umap"])
 
 
 def test_models_registry_keys():
@@ -74,9 +76,9 @@ def test_models_registry_keys():
 
 
 def test_plots_registry_keys():
-    """PLOTS registry has tsne_scatter entry."""
-    assert "tsne_scatter" in PLOTS
-    assert callable(PLOTS["tsne_scatter"])
+    """PLOTS registry has scatter_2d entry."""
+    assert "scatter_2d" in PLOTS
+    assert callable(PLOTS["scatter_2d"])
 
 
 # ---------------------------------------------------------------------------
@@ -105,10 +107,18 @@ def test_tsne_output_shape():
     """t-SNE returns (N, 2) with default params."""
     rng = np.random.RandomState(42)
     embeddings = rng.rand(50, 10).astype(np.float32)
-    result = tsne_from_embeddings(embeddings, perplexity=5, verbose=0)
+    result = tsne_from_embeddings(embeddings, perplexity=5, verbose=False)
     assert result.shape == (50, 2)
     gc.collect()
 
+
+def test_umap_output_shape():
+    """UMAP returns (N, 2) with default params."""
+    rng = np.random.RandomState(42)
+    embeddings = rng.rand(50, 10).astype(np.float32)
+    result = umap_from_embeddings(embeddings, verbose=False)
+    assert result.shape == (50, 2)
+    gc.collect()
 
 # ---------------------------------------------------------------------------
 # Tests: Model functions

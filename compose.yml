@@ -1,7 +1,15 @@
 services:
   test:
     image: gelos-test:latest
-    build: 
+    build:
+      context: .
+      target: test
+    volumes:
+      - ./gelos:/app/gelos
+      - ./tests:/app/tests
+  test-ci:
+    image: gelos-test-ci:latest
+    build:
       context: .
       target: test
   prod:

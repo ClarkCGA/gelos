@@ -9,6 +9,7 @@ pandas~=3.0.0
 matplotlib~=3.10.8
 rioxarray~=0.19.0
 scikit-learn~=1.8.0
+umap-learn
 geopandas~=1.1.2
 pillow
 timm~=1.0.24

@@ -83,8 +83,9 @@ embedding_extraction_strategies:
       - type: pca
         params:
           n_components: 2
+      - type: umap
     plots:
-      - type: tsne_scatter
+      - type: scatter_2d 
         transform: tsne
     models:
       - type: knn
@@ -102,7 +103,7 @@ embedding_extraction_strategies:
     transforms:
       - type: tsne
     plots:
-      - type: tsne_scatter
+      - type: scatter_2d
         transform: tsne
   all_embeddings:
     title: "All Embeddings"
