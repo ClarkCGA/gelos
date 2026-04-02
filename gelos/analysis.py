@@ -195,8 +195,8 @@ def run_analysis(
                     continue
 
                 data = transform_results[t_type]
-                output_path = figures_dir / f"{prefix}_{p_type}.png"
-                logger.info(f"plotting {p_type} for {strategy_key}")
+                output_path = figures_dir / f"{prefix}_{t_type}_{p_type}.png"
+                logger.info(f"plotting {p_type} for {strategy_key} with transform: {t_type}")
                 p_fn = PLOTS[p_type]
                 p_fn(
                     data,
@@ -210,6 +210,7 @@ def run_analysis(
                     output_path,
                     **p_params,
                 )
+                logger.info(f"plot saved to {output_path}")
 
             # --- Run models ---
             for m_cfg in strategy_cfg.get("models", []):
