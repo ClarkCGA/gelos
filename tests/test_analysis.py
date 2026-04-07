@@ -1,17 +1,18 @@
 import gc
-from pathlib import Path
-from unittest.mock import patch
 
 import geopandas as gpd
 import numpy as np
-import pandas as pd
 import pytest
 from shapely.geometry import Point
 
 from gelos.models import MODELS, run_knn_cv, run_linear_probe_cv, run_random_forest_cv
 from gelos.plotting import PLOTS
-from gelos.transforms import TRANSFORMS, pca_from_embeddings, tsne_from_embeddings, umap_from_embeddings
-
+from gelos.transforms import (
+    TRANSFORMS,
+    pca_from_embeddings,
+    tsne_from_embeddings,
+    umap_from_embeddings,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -76,9 +77,11 @@ def test_models_registry_keys():
 
 
 def test_plots_registry_keys():
-    """PLOTS registry has scatter_2d entry."""
+    """PLOTS registry has scatter_2d and temporal_cosine_similarity entries."""
     assert "scatter_2d" in PLOTS
     assert callable(PLOTS["scatter_2d"])
+    assert "temporal_cosine_similarity" in PLOTS
+    assert callable(PLOTS["temporal_cosine_similarity"])
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +122,7 @@ def test_umap_output_shape():
     result = umap_from_embeddings(embeddings, verbose=False)
     assert result.shape == (50, 2)
     gc.collect()
+
 
 # ---------------------------------------------------------------------------
 # Tests: Model functions
@@ -258,3 +262,94 @@ def test_chip_id_column_sets_index(tmp_path, synthetic_labels):
     assert len(labels) == 3
     expected = gdf.set_index("id")["lulc"].loc[chip_indices].to_numpy()
     np.testing.assert_array_equal(labels, expected)
+
+
+# ---------------------------------------------------------------------------
+# Tests: temporal_cosine_similarity plot
+# ---------------------------------------------------------------------------
+
+N_TIMESTEPS = 4
+N_TEMPORAL_SAMPLES = 50
+N_TEMPORAL_FEATURES = 16
+
+
+@pytest.fixture()
+def temporal_embeddings():
+    """Synthetic temporal embeddings (50, 4*16) with chip_indices 0..49."""
+    rng = np.random.RandomState(42)
+    embeddings = rng.rand(N_TEMPORAL_SAMPLES, N_TIMESTEPS * N_TEMPORAL_FEATURES).astype(np.float32)
+    chip_indices = list(range(N_TEMPORAL_SAMPLES))
+    return embeddings, chip_indices
+
+
+@pytest.fixture()
+def temporal_chip_gdf():
+    """GeoDataFrame with 2 categories for temporal cosine similarity tests."""
+    categories = ["1"] * 25 + ["2"] * 25
+    gdf = gpd.GeoDataFrame(
+        {
+            "id": list(range(N_TEMPORAL_SAMPLES)),
+            "lulc": categories,
+            "geometry": [Point(float(i), float(i)) for i in range(N_TEMPORAL_SAMPLES)],
+        },
+        crs="EPSG:4326",
+    )
+    return gdf.set_index("id")
+
+
+@pytest.fixture()
+def temporal_style_cfg():
+    return {
+        "category_column": "lulc",
+        "colors": {"1": "#419bdf", "2": "#397d49"},
+        "labels": {"1": "Water", "2": "Trees"},
+    }
+
+
+def test_temporal_cosine_similarity_output(
+    temporal_embeddings, temporal_chip_gdf, temporal_style_cfg, tmp_path
+):
+    """temporal_cosine_similarity creates a .png file at output_path."""
+    from gelos.plotting import temporal_cosine_similarity
+
+    embeddings, chip_indices = temporal_embeddings
+    output_path = tmp_path / "test_temporal.png"
+
+    temporal_cosine_similarity(
+        embeddings,
+        temporal_chip_gdf,
+        chip_indices,
+        temporal_style_cfg,
+        "Test Experiment",
+        "Test Strategy",
+        "raw",
+        "layer_-1",
+        output_path,
+        n_timesteps=N_TIMESTEPS,
+    )
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_temporal_cosine_similarity_invalid_timesteps():
+    """ValueError raised when n_timesteps=1 or n_timesteps is not an int."""
+    from gelos.plotting import temporal_cosine_similarity
+
+    dummy_args = (
+        np.zeros((10, 64)),
+        gpd.GeoDataFrame(),
+        [],
+        {"category_column": "x", "colors": {}, "labels": {}},
+        "",
+        "",
+        "raw",
+        "layer",
+        None,
+    )
+
+    with pytest.raises(ValueError, match="n_timesteps must be an int > 1"):
+        temporal_cosine_similarity(*dummy_args, n_timesteps=1)
+
+    with pytest.raises(ValueError, match="n_timesteps must be an int > 1"):
+        temporal_cosine_similarity(*dummy_args, n_timesteps="four")
+    gc.collect()

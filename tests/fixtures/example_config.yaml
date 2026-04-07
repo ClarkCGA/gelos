@@ -85,8 +85,13 @@ embedding_extraction_strategies:
           n_components: 2
       - type: umap
     plots:
-      - type: scatter_2d 
+      - type: scatter_2d
         transform: tsne
+      - type: temporal_cosine_similarity
+        transform: raw
+        params:
+          n_timesteps: 4
+          timestep_labels: ["Jan-Mar", "Apr-Jun", "Jul-Sep", "Oct-Dec"]
     models:
       - type: knn
         transform: pca
