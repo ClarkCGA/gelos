@@ -3277,8 +3277,8 @@ packages:
   timestamp: 1771530561157
 - pypi: ./
   name: gelos
-  version: 1.0.0
-  sha256: 3655f7cb20df3213bda6c2e2d5d6ffd816693c00d4629b0ebb98153230fe62c2
+  version: 0.2.0
+  sha256: d1bf118bb52509c6726ec537c9fdd10e41139244cfceabc3b62e700e85798451
   requires_python: ~=3.11.0
 - conda: https://conda.anaconda.org/conda-forge/noarch/geopandas-1.1.2-pyhd8ed1ab_0.conda
   sha256: 7c3e5dc62c0b3d067a6f517ea9176e9d52682499d4afb78704354a60f37c5444
