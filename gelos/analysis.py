@@ -287,6 +287,12 @@ def run_analysis(
 
                 data = transform_results[t_type]
                 output_path = ctx.figures_dir / f"{prefix}_{t_type}_{p_type}.png"
+                if output_path.exists():
+                    logger.info(
+                        f"plot {p_type} for {strategy_key} with transform: {t_type}"
+                        "already exists - skipping"
+                    )
+                    continue
                 logger.info(f"plotting {p_type} for {strategy_key} with transform: {t_type}")
                 p_fn = PLOTS[p_type]
                 p_fn(
