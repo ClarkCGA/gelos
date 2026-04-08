@@ -5,13 +5,14 @@ from pathlib import Path
 from typing import Optional
 
 import geopandas as gpd
+from loguru import logger
 import numpy as np
 import pandas as pd
 import typer
 import yaml
-from loguru import logger
 
 from gelos.extraction import extract_embeddings
+from gelos.metrics import METRICS
 from gelos.models import MODELS
 from gelos.plotting import PLOTS, build_style_from_config
 from gelos.transforms import TRANSFORMS
@@ -40,6 +41,15 @@ class AnalysisContext:
     embeddings_directories: list[Path] = field(default_factory=list)
 
 
+def build_prefix(config_stem: str, strategy_key: str, embedding_layer: str) -> str:
+    """Build the deterministic file-name prefix for cached artifacts.
+
+    This is the single source of truth for the ``{config}_{strategy}_{layer}``
+    convention used by analysis and comparison stages.
+    """
+    return f"{config_stem}_{strategy_key}_{embedding_layer}"
+
+
 def load_chip_tracker(path: Path) -> pd.DataFrame:
     """Load a chip tracker file as a DataFrame, dispatching on file extension.
 
@@ -51,7 +61,9 @@ def load_chip_tracker(path: Path) -> pd.DataFrame:
     elif suffix == ".csv":
         return pd.read_csv(path)
     else:
-        raise ValueError(f"Unsupported chip tracker format '{suffix}'. Use .geojson, .json, or .csv")
+        raise ValueError(
+            f"Unsupported chip tracker format '{suffix}'. Use .geojson, .json, or .csv"
+        )
 
 
 def _save_transform_result(
@@ -62,9 +74,7 @@ def _save_transform_result(
     prefix: str,
 ) -> None:
     """Save transform output to CSV for caching."""
-    cols = {
-        f"dim_{i}": result[:, i] for i in range(result.shape[1])
-    }
+    cols = {f"dim_{i}": result[:, i] for i in range(result.shape[1])}
     df = pd.DataFrame({"id": chip_indices, **cols})
     df.to_csv(cache_path, index=False)
     logger.info(f"saved {transform_type} result to {cache_path}")
@@ -184,7 +194,7 @@ def run_analysis(
         for strategy_key, strategy_cfg in ctx.embedding_extraction_strategies.items():
             slice_args = strategy_cfg["slice_args"]
             strategy_title = strategy_cfg.get("title", strategy_key)
-            prefix = f"{ctx.config_stem}_{strategy_key}_{embedding_layer}"
+            prefix = build_prefix(ctx.config_stem, strategy_key, embedding_layer)
 
             # --- Validate strategy has at least one analysis step ---
             has_transforms = "transforms" in strategy_cfg
@@ -192,8 +202,7 @@ def run_analysis(
             has_models = "models" in strategy_cfg
             if not (has_transforms or has_plots or has_models):
                 logger.warning(
-                    f"strategy '{strategy_key}' has no 'transforms', 'plots', or "
-                    f"'models' defined"
+                    f"strategy '{strategy_key}' has no 'transforms', 'plots', or 'models' defined"
                 )
             # --- Extract embeddings ---
             layer_dir = ctx.output_dir / embedding_layer
@@ -206,8 +215,7 @@ def run_analysis(
                 chip_indices = np.load(idx_cache).tolist()
             else:
                 logger.info(
-                    f"extracting embeddings: layer={embedding_layer}, "
-                    f"strategy={strategy_key}"
+                    f"extracting embeddings: layer={embedding_layer}, strategy={strategy_key}"
                 )
                 embeddings, chip_indices = extract_embeddings(
                     embeddings_directory, slice_args=slice_args
@@ -240,9 +248,25 @@ def run_analysis(
                     result = t_fn(embeddings, **t_params)
                     transform_results[t_type] = result
                     layer_dir.mkdir(exist_ok=True, parents=True)
-                    _save_transform_result(
-                        result, chip_indices, cache_path, t_type, prefix
+                    _save_transform_result(result, chip_indices, cache_path, t_type, prefix)
+
+            # --- Run metrics ---
+            for met_cfg in strategy_cfg.get("metrics", []):
+                met_type = met_cfg["type"]
+                met_params = met_cfg.get("params", {})
+
+                if met_type not in METRICS:
+                    raise KeyError(
+                        f"metric '{met_type}' not found in registry. "
+                        f"Available: {list(METRICS.keys())}"
                     )
+
+                cache_path = layer_dir / f"{prefix}_{met_type}.csv"
+                if cache_path.exists():
+                    logger.info(f"cached {met_type} result exists at {cache_path}, skipping")
+                else:
+                    met_fn = METRICS[met_type]
+                    met_fn(embeddings, output_dir=layer_dir, prefix=prefix, **met_params)
 
             # --- Run plots ---
             for p_cfg in strategy_cfg.get("plots", []):
@@ -252,8 +276,7 @@ def run_analysis(
 
                 if p_type not in PLOTS:
                     raise KeyError(
-                        f"plot '{p_type}' not found in registry. "
-                        f"Available: {list(PLOTS.keys())}"
+                        f"plot '{p_type}' not found in registry. Available: {list(PLOTS.keys())}"
                     )
                 if t_type not in transform_results:
                     logger.warning(
@@ -288,8 +311,7 @@ def run_analysis(
 
                 if m_type not in MODELS:
                     raise KeyError(
-                        f"model '{m_type}' not found in registry. "
-                        f"Available: {list(MODELS.keys())}"
+                        f"model '{m_type}' not found in registry. Available: {list(MODELS.keys())}"
                     )
                 if source not in transform_results:
                     logger.warning(
@@ -304,9 +326,7 @@ def run_analysis(
                 logger.info(f"running model {m_type} for {strategy_key}")
                 m_fn = MODELS[m_type]
                 layer_dir = ctx.output_dir / embedding_layer
-                result = m_fn(
-                    data, labels, output_dir=layer_dir, run_name=run_name, **m_params
-                )
+                result = m_fn(data, labels, output_dir=layer_dir, run_name=run_name, **m_params)
                 all_results[f"{prefix}_{m_type}"] = result
 
     return all_results
@@ -318,19 +338,25 @@ def main(
         None, "--yaml-path", "-y", help="Path to a single yaml config to process."
     ),
     raw_data_dir: Path = typer.Option(
-        '/app/data/raw', "--raw-data-dir", "-r", help="Root directory for raw data."
+        "/app/data/raw", "--raw-data-dir", "-r", help="Root directory for raw data."
     ),
     embedding_dir: Path = typer.Option(
         "/app/data/interim", "--embedding-dir", "-e", help="Root directory for embedding outputs."
     ),
     processed_data_dir: Path = typer.Option(
-        '/app/data/processed', "--processed-data-dir", "-p", help="Root directory for processed outputs."
+        "/app/data/processed",
+        "--processed-data-dir",
+        "-p",
+        help="Root directory for processed outputs.",
     ),
     figures_base_dir: Path = typer.Option(
-        '/app/reports/figures', "--figures-base-dir", "-f", help="Root directory for generated figures."
+        "/app/reports/figures",
+        "--figures-base-dir",
+        "-f",
+        help="Root directory for generated figures.",
     ),
     config_dir: Optional[Path] = typer.Option(
-        '/app/configs',
+        "/app/configs",
         "--config-dir",
         "-c",
         help="Directory containing YAML configs (used when --yaml-path is not set).",
