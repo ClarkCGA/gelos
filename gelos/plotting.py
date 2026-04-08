@@ -83,6 +83,7 @@ def temporal_cosine_similarity(
     n_timesteps: int = 4,
     timestep_labels: list[str] | None = None,
     n_cols: int = 6,
+    ylim: tuple[float, float] = (0,1)
 ) -> None:
     """Plot cosine similarity between consecutive timesteps per land-cover category.
 
@@ -149,6 +150,7 @@ def temporal_cosine_similarity(
             ax.legend()
         ax.set_xticks(timesteps)
         ax.set_xticklabels(x_labels)
+        ax.set_ylim(ylim[0], ylim[1])
         ax.grid(True, linestyle="--", alpha=0.6)
 
     # Hide unused axes
