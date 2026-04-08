@@ -36,16 +36,21 @@ def pca_ablation(
     for threshold in variance_thresholds:
         pca = PCA(n_components=threshold, random_state=42)
         pca.fit(embeddings)
+        N, D = embeddings.shape
         rows.append(
             {
                 "threshold": threshold,
                 "n_components": pca.n_components_,
+                "percent_of_total_components": pca.n_components_ / D,
+                "proportion_of_total_components": f"{pca.n_components_} / {D}",
                 "total_variance_explained": float(pca.explained_variance_ratio_.sum()),
             }
         )
         logger.info(
             f"PCA ablation: threshold={threshold}, "
             f"n_components={pca.n_components_}, "
+            f"percent_of_total_components={pca.n_components_ / D}, "
+            f"proportion_of_total_components={pca.n_components_} / {D}, "
             f"variance={pca.explained_variance_ratio_.sum():.4f}"
         )
 
