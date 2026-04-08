@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,28 @@ from gelos.plotting import PLOTS, build_style_from_config
 from gelos.transforms import TRANSFORMS
 
 app = typer.Typer()
+
+
+@dataclass
+class AnalysisContext:
+    """Resolved state for one analysis run, returned by :func:`setup_analysis_run`.
+
+    Useful in notebooks where you want to inspect paths, chip metadata, or
+    embedding directories before running transforms, plots, or models.
+    """
+
+    yaml_config: dict
+    config_stem: str
+    experiment_name: str
+    style_cfg: dict
+    category_column: str
+    embedding_extraction_strategies: dict
+    chip_gdf: gpd.GeoDataFrame
+    input_dir: Path
+    output_dir: Path
+    figures_dir: Path
+    embeddings_directories: list[Path] = field(default_factory=list)
+
 
 def load_chip_tracker(path: Path) -> pd.DataFrame:
     """Load a chip tracker file as a DataFrame, dispatching on file extension.
@@ -55,18 +78,17 @@ def _load_cached_transform(cache_path: Path) -> tuple[np.ndarray, list[int]]:
     return df[data_cols].to_numpy(), chip_indices
 
 
-def run_analysis(
+def setup_analysis_run(
     yaml_path: Path,
     raw_data_dir: Path,
     embedding_dir: Path,
     processed_data_dir: Path,
     figures_base_dir: Path,
-) -> dict:
-    """Run the config-driven embedding pipeline.
+) -> AnalysisContext:
+    """Parse a YAML config and resolve all paths and objects needed for one analysis run.
 
-    Parses the YAML config, resolves paths, then for each embedding layer
-    and extraction strategy: extracts embeddings and dispatches through
-    the configured transforms, plots, and models.
+    Useful in notebooks where you want to inspect chip metadata, embedding
+    directories, or style config before running transforms, plots, or models.
 
     Args:
         yaml_path: Path to the YAML experiment config.
@@ -76,7 +98,7 @@ def run_analysis(
         figures_base_dir: Root directory for generated figures.
 
     Returns:
-        Nested dict of results keyed by ``{layer}_{strategy}_{step_type}``.
+        :class:`AnalysisContext` with all resolved paths and loaded objects.
     """
     with open(yaml_path, "r") as f:
         yaml_config = yaml.safe_load(f)
@@ -105,18 +127,64 @@ def run_analysis(
             f"embedding directory {input_dir} does not exist. "
             f"Run generation first to produce embeddings."
         )
+        embeddings_directories = []
+    else:
+        embeddings_directories = [item for item in input_dir.iterdir() if item.is_dir()]
+
+    return AnalysisContext(
+        yaml_config=yaml_config,
+        config_stem=config_stem,
+        experiment_name=experiment_name,
+        style_cfg=style_cfg,
+        category_column=category_column,
+        embedding_extraction_strategies=embedding_extraction_strategies,
+        chip_gdf=chip_gdf,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        figures_dir=figures_dir,
+        embeddings_directories=embeddings_directories,
+    )
+
+
+def run_analysis(
+    yaml_path: Path,
+    raw_data_dir: Path,
+    embedding_dir: Path,
+    processed_data_dir: Path,
+    figures_base_dir: Path,
+) -> dict:
+    """Run the config-driven embedding pipeline.
+
+    Parses the YAML config, resolves paths, then for each embedding layer
+    and extraction strategy: extracts embeddings and dispatches through
+    the configured transforms, plots, and models.
+
+    Args:
+        yaml_path: Path to the YAML experiment config.
+        raw_data_dir: Root directory for raw data.
+        embedding_dir: Root directory for embeddings.
+        processed_data_dir: Root directory for processed outputs.
+        figures_base_dir: Root directory for generated figures.
+
+    Returns:
+        Nested dict of results keyed by ``{layer}_{strategy}_{step_type}``.
+    """
+    ctx = setup_analysis_run(
+        yaml_path, raw_data_dir, embedding_dir, processed_data_dir, figures_base_dir
+    )
+
+    if not ctx.embeddings_directories:
         return {}
 
-    embeddings_directories = [item for item in input_dir.iterdir() if item.is_dir()]
     all_results = {}
 
-    for embeddings_directory in embeddings_directories:
+    for embeddings_directory in ctx.embeddings_directories:
         embedding_layer = embeddings_directory.stem
 
-        for strategy_key, strategy_cfg in embedding_extraction_strategies.items():
+        for strategy_key, strategy_cfg in ctx.embedding_extraction_strategies.items():
             slice_args = strategy_cfg["slice_args"]
             strategy_title = strategy_cfg.get("title", strategy_key)
-            prefix = f"{config_stem}_{strategy_key}_{embedding_layer}"
+            prefix = f"{ctx.config_stem}_{strategy_key}_{embedding_layer}"
 
             # --- Validate strategy has at least one analysis step ---
             has_transforms = "transforms" in strategy_cfg
@@ -128,7 +196,7 @@ def run_analysis(
                     f"'models' defined"
                 )
             # --- Extract embeddings ---
-            layer_dir = output_dir / embedding_layer
+            layer_dir = ctx.output_dir / embedding_layer
             emb_cache = layer_dir / f"{prefix}_embeddings.npy"
             idx_cache = layer_dir / f"{prefix}_chip_indices.npy"
 
@@ -154,7 +222,7 @@ def run_analysis(
             for t_cfg in strategy_cfg.get("transforms", []):
                 t_type = t_cfg["type"]
                 t_params = t_cfg.get("params", {})
-                layer_dir = output_dir / embedding_layer
+                layer_dir = ctx.output_dir / embedding_layer
                 cache_path = layer_dir / f"{prefix}_{t_type}.csv"
 
                 if t_type not in TRANSFORMS:
@@ -195,15 +263,15 @@ def run_analysis(
                     continue
 
                 data = transform_results[t_type]
-                output_path = figures_dir / f"{prefix}_{t_type}_{p_type}.png"
+                output_path = ctx.figures_dir / f"{prefix}_{t_type}_{p_type}.png"
                 logger.info(f"plotting {p_type} for {strategy_key} with transform: {t_type}")
                 p_fn = PLOTS[p_type]
                 p_fn(
                     data,
-                    chip_gdf,
+                    ctx.chip_gdf,
                     chip_indices,
-                    style_cfg,
-                    experiment_name,
+                    ctx.style_cfg,
+                    ctx.experiment_name,
                     strategy_title,
                     t_type,
                     embedding_layer,
@@ -231,11 +299,11 @@ def run_analysis(
                     continue
 
                 data = transform_results[source]
-                labels = chip_gdf[category_column].loc[chip_indices].to_numpy()
+                labels = ctx.chip_gdf[ctx.category_column].loc[chip_indices].to_numpy()
                 run_name = f"{prefix}_{m_type}"
                 logger.info(f"running model {m_type} for {strategy_key}")
                 m_fn = MODELS[m_type]
-                layer_dir = output_dir / embedding_layer
+                layer_dir = ctx.output_dir / embedding_layer
                 result = m_fn(
                     data, labels, output_dir=layer_dir, run_name=run_name, **m_params
                 )
