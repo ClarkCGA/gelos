@@ -32,7 +32,7 @@ def pca_ablation_table(
     pivot = df.pivot_table(
         index="experiment",
         columns="threshold",
-        values="n_components",
+        values="percent_of_total_components",
         aggfunc="first",
     )
 
@@ -45,16 +45,28 @@ def pca_ablation_table(
     ax.set_yticklabels(pivot.index)
     ax.set_xlabel("Variance Threshold")
     ax.set_ylabel("Experiment")
-    ax.set_title("PCA Components Needed by Variance Threshold")
+    ax.set_title("PCA Components Needed by Variance Threshold as Percent of Total Dimensions")
 
-    # Annotate cells
+    # Build a matching pivot of raw component counts for annotation
+    n_comp_pivot = df.pivot_table(
+        index="experiment",
+        columns="threshold",
+        values="n_components",
+        aggfunc="first",
+    ).reindex(index=pivot.index, columns=pivot.columns)
+
+    # Annotate cells with percent and total count
     for i in range(pivot.shape[0]):
         for j in range(pivot.shape[1]):
-            val = pivot.values[i, j]
-            if not np.isnan(val):
-                ax.text(j, i, f"{int(val)}", ha="center", va="center", fontsize=10)
+            pct = pivot.values[i, j]
+            n = n_comp_pivot.values[i, j]
+            if not np.isnan(pct):
+                ax.text(
+                    j, i, f"{int(pct)}%\n({int(n)})",
+                    ha="center", va="center", fontsize=9,
+                )
 
-    fig.colorbar(im, ax=ax, label="Number of Components")
+    fig.colorbar(im, ax=ax, label="Percentage of Components")
     fig.tight_layout()
 
     if output_path:
