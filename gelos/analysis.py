@@ -262,11 +262,11 @@ def run_analysis(
                     )
 
                 cache_path = layer_dir / f"{prefix}_{met_type}.csv"
-                if cache_path.exists():
-                    logger.info(f"cached {met_type} result exists at {cache_path}, skipping")
-                else:
-                    met_fn = METRICS[met_type]
-                    met_fn(embeddings, output_dir=layer_dir, prefix=prefix, **met_params)
+                # if cache_path.exists():
+                #     logger.info(f"cached {met_type} result exists at {cache_path}, skipping")
+                # else:
+                met_fn = METRICS[met_type]
+                met_fn(embeddings, output_dir=layer_dir, prefix=prefix, **met_params)
 
             # --- Run plots ---
             for p_cfg in strategy_cfg.get("plots", []):

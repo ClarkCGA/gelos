@@ -32,7 +32,7 @@ def pca_ablation_table(
     pivot = df.pivot_table(
         index="experiment",
         columns="threshold",
-        values="percent_of_total_components",
+        values="proportion_of_total_components",
         aggfunc="first",
     )
 
@@ -55,14 +55,14 @@ def pca_ablation_table(
         aggfunc="first",
     ).reindex(index=pivot.index, columns=pivot.columns)
 
-    # Annotate cells with percent and total count
+    # Annotate cells with proportion and total count
     for i in range(pivot.shape[0]):
         for j in range(pivot.shape[1]):
             pct = pivot.values[i, j]
             n = n_comp_pivot.values[i, j]
             if not np.isnan(pct):
                 ax.text(
-                    j, i, f"{int(pct)}%\n({int(n)})",
+                    j, i, f"{int(pct*100)}%\n({int(n)})",
                     ha="center", va="center", fontsize=9,
                 )
 
