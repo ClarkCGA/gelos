@@ -121,31 +121,46 @@ def run_comparison(
     """
     ctx = setup_comparison(yaml_path, processed_data_dir, figures_base_dir)
 
-    # Load embeddings for each experiment
-    loaded: list[tuple[str, np.ndarray]] = []
-    for exp in ctx.experiments:
-        emb_path = _resolve_embedding_path(exp, processed_data_dir)
-        if not emb_path.exists():
-            logger.warning(f"embeddings not found for '{exp.label}' at {emb_path}, skipping")
-            continue
-        emb = np.load(emb_path)
-        loaded.append((exp.label, emb))
-        logger.info(f"loaded embeddings for '{exp.label}': shape={emb.shape}")
+    # Determine whether any metric requires loading embeddings
+    any_needs_embeddings = any(
+        getattr(COMP_METRICS.get(m["type"]), "requires_embeddings", True)
+        for m in ctx.comp_metrics
+    )
 
-    if len(loaded) < 2:
-        logger.warning(
-            f"need at least 2 experiments with embeddings for comparison, got {len(loaded)}"
-        )
-        return {}
+    # Build experiment lists: always build labels-only, load arrays only when needed
+    labels_only: list[tuple[str, None]] = [(exp.label, None) for exp in ctx.experiments]
+    loaded: list[tuple[str, np.ndarray]] | None = None
 
-    # Validate embedding dimensionality
-    dim = loaded[0][1].shape[1]
-    for label, emb in loaded[1:]:
-        if emb.shape[1] != dim:
-            raise ValueError(
-                f"embedding dimension mismatch: '{loaded[0][0]}' has {dim} dims, "
-                f"'{label}' has {emb.shape[1]} dims"
+    if any_needs_embeddings:
+        loaded = []
+        for exp in ctx.experiments:
+            emb_path = _resolve_embedding_path(exp, processed_data_dir)
+            if not emb_path.exists():
+                logger.warning(
+                    f"embeddings not found for '{exp.label}' at {emb_path}, skipping"
+                )
+                continue
+            emb = np.load(emb_path)
+            loaded.append((exp.label, emb))
+            logger.info(f"loaded embeddings for '{exp.label}': shape={emb.shape}")
+
+        if len(loaded) < 2:
+            logger.warning(
+                f"need at least 2 experiments with embeddings for comparison, "
+                f"got {len(loaded)}"
             )
+            return {}
+
+        # Validate embedding dimensionality
+        dim = loaded[0][1].shape[1]
+        for label, emb in loaded[1:]:
+            if emb.shape[1] != dim:
+                raise ValueError(
+                    f"embedding dimension mismatch: '{loaded[0][0]}' has {dim} dims, "
+                    f"'{label}' has {emb.shape[1]} dims"
+                )
+    else:
+        logger.info("no metrics require embeddings, skipping embedding loading")
 
     # Dispatch metrics
     metric_results: dict[str, dict] = {}
@@ -160,11 +175,15 @@ def run_comparison(
             )
 
         met_fn = COMP_METRICS[met_type]
+        needs_emb = getattr(met_fn, "requires_embeddings", True)
+        experiment_data = loaded if needs_emb else labels_only
+
         result = met_fn(
-            loaded,
+            experiment_data,
             processed_data_dir=processed_data_dir,
             output_dir=ctx.output_dir,
             prefix=ctx.config_stem,
+            experiments=ctx.experiments,
             **met_params,
         )
         metric_results[met_type] = result

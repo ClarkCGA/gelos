@@ -7,11 +7,12 @@ import pytest
 from gelos.comp_metrics import (
     COMP_METRICS,
     cosine_distance,
+    knn_purity_comparison,
     pca_ablation_comparison,
     wasserstein_distance,
 )
-from gelos.comp_plots import COMP_PLOTS, distance_matrix, pca_ablation_table
-from gelos.comparison import setup_comparison
+from gelos.comp_plots import COMP_PLOTS, distance_matrix, knn_purity_plot, pca_ablation_table
+from gelos.comparison import ComparisonExperiment, setup_comparison
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -37,7 +38,12 @@ def two_experiment_embeddings():
 
 def test_comp_metrics_registry_keys():
     """COMP_METRICS registry has expected keys and callables."""
-    expected = {"pca_ablation_comparison", "cosine_distance", "wasserstein_distance"}
+    expected = {
+        "pca_ablation_comparison",
+        "cosine_distance",
+        "wasserstein_distance",
+        "knn_purity_comparison",
+    }
     assert expected <= set(COMP_METRICS.keys())
     for fn in COMP_METRICS.values():
         assert callable(fn)
@@ -45,7 +51,7 @@ def test_comp_metrics_registry_keys():
 
 def test_comp_plots_registry_keys():
     """COMP_PLOTS registry has expected keys and callables."""
-    expected = {"pca_ablation_table", "distance_matrix"}
+    expected = {"pca_ablation_table", "distance_matrix", "knn_purity_plot"}
     assert expected <= set(COMP_PLOTS.keys())
     for fn in COMP_PLOTS.values():
         assert callable(fn)
@@ -106,7 +112,7 @@ def test_wasserstein_distance(two_experiment_embeddings, tmp_path):
 
 def test_pca_ablation_comparison(tmp_path):
     """pca_ablation_comparison merges per-experiment CSVs into one."""
-    # Create fake per-experiment PCA ablation CSVs
+    # Create fake per-experiment PCA ablation CSVs at deterministic paths
     exp_dir = tmp_path / "v3" / "config_a" / "layer_11"
     exp_dir.mkdir(parents=True)
     df_a = pd.DataFrame(
@@ -118,18 +124,21 @@ def test_pca_ablation_comparison(tmp_path):
     )
     df_a.to_csv(exp_dir / "config_a_cls_layer_11_pca_ablation.csv", index=False)
 
-    # Provide dummy embeddings (not used by this metric)
-    dummy_emb = np.zeros((10, 8))
-    loaded = [("Exp A", dummy_emb)]
+    experiments = [
+        ComparisonExperiment(
+            data_version="v3", config="config_a", strategy="cls", layer="layer_11", label="Exp A"
+        ),
+    ]
 
     output_dir = tmp_path / "comparisons"
     output_dir.mkdir()
 
     result = pca_ablation_comparison(
-        loaded,
+        [(exp.label, None) for exp in experiments],
         processed_data_dir=tmp_path,
         output_dir=output_dir,
         prefix="test",
+        experiments=experiments,
     )
     assert "comparison_df" in result
     assert not result["comparison_df"].empty
@@ -161,11 +170,68 @@ def test_pca_ablation_table_plot(tmp_path):
             "experiment": ["A", "A", "B", "B"],
             "threshold": [0.9, 0.95, 0.9, 0.95],
             "n_components": [5, 10, 8, 15],
+            "proportion_of_total_components": [0.05, 0.10, 0.08, 0.15],
             "total_variance_explained": [0.91, 0.96, 0.92, 0.97],
         }
     )
     output_path = tmp_path / "test_pca_table.png"
     pca_ablation_table({"comparison_df": df}, output_path=output_path)
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_knn_purity_comparison(tmp_path):
+    """knn_purity_comparison merges per-experiment CSVs into one."""
+    exp_dir = tmp_path / "v3" / "config_a" / "layer_11"
+    exp_dir.mkdir(parents=True)
+    df_a = pd.DataFrame(
+        {
+            "k": [1, 1, 5, 5],
+            "class": ["overall", "0", "overall", "0"],
+            "purity": [0.8, 0.9, 0.7, 0.75],
+            "n_samples": [100, 50, 100, 50],
+        }
+    )
+    df_a.to_csv(exp_dir / "config_a_cls_layer_11_knn_purity.csv", index=False)
+
+    experiments = [
+        ComparisonExperiment(
+            data_version="v3", config="config_a", strategy="cls", layer="layer_11", label="Exp A"
+        ),
+    ]
+
+    output_dir = tmp_path / "comparisons"
+    output_dir.mkdir()
+
+    result = knn_purity_comparison(
+        [(exp.label, None) for exp in experiments],
+        processed_data_dir=tmp_path,
+        output_dir=output_dir,
+        prefix="test",
+        experiments=experiments,
+    )
+    assert "comparison_df" in result
+    assert not result["comparison_df"].empty
+    assert "experiment" in result["comparison_df"].columns
+
+    csv_files = list(output_dir.glob("*_knn_purity_comparison.csv"))
+    assert len(csv_files) == 1
+    gc.collect()
+
+
+def test_knn_purity_plot_output(tmp_path):
+    """knn_purity_plot creates a PNG file from comparison data."""
+    df = pd.DataFrame(
+        {
+            "k": [1, 1, 1, 5, 5, 5, 1, 1, 1, 5, 5, 5],
+            "class": ["overall", "0", "1"] * 4,
+            "purity": [0.8, 0.9, 0.7, 0.75, 0.85, 0.65, 0.82, 0.88, 0.76, 0.78, 0.84, 0.72],
+            "n_samples": [100, 50, 50] * 4,
+            "experiment": ["A"] * 6 + ["B"] * 6,
+        }
+    )
+    output_path = tmp_path / "test_knn_purity.png"
+    knn_purity_plot({"comparison_df": df}, output_path=output_path)
     assert output_path.exists()
     gc.collect()
 
