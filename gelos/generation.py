@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from lightning.pytorch import Trainer
 from loguru import logger
@@ -7,7 +7,7 @@ from terratorch.tasks import EmbeddingGenerationTask
 import torch
 import typer
 import yaml
-from jsonargparse import ArgumentParser
+from lightning.pytorch.cli import instantiate_class
 from gelos.gelosdatamodule import GELOSDataModule
 
 app = typer.Typer()
@@ -16,6 +16,27 @@ app = typer.Typer()
 class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
     def check_file_ids(self, file_ids, x):
         return
+
+
+def instantiate_recursive(node: Any) -> Any:
+    """Walk a parsed YAML node and instantiate any ``{class_path, init_args}`` dicts bottom-up.
+
+    Bypasses jsonargparse introspection, which breaks on classes whose
+    ``__annotations__`` are rewritten by metaclasses (e.g. albumentations'
+    ``ValidatedTransformMeta``) and on group-name collisions with init params.
+    Any dict containing a ``class_path`` key is treated as an instantiation
+    spec; everything else is passed through untouched.
+    """
+    if isinstance(node, dict):
+        if "class_path" in node:
+            init_args = instantiate_recursive(node.get("init_args") or {})
+            return instantiate_class(
+                (), {"class_path": node["class_path"], "init_args": init_args}
+            )
+        return {k: instantiate_recursive(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [instantiate_recursive(item) for item in node]
+    return node
 
 
 def perturb_args_to_string(perturb):
@@ -67,22 +88,20 @@ def setup_embedding_run(
     output_dir.mkdir(exist_ok=True, parents=True)
     data_root = raw_data_dir / data_version
 
-    parser = ArgumentParser()
-    parser.add_class_arguments(GELOSDataModule, "data")
-    parser.add_class_arguments(LenientEmbeddingGenerationTask, "model")
+    yaml_config["data"]["init_args"]["data_root"] = str(data_root)
+    yaml_config["model"]["init_args"]["output_dir"] = str(output_dir)
 
-    data_init_args = yaml_config["data"]["init_args"]
-    data_init_args["data_root"] = str(data_root)
-    model_init_args = yaml_config["model"]["init_args"]
-    model_init_args["output_dir"] = str(output_dir)
+    datamodule: GELOSDataModule = instantiate_recursive(yaml_config["data"])
 
-    cfg = parser.parse_object({"data": data_init_args, "model": model_init_args})
-    init = parser.instantiate_classes(cfg)
+    # Override the task class with the lenient subclass but reuse the
+    # recursively-instantiated init_args from the YAML.
+    model_init_args = instantiate_recursive(yaml_config["model"].get("init_args") or {})
+    task = LenientEmbeddingGenerationTask(**model_init_args)
 
     device = "gpu" if torch.cuda.is_available() else "cpu"
     trainer = Trainer(accelerator=device, devices=1)
 
-    return init.data, init.model, trainer, output_dir
+    return datamodule, task, trainer, output_dir
 
 
 def generate_embeddings(
