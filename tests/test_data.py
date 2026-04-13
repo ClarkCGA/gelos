@@ -8,9 +8,8 @@ import numpy as np
 import pytest
 import rioxarray as rxr
 import torch
-from jsonargparse import ArgumentParser
-
 from gelos.gelosdatamodule import GELOSDataModule
+from gelos.generation import instantiate_recursive
 from gelos.gelosdataset import GELOSDataSet
 from tests.utils import create_test_geojson
 
@@ -372,8 +371,6 @@ def test_example_config_instantiates(data_root):
     class paths are importable, band names are valid, and the DataModule can
     set up and iterate.
     """
-    import importlib
-
     import yaml
 
     yaml_path = Path(__file__).parent / "fixtures" / "example_config.yaml"
@@ -381,15 +378,8 @@ def test_example_config_instantiates(data_root):
     with open(yaml_path, "r") as f:
         yaml_config = yaml.safe_load(f)
 
-    parser = ArgumentParser()
-    parser.add_class_arguments(GELOSDataModule, "data")
-
-    data_init_args = yaml_config['data']['init_args']
-    data_init_args['data_root'] = str(data_root)
-
-    cfg = parser.parse_object({"data": data_init_args})
-    init = parser.instantiate_classes(cfg)
-    gelos_datamodule = init.data
+    yaml_config["data"]["init_args"]["data_root"] = str(data_root)
+    gelos_datamodule = instantiate_recursive(yaml_config["data"])
 
     gelos_datamodule.setup(stage="predict")
     assert len(gelos_datamodule.dataset) == N_SAMPLES

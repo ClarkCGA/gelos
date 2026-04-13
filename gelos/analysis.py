@@ -250,6 +250,9 @@ def run_analysis(
                     layer_dir.mkdir(exist_ok=True, parents=True)
                     _save_transform_result(result, chip_indices, cache_path, t_type, prefix)
 
+            # --- Resolve labels (used by metrics and models) ---
+            labels = ctx.chip_gdf[ctx.category_column].loc[chip_indices].to_numpy()
+
             # --- Run metrics ---
             for met_cfg in strategy_cfg.get("metrics", []):
                 met_type = met_cfg["type"]
@@ -262,11 +265,13 @@ def run_analysis(
                     )
 
                 cache_path = layer_dir / f"{prefix}_{met_type}.csv"
-                # if cache_path.exists():
-                #     logger.info(f"cached {met_type} result exists at {cache_path}, skipping")
-                # else:
-                met_fn = METRICS[met_type]
-                met_fn(embeddings, output_dir=layer_dir, prefix=prefix, **met_params)
+                if cache_path.exists():
+                    logger.info(f"cached {met_type} result exists at {cache_path}, skipping")
+                else:
+                    met_fn = METRICS[met_type]
+                    met_fn(
+                        embeddings, output_dir=layer_dir, prefix=prefix, labels=labels, **met_params
+                    )
 
             # --- Run plots ---
             for p_cfg in strategy_cfg.get("plots", []):
@@ -327,7 +332,6 @@ def run_analysis(
                     continue
 
                 data = transform_results[source]
-                labels = ctx.chip_gdf[ctx.category_column].loc[chip_indices].to_numpy()
                 run_name = f"{prefix}_{m_type}"
                 logger.info(f"running model {m_type} for {strategy_key}")
                 m_fn = MODELS[m_type]

@@ -1,3 +1,4 @@
+import importlib
 from pathlib import Path
 from typing import Any, List
 
@@ -23,7 +24,7 @@ class GELOSDataModule(NonGeoDataModule):
         data_root: str | Path,
         batch_size: int,
         num_workers: int,
-        dataset_class: type,
+        dataset_class: type | str,
         means: dict[str, dict[str, float]] | None = None,
         stds: dict[str, dict[str, float]] | None = None,
         bands: dict[str, List[str]] | None = None,
@@ -52,6 +53,10 @@ class GELOSDataModule(NonGeoDataModule):
             perturb_bands (dict[str, dict[str, float]], optional): perturb bands with additive gaussian noise. Dictionary defining modalities and bands with weights for perturbation.
             **kwargs: Additional keyword arguments.
         """
+        if isinstance(dataset_class, str):
+            module_path, _, class_name = dataset_class.rpartition(".")
+            dataset_class = getattr(importlib.import_module(module_path), class_name)
+
         super().__init__(dataset_class, batch_size, num_workers, **kwargs)
 
         self.data_root = data_root

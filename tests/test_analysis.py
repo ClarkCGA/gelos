@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from shapely.geometry import Point
 
-from gelos.metrics import METRICS, pca_ablation
+from gelos.metrics import METRICS, knn_purity, pca_ablation
 from gelos.models import MODELS, run_knn_cv, run_linear_probe_cv, run_random_forest_cv
 from gelos.plotting import PLOTS
 from gelos.transforms import (
@@ -180,9 +180,11 @@ def test_random_forest_cv_returns_metrics(synthetic_embeddings, synthetic_labels
 
 
 def test_metrics_registry_keys():
-    """METRICS registry has pca_ablation entry."""
+    """METRICS registry has pca_ablation and knn_purity entries."""
     assert "pca_ablation" in METRICS
     assert callable(METRICS["pca_ablation"])
+    assert "knn_purity" in METRICS
+    assert callable(METRICS["knn_purity"])
 
 
 def test_pca_ablation_output(synthetic_embeddings, tmp_path):
@@ -205,7 +207,12 @@ def test_pca_ablation_output(synthetic_embeddings, tmp_path):
     import pandas as pd
 
     df = pd.read_csv(csv_files[0])
-    assert set(df.columns) == {"threshold", "n_components", "total_variance_explained"}
+    assert set(df.columns) == {
+        "threshold",
+        "n_components",
+        "proportion_of_total_components",
+        "total_variance_explained",
+    }
     assert len(df) == 5
     gc.collect()
 
@@ -226,6 +233,81 @@ def test_pca_ablation_cache_skip(synthetic_embeddings, tmp_path):
     # Run pca_ablation fresh to a different prefix to confirm it works
     pca_ablation(embeddings, output_dir=layer_dir, prefix="fresh")
     assert (layer_dir / "fresh_pca_ablation.csv").exists()
+    gc.collect()
+
+
+def test_knn_purity_output(synthetic_embeddings, synthetic_labels, tmp_path):
+    """knn_purity writes CSV with correct columns and sensible values."""
+    embeddings, _ = synthetic_embeddings
+    result = knn_purity(embeddings, output_dir=tmp_path, prefix="test", labels=synthetic_labels)
+
+    assert "rows" in result
+    assert "k_values" in result
+    assert len(result["rows"]) > 0
+
+    for row in result["rows"]:
+        assert 0.0 <= row["purity"] <= 1.0
+        assert row["n_samples"] > 0
+
+    csv_files = list(tmp_path.glob("*_knn_purity.csv"))
+    assert len(csv_files) == 1
+
+    import pandas as pd
+
+    df = pd.read_csv(csv_files[0])
+    assert set(df.columns) == {"k", "class", "purity", "n_samples"}
+    # Default 6 k values, each with overall + 3 classes = 4 rows per k = 24
+    assert len(df) == 6 * (1 + N_CLASSES)
+    gc.collect()
+
+
+def test_knn_purity_subsampling(synthetic_embeddings, synthetic_labels, tmp_path):
+    """knn_purity with n_subsample produces valid output with fewer queries."""
+    embeddings, _ = synthetic_embeddings
+    result = knn_purity(
+        embeddings,
+        output_dir=tmp_path,
+        prefix="test_sub",
+        labels=synthetic_labels,
+        n_subsample=30,
+    )
+
+    assert "rows" in result
+    for row in result["rows"]:
+        assert 0.0 <= row["purity"] <= 1.0
+        # Overall n_samples should be <= 30
+        if row["class"] == "overall":
+            assert row["n_samples"] <= 30
+
+    csv_files = list(tmp_path.glob("*_knn_purity.csv"))
+    assert len(csv_files) == 1
+    gc.collect()
+
+
+def test_knn_purity_perfect_clusters(tmp_path):
+    """Well-separated clusters should yield purity ~1.0 at small k."""
+    rng = np.random.RandomState(42)
+    n_per_class = 30
+    dim = 16
+
+    # Three tight clusters far apart
+    c0 = rng.randn(n_per_class, dim) * 0.01 + np.array([0] * dim)
+    c1 = rng.randn(n_per_class, dim) * 0.01 + np.array([100] * dim)
+    c2 = rng.randn(n_per_class, dim) * 0.01 + np.array([-100] * dim)
+    embeddings = np.vstack([c0, c1, c2]).astype(np.float32)
+    labels = np.array([0] * n_per_class + [1] * n_per_class + [2] * n_per_class)
+
+    result = knn_purity(
+        embeddings,
+        output_dir=tmp_path,
+        prefix="perfect",
+        labels=labels,
+        k_values=[1, 5, 10, 20],
+    )
+
+    for row in result["rows"]:
+        if row["class"] == "overall" and row["k"] <= 20:
+            assert row["purity"] > 0.95, f"Expected high purity at k={row['k']}"
     gc.collect()
 
 
