@@ -62,7 +62,7 @@ def extract_embeddings(
         flattened = pa.compute.list_flatten(sliced, recursive=True)
         emb_np = flattened.to_numpy(zero_copy_only=False).reshape(len(batch), -1)
         emb_chunks.append(emb_np)
-        id_chunks.append(batch.column("file_id").to_numpy())
+        id_chunks.append(batch.column("file_id").to_numpy(zero_copy_only=False))
     embeddings = np.vstack(emb_chunks)
     chip_indices = np.concatenate(id_chunks).astype(int).tolist()
     return embeddings, chip_indices
