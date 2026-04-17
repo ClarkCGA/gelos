@@ -122,36 +122,54 @@ def distance_matrix(
 def knn_purity_plot(
     metric_result: dict,
     output_path: str | Path = None,
+    class_labels: dict[str, str] | None = None,
     **kwargs,
 ) -> None:
     """Render KNN class purity comparison as line plots.
 
-    Creates a figure with two subplots:
-    - Top: overall purity vs k, one line per experiment
-    - Bottom: per-class purity vs k, faceted by experiment
+    Creates a figure with:
+    - Top row (full width): overall purity vs k, one line per experiment.
+    - Facet grid below: one subplot per class, each showing purity vs k with
+      one line per experiment — makes cross-model comparison direct.
 
     Args:
         metric_result: Output from ``knn_purity_comparison`` metric.
         output_path: Path to save the figure. Shows interactively if None.
+        class_labels: Optional mapping from class id (as string) to display
+            name. Used for facet subplot titles. Falls back to raw class id.
     """
     df = metric_result.get("comparison_df", pd.DataFrame())
     if df.empty:
         logger.warning("no data for KNN purity plot, skipping")
         return
 
+    class_labels = class_labels or {}
+
     overall = df[df["class"] == "overall"]
     per_class = df[df["class"] != "overall"]
-    experiments = overall["experiment"].unique()
+    experiments = list(overall["experiment"].unique())
+    classes = sorted(per_class["class"].unique())
+    n_classes = len(classes)
 
-    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(10, 8))
-
-    # --- Top: overall purity ---
     markers = ["o", "s", "^", "D", "v", "P", "X", "*"]
+
+    # Layout: 1 row for overall, then a facet grid (up to 4 cols) for classes.
+    n_cols = min(4, n_classes) if n_classes else 1
+    n_facet_rows = (n_classes + n_cols - 1) // n_cols if n_classes else 0
+    fig_height = 4 + 2.5 * n_facet_rows
+    fig = plt.figure(figsize=(3.5 * n_cols, fig_height))
+    gs = fig.add_gridspec(1 + n_facet_rows, n_cols, hspace=0.5, wspace=0.3)
+
+    # --- Top: overall purity (spans all columns) ---
+    ax_top = fig.add_subplot(gs[0, :])
     for i, exp in enumerate(experiments):
         exp_data = overall[overall["experiment"] == exp].sort_values("k")
-        marker = markers[i % len(markers)]
-        ax_top.plot(exp_data["k"], exp_data["purity"], marker=marker, label=exp)
-
+        ax_top.plot(
+            exp_data["k"],
+            exp_data["purity"],
+            marker=markers[i % len(markers)],
+            label=exp,
+        )
     ax_top.set_xlabel("k")
     ax_top.set_ylabel("Purity")
     ax_top.set_ylim(0, 1.05)
@@ -159,39 +177,45 @@ def knn_purity_plot(
     ax_top.legend()
     ax_top.grid(True, alpha=0.3)
 
-    # --- Bottom: per-class purity ---
-    classes = sorted(per_class["class"].unique())
-    n_classes = len(classes)
-    n_experiments = len(experiments)
-    k_values = sorted(per_class["k"].unique())
-    x = np.arange(len(k_values))
-    total_bars = n_classes * n_experiments
-    width = 0.8 / max(total_bars, 1)
+    # --- Facets: one subplot per class ---
+    facet_axes = []
+    for idx, cls in enumerate(classes):
+        row = 1 + idx // n_cols
+        col = idx % n_cols
+        ax = fig.add_subplot(gs[row, col])
+        facet_axes.append(ax)
 
-    for i, exp in enumerate(experiments):
-        for j, cls in enumerate(classes):
+        for i, exp in enumerate(experiments):
             subset = per_class[
                 (per_class["experiment"] == exp) & (per_class["class"] == cls)
             ].sort_values("k")
-            offset = (i * n_classes + j - total_bars / 2) * width + width / 2
-            bar_vals = [
-                subset[subset["k"] == k]["purity"].values[0]
-                if len(subset[subset["k"] == k]) > 0
-                else 0
-                for k in k_values
-            ]
-            ax_bot.bar(x + offset, bar_vals, width, label=f"{exp} — {cls}")
+            if subset.empty:
+                continue
+            ax.plot(
+                subset["k"],
+                subset["purity"],
+                marker=markers[i % len(markers)],
+                label=exp,
+            )
 
-    ax_bot.set_xlabel("k")
-    ax_bot.set_ylabel("Purity")
-    ax_bot.set_ylim(0, 1.05)
-    ax_bot.set_xticks(x)
-    ax_bot.set_xticklabels([str(k) for k in k_values])
-    ax_bot.set_title("Per-Class KNN Purity by Experiment")
-    ax_bot.legend(fontsize=7, ncol=2)
-    ax_bot.grid(True, alpha=0.3, axis="y")
+        display = class_labels.get(str(cls), str(cls))
+        ax.set_title(display)
+        ax.set_xlabel("k")
+        ax.set_ylabel("Purity")
+        ax.set_ylim(0, 1.05)
+        ax.grid(True, alpha=0.3)
 
-    fig.tight_layout()
+    # Single shared legend for facets, placed below the grid.
+    if facet_axes:
+        handles, labels = facet_axes[0].get_legend_handles_labels()
+        if handles:
+            fig.legend(
+                handles,
+                labels,
+                loc="lower center",
+                ncol=min(len(labels), 4),
+                bbox_to_anchor=(0.5, -0.02),
+            )
 
     if output_path:
         plt.savefig(output_path, dpi=300, bbox_inches="tight")

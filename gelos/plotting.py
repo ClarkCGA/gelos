@@ -36,7 +36,7 @@ def scatter_2d(
     plot a 2d transform of embeddings colored according to chip category
     """
     category_column, color_dict, legend_patches = build_style_from_config(style_cfg)
-    colors = chip_gdf[category_column].loc[chip_indices].map(color_dict)
+    colors = chip_gdf[category_column].loc[chip_indices].astype(str).map(color_dict)
     transform_title = TRANSFORM_TITLES[t_type]
 
     fig = plt.figure(figsize=(10, 8))
@@ -63,9 +63,10 @@ def scatter_2d(
 def build_style_from_config(style_cfg: dict) -> tuple[str, dict, list[Patch]]:
     """Extract category_column, color_dict, and legend_patches from the style config section."""
     category_column = style_cfg["category_column"]
-    color_dict = style_cfg["colors"]
+    color_dict = {str(k): v for k, v in style_cfg["colors"].items()}
+    label_dict = {str(k): v for k, v in style_cfg["labels"].items()}
     legend_patches = [
-        Patch(color=color, label=style_cfg["labels"][k]) for k, color in color_dict.items()
+        Patch(color=color, label=label_dict[k]) for k, color in color_dict.items()
     ]
     return category_column, color_dict, legend_patches
 
@@ -83,7 +84,7 @@ def temporal_cosine_similarity(
     n_timesteps: int = 4,
     timestep_labels: list[str] | None = None,
     n_cols: int = 6,
-    ylim: tuple[float, float] = (0,1)
+    ylim: tuple[float, float] = (0.5,1)
 ) -> None:
     """Plot cosine similarity between consecutive timesteps per land-cover category.
 
