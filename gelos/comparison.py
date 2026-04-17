@@ -38,6 +38,7 @@ class ComparisonContext:
     comp_plots: list[dict]
     output_dir: Path
     figures_dir: Path
+    class_labels: dict[str, str]
 
 
 def _resolve_embedding_path(exp: ComparisonExperiment, processed_data_dir: Path) -> Path:
@@ -85,6 +86,11 @@ def setup_comparison(
     comp_metrics = yaml_config.get("comp_metrics", [])
     comp_plots = yaml_config.get("comp_plots", [])
 
+    # Normalize class label keys to strings so they can be looked up against the
+    # CSV ``class`` column (which is string-typed on read).
+    raw_labels = yaml_config.get("class_labels", {}) or {}
+    class_labels = {str(k): str(v) for k, v in raw_labels.items()}
+
     output_dir = processed_data_dir / "comparisons" / config_stem
     output_dir.mkdir(exist_ok=True, parents=True)
     figures_dir = figures_base_dir / "comparisons" / config_stem
@@ -98,6 +104,7 @@ def setup_comparison(
         comp_plots=comp_plots,
         output_dir=output_dir,
         figures_dir=figures_dir,
+        class_labels=class_labels,
     )
 
 
@@ -123,8 +130,7 @@ def run_comparison(
 
     # Determine whether any metric requires loading embeddings
     any_needs_embeddings = any(
-        getattr(COMP_METRICS.get(m["type"]), "requires_embeddings", True)
-        for m in ctx.comp_metrics
+        getattr(COMP_METRICS.get(m["type"]), "requires_embeddings", True) for m in ctx.comp_metrics
     )
 
     # Build experiment lists: always build labels-only, load arrays only when needed
@@ -136,9 +142,7 @@ def run_comparison(
         for exp in ctx.experiments:
             emb_path = _resolve_embedding_path(exp, processed_data_dir)
             if not emb_path.exists():
-                logger.warning(
-                    f"embeddings not found for '{exp.label}' at {emb_path}, skipping"
-                )
+                logger.warning(f"embeddings not found for '{exp.label}' at {emb_path}, skipping")
                 continue
             emb = np.load(emb_path)
             loaded.append((exp.label, emb))
@@ -146,8 +150,7 @@ def run_comparison(
 
         if len(loaded) < 2:
             logger.warning(
-                f"need at least 2 experiments with embeddings for comparison, "
-                f"got {len(loaded)}"
+                f"need at least 2 experiments with embeddings for comparison, got {len(loaded)}"
             )
             return {}
 
@@ -212,6 +215,7 @@ def run_comparison(
         p_fn(
             metric_results[source_metric],
             output_path=output_path,
+            class_labels=ctx.class_labels,
             **p_params,
         )
         logger.info(f"comparison plot saved to {output_path}")
