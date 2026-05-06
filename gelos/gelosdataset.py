@@ -1,8 +1,9 @@
 from abc import abstractmethod
 from pathlib import Path
 from typing import Any
-from einops import rearrange
+
 import albumentations as A
+from einops import rearrange
 import numpy as np
 from terratorch.datasets.transforms import MultimodalTransforms
 import torch
@@ -15,6 +16,7 @@ class MultimodalToTensor:
     Stacking and unstacking in with terratorch.datasets.transforms ALSO rearranges from [T, H, W, C] to [C, T, H, W]
     Therefore, we must do the same here if we are not using them.
     """
+
     def __init__(self, modalities):
         self.modalities = modalities
 
@@ -22,7 +24,9 @@ class MultimodalToTensor:
         new_dict = {}
         for k, v in d.items():
             new_dict[k] = torch.from_numpy(v)
-            new_dict[k] = rearrange(new_dict[k], "time height width channels -> channels time height width")
+            new_dict[k] = rearrange(
+                new_dict[k], "time height width channels -> channels time height width"
+            )
         return new_dict
 
 
@@ -52,11 +56,11 @@ class GELOSDataSet(NonGeoDataset):
         perturb_bands: dict[str, dict[str, float]] | None = None,
     ) -> None:
 
-        self.bands=bands
-        self.all_band_names=all_band_names
-        self.concat_bands=concat_bands
-        self.repeat_bands=repeat_bands
-        self.perturb_bands=perturb_bands
+        self.bands = bands
+        self.all_band_names = all_band_names
+        self.concat_bands = concat_bands
+        self.repeat_bands = repeat_bands
+        self.perturb_bands = perturb_bands
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
             f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
@@ -142,10 +146,11 @@ class GELOSDataSet(NonGeoDataset):
 
     def _perturb_bands(self, output, sensor, band_dict):
         for band_index, alpha in band_dict.items():
-
             size = output[sensor][:, :, :, band_index].shape
             original_band = output[sensor][:, :, :, band_index]
-            noise = np.random.normal(loc=np.mean(original_band), scale=np.std(original_band), size=size)
+            noise = np.random.normal(
+                loc=np.mean(original_band), scale=np.std(original_band), size=size
+            )
             output[sensor][..., band_index] = (1 - alpha) * original_band + alpha * noise
 
         return output

@@ -69,13 +69,13 @@ class GELOSDataModule(NonGeoDataModule):
         self.concat_bands = concat_bands
         self.repeat_bands = repeat_bands
         self.perturb_bands = perturb_bands
-        
+
         # handle passing stats with missing values, check against dataset class
         # if none are found, mean defaults to 0 and std defaults to 1
         means = means or {}
         stds = stds or {}
-        class_means = getattr(dataset_class, 'means', {})
-        class_stds = getattr(dataset_class, 'stds', {})
+        class_means = getattr(dataset_class, "means", {})
+        class_stds = getattr(dataset_class, "stds", {})
         self.means = {}
         self.stds = {}
         for modality in self.modalities:

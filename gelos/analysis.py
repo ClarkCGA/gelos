@@ -270,7 +270,11 @@ def run_analysis(
                 else:
                     met_fn = METRICS[met_type]
                     met_fn(
-                        embeddings, output_dir=layer_dir, prefix=prefix, labels=labels, **met_params
+                        embeddings,
+                        output_dir=layer_dir,
+                        prefix=prefix,
+                        labels=labels,
+                        **met_params,
                     )
 
             # --- Run plots ---

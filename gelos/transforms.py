@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import numpy as np
 from loguru import logger
+import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from umap import UMAP
+
 
 def tsne_from_embeddings(
     embeddings: np.ndarray,
@@ -30,8 +31,7 @@ def tsne_from_embeddings(
         Transformed array of shape (N, n_components).
     """
     logger.info(
-        f"running t-SNE: perplexity={perplexity}, n_components={n_components}, "
-        f"max_iter={max_iter}"
+        f"running t-SNE: perplexity={perplexity}, n_components={n_components}, max_iter={max_iter}"
     )
     tsne = TSNE(
         n_components=n_components,
@@ -41,6 +41,7 @@ def tsne_from_embeddings(
         verbose=verbose,
     )
     return tsne.fit_transform(embeddings)
+
 
 # TODO: continue updating to match UMAP params in scikitlearn
 def umap_from_embeddings(
@@ -68,9 +69,7 @@ def umap_from_embeddings(
     Returns:
         Transformed array of shape (N, n_components).
     """
-    logger.info(
-        f"running UMAP: n_neighbors={n_neighbors}, n_components={n_components}"
-    )
+    logger.info(f"running UMAP: n_neighbors={n_neighbors}, n_components={n_components}")
     umap_transformer = UMAP(
         n_components=n_components,
         n_neighbors=n_neighbors,
@@ -102,6 +101,7 @@ def pca_from_embeddings(
     logger.info(f"running PCA: n_components={n_components}")
     pca = PCA(n_components=n_components, random_state=random_state)
     return pca.fit_transform(embeddings)
+
 
 TRANSFORMS: dict[str, callable] = {
     "tsne": tsne_from_embeddings,

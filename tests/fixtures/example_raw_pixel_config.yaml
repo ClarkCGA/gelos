@@ -1,0 +1,91 @@
+experiment_name: "Raw Pixel Baseline - Multi-Sensor"
+data_version: "v0.50.1"
+chip_tracker: "gelos_chip_tracker.geojson"
+chip_id_column: "id"
+
+seed_everything: 0
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  callbacks: []
+  max_epochs: 0
+
+data:
+  class_path: gelos.gelosdatamodule.GELOSDataModule
+  init_args:
+    dataset_class: tests.test_data.ExampleGELOSDataSet
+    batch_size: 1
+    num_workers: 0
+    bands:
+      S2L2A:
+        - blue
+        - green
+        - red
+        - nir08
+        - swir16
+        - swir22
+      S1RTC:
+        - VV
+        - VH
+      DEM:
+        - DEM
+    repeat_bands:
+      DEM: 4
+    transform:
+      - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
+      - class_path: albumentations.augmentations.geometric.resize.Resize
+        init_args:
+          height: 96
+          width: 96
+          interpolation: 0
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
+      - class_path: terratorch.datasets.transforms.UnflattenTemporalFromChannels
+        init_args:
+          n_timesteps: 4
+
+model:
+  class_path: gelos.raw_pixels.RawPixelEmbeddingTask
+  title: "Raw Pixel Baseline"
+  init_args:
+    patch_size: 16
+    embed_file_key: filename
+
+# Each named entry becomes a per-strategy subdir under output_dir.
+# The product of len(timesteps) * len(patches) must be <= 4.
+raw_pixel_extraction:
+  center_2x2_t0:
+    title: "Center 2x2 patches, single timestep"
+    patches: center_2x2
+    timesteps: [0]
+  all_timesteps_center_patch:
+    title: "All timesteps of the center patch"
+    patches: center_1x1
+    timesteps: all
+
+# Analysis picks up each raw_pixel_extraction subdir as a 'layer' and
+# applies each embedding_extraction_strategies entry to it.
+embedding_extraction_strategies:
+  all_tokens:
+    title: "All raw-pixel tokens"
+    slice_args:
+      - start: 0
+        stop: null
+        step: 1
+    transforms:
+      - type: pca
+        params:
+          n_components: 2
+    plots:
+      - type: scatter_2d
+        transform: pca
+
+style:
+  category_column: "lulc"
+  colors:
+    "1": "#419bdf"
+    "2": "#397d49"
+  labels:
+    "1": "Water"
+    "2": "Trees"
