@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from loguru import logger
 import numpy as np
 import pandas as pd
-from loguru import logger
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score

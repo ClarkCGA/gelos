@@ -65,9 +65,7 @@ def build_style_from_config(style_cfg: dict) -> tuple[str, dict, list[Patch]]:
     category_column = style_cfg["category_column"]
     color_dict = {str(k): v for k, v in style_cfg["colors"].items()}
     label_dict = {str(k): v for k, v in style_cfg["labels"].items()}
-    legend_patches = [
-        Patch(color=color, label=label_dict[k]) for k, color in color_dict.items()
-    ]
+    legend_patches = [Patch(color=color, label=label_dict[k]) for k, color in color_dict.items()]
     return category_column, color_dict, legend_patches
 
 
@@ -84,7 +82,7 @@ def temporal_cosine_similarity(
     n_timesteps: int = 4,
     timestep_labels: list[str] | None = None,
     n_cols: int = 6,
-    ylim: tuple[float, float] = (0.5,1)
+    ylim: tuple[float, float] = (0.5, 1),
 ) -> None:
     """Plot cosine similarity between consecutive timesteps per land-cover category.
 

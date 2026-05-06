@@ -125,12 +125,10 @@ def knn_purity_plot(
     class_labels: dict[str, str] | None = None,
     **kwargs,
 ) -> None:
-    """Render KNN class purity comparison as line plots.
+    """Render KNN class purity comparison as a per-class facet grid.
 
-    Creates a figure with:
-    - Top row (full width): overall purity vs k, one line per experiment.
-    - Facet grid below: one subplot per class, each showing purity vs k with
-      one line per experiment — makes cross-model comparison direct.
+    One subplot per class, each showing purity vs k with one line per
+    experiment — makes cross-model comparison direct.
 
     Args:
         metric_result: Output from ``knn_purity_comparison`` metric.
@@ -145,42 +143,22 @@ def knn_purity_plot(
 
     class_labels = class_labels or {}
 
-    overall = df[df["class"] == "overall"]
     per_class = df[df["class"] != "overall"]
-    experiments = list(overall["experiment"].unique())
+    experiments = list(per_class["experiment"].unique())
     classes = sorted(per_class["class"].unique())
     n_classes = len(classes)
 
     markers = ["o", "s", "^", "D", "v", "P", "X", "*"]
 
-    # Layout: 1 row for overall, then a facet grid (up to 4 cols) for classes.
-    n_cols = min(4, n_classes) if n_classes else 1
-    n_facet_rows = (n_classes + n_cols - 1) // n_cols if n_classes else 0
-    fig_height = 4 + 2.5 * n_facet_rows
+    n_cols = min(6, n_classes) if n_classes else 1
+    n_rows = (n_classes + n_cols - 1) // n_cols if n_classes else 1
+    fig_height = max(3, 2.5 * n_rows)
     fig = plt.figure(figsize=(3.5 * n_cols, fig_height))
-    gs = fig.add_gridspec(1 + n_facet_rows, n_cols, hspace=0.5, wspace=0.3)
+    gs = fig.add_gridspec(n_rows, n_cols, hspace=0.5, wspace=0.3)
 
-    # --- Top: overall purity (spans all columns) ---
-    ax_top = fig.add_subplot(gs[0, :])
-    for i, exp in enumerate(experiments):
-        exp_data = overall[overall["experiment"] == exp].sort_values("k")
-        ax_top.plot(
-            exp_data["k"],
-            exp_data["purity"],
-            marker=markers[i % len(markers)],
-            label=exp,
-        )
-    ax_top.set_xlabel("k")
-    ax_top.set_ylabel("Purity")
-    ax_top.set_ylim(0, 1.05)
-    ax_top.set_title("Overall KNN Class Purity by Experiment")
-    ax_top.legend()
-    ax_top.grid(True, alpha=0.3)
-
-    # --- Facets: one subplot per class ---
     facet_axes = []
     for idx, cls in enumerate(classes):
-        row = 1 + idx // n_cols
+        row = idx // n_cols
         col = idx % n_cols
         ax = fig.add_subplot(gs[row, col])
         facet_axes.append(ax)

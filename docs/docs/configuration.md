@@ -187,3 +187,41 @@ For plots and models, the `transform` field selects which data to use as input: 
 ### Style
 
 Maps category values from your metadata to colors and labels for plotting. `category_column` must match a column accessible via `chip_gdf[category_column].loc[chip_indices]` in the analysis pipeline.
+
+## Raw-pixel baseline configs
+
+Randomly-initialized (or mis-pretrained) foundation-model weights can still produce embedding spaces that look reasonable on downstream probes. To sanity-check how much a model is actually contributing, GELOS ships `gelos.raw_pixels.RawPixelEmbeddingTask` — a passthrough task that skips the model entirely and writes the normalized raw pixels themselves as "embeddings". The output parquets match `EmbeddingGenerationTask`'s schema, so analysis and comparison stages consume them with no special-casing.
+
+Swap the `model` block for the raw task and add a top-level `raw_pixel_extraction` section:
+
+```yaml
+model:
+  class_path: gelos.raw_pixels.RawPixelEmbeddingTask
+  title: "Raw Pixel Baseline"
+  init_args:
+    patch_size: 16
+    embed_file_key: filename
+
+# Each named entry becomes a per-strategy subdir under the run's output_dir
+# (playing the role of a "layer" for analysis). The product of
+# len(timesteps) * len(patches) must be <= 4 — raw pixel tokens are high-dim,
+# so the cap keeps parquet sizes reasonable.
+raw_pixel_extraction:
+  center_2x2_t0:
+    title: "Center 2x2 patches, single timestep"
+    patches: center_2x2      # 'center_NxN' or an explicit list of [row, col] pairs
+    timesteps: [0]           # list of ints or the string 'all'
+  all_timesteps_center_patch:
+    title: "All timesteps of the center patch"
+    patches: center_1x1
+    timesteps: all
+```
+
+Notes:
+
+- **Normalization is reused from the datamodule.** The task trusts `GELOSDataModule.aug` (defaults to z-score via means/stds) — set real per-band statistics on your dataset class or in `data.init_args.means/stds`, or baseline pixels stay un-normalized.
+- **Patch grid is derived from `H, W, patch_size`**, not configured. All of `H`, `W` must be divisible by `patch_size`, and for multi-sensor configs all sensors must share `T`, `H`, `W` after normalization (use `repeat_bands` to align single-timestep modalities like DEM).
+- **Multi-modal runs channel-concatenate per token.** Do NOT set `concat_bands: True` on the datamodule — the task handles concat itself. Sensor order follows `data.bands` YAML key order, which becomes the dict iteration order. Reordering that block between runs produces parquets of the same shape but different channel layouts.
+- **Comparison workflow.** Each modality combination is its own generation config (`raw_s2.yaml`, `raw_s2s1dem.yaml`, etc.) with its own `data.bands` and its own `raw_pixel_extraction`. Comparison configs reference raw-pixel runs by the same `(config, strategy, layer)` triple as any model run. S2 pixels getting written twice is bounded (~kB/chip per run at the 4-token cap).
+
+`embedding_extraction_strategies` still applies on top — each raw-pixel subdir becomes a "layer" for analysis, and each embedding-extraction strategy runs its slice/transforms/plots/models against it.

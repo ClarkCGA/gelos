@@ -2,12 +2,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 from lightning.pytorch import Trainer
+from lightning.pytorch.cli import instantiate_class
 from loguru import logger
 from terratorch.tasks import EmbeddingGenerationTask
 import torch
 import typer
 import yaml
-from lightning.pytorch.cli import instantiate_class
+
 from gelos.gelosdatamodule import GELOSDataModule
 
 app = typer.Typer()
@@ -62,7 +63,7 @@ def setup_embedding_run(
     yaml_path: Path,
     raw_data_dir: Path,
     embedding_dir: Path,
-) -> tuple[GELOSDataModule, LenientEmbeddingGenerationTask, Trainer, Path]:
+) -> tuple[GELOSDataModule, Any, Trainer, Path]:
     """Parse a YAML config and instantiate all objects needed for one embedding run.
 
     Useful in notebooks where you want to inspect or modify the datamodule, task,
@@ -89,14 +90,24 @@ def setup_embedding_run(
     data_root = raw_data_dir / data_version
 
     yaml_config["data"]["init_args"]["data_root"] = str(data_root)
+    yaml_config["model"].setdefault("init_args", {})
     yaml_config["model"]["init_args"]["output_dir"] = str(output_dir)
+
+    if "raw_pixel_extraction" in yaml_config:
+        yaml_config["model"]["init_args"]["extraction_strategies"] = yaml_config[
+            "raw_pixel_extraction"
+        ]
 
     datamodule: GELOSDataModule = instantiate_recursive(yaml_config["data"])
 
-    # Override the task class with the lenient subclass but reuse the
-    # recursively-instantiated init_args from the YAML.
-    model_init_args = instantiate_recursive(yaml_config["model"].get("init_args") or {})
-    task = LenientEmbeddingGenerationTask(**model_init_args)
+    model_class_path = yaml_config["model"].get("class_path", "")
+    if "EmbeddingGenerationTask" in model_class_path:
+        # Override the task class with the lenient subclass but reuse the
+        # recursively-instantiated init_args from the YAML.
+        model_init_args = instantiate_recursive(yaml_config["model"].get("init_args") or {})
+        task = LenientEmbeddingGenerationTask(**model_init_args)
+    else:
+        task = instantiate_recursive(yaml_config["model"])
 
     device = "gpu" if torch.cuda.is_available() else "cpu"
     trainer = Trainer(accelerator=device, devices=1)
@@ -110,7 +121,7 @@ def generate_embeddings(
     embedding_dir: Path,
     overwrite: bool = False,
 ) -> None:
-    
+
     datamodule, task, trainer, output_dir = setup_embedding_run(
         yaml_path, raw_data_dir, embedding_dir
     )
@@ -144,7 +155,9 @@ def main(
         "-c",
         help="Directory containing YAML configs (used when --yaml-path is not set).",
     ),
-    overwrite: Optional[bool] = typer.Option(False, "--overwrite", help="Overwrite existing embeddings"),
+    overwrite: Optional[bool] = typer.Option(
+        False, "--overwrite", help="Overwrite existing embeddings"
+    ),
 ):
     """
     Generate embeddings from a model and data specified in a yaml config.
