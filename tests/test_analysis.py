@@ -175,6 +175,69 @@ def test_random_forest_cv_returns_metrics(synthetic_embeddings, synthetic_labels
 
 
 # ---------------------------------------------------------------------------
+# Tests: confusion_matrix plot
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def cm_style_cfg():
+    return {
+        "category_column": "lulc",
+        "colors": {"0": "#1f77b4", "1": "#ff7f0e", "2": "#2ca02c"},
+        "labels": {"0": "A", "1": "B", "2": "C"},
+    }
+
+
+def test_confusion_matrix_output(synthetic_labels, cm_style_cfg, tmp_path):
+    """confusion_matrix writes a PNG to output_path."""
+    from gelos.plotting import confusion_matrix
+
+    rng = np.random.RandomState(0)
+    predictions = rng.choice([0, 1, 2], size=N_SAMPLES)
+    chip_indices = list(range(N_SAMPLES))
+    output_path = tmp_path / "test_cm.png"
+
+    confusion_matrix(
+        predictions=predictions,
+        labels=synthetic_labels,
+        chip_indices=chip_indices,
+        style_cfg=cm_style_cfg,
+        experiment_name="Test Experiment",
+        strategy_title="Test Strategy",
+        model_type="knn",
+        embedding_layer="layer_-1",
+        output_path=output_path,
+    )
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_confusion_matrix_missing_class(synthetic_labels, cm_style_cfg, tmp_path):
+    """confusion_matrix runs cleanly when predictions miss a class present in labels."""
+    from gelos.plotting import confusion_matrix
+
+    rng = np.random.RandomState(0)
+    # Predictions only contain classes 0 and 1; labels contain 0, 1, 2
+    predictions = rng.choice([0, 1], size=N_SAMPLES)
+    chip_indices = list(range(N_SAMPLES))
+    output_path = tmp_path / "test_cm_missing.png"
+
+    confusion_matrix(
+        predictions=predictions,
+        labels=synthetic_labels,
+        chip_indices=chip_indices,
+        style_cfg=cm_style_cfg,
+        experiment_name="Test",
+        strategy_title="Test",
+        model_type="knn",
+        embedding_layer="layer_-1",
+        output_path=output_path,
+    )
+    assert output_path.exists()
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
 # Tests: Metrics
 # ---------------------------------------------------------------------------
 

@@ -33,7 +33,7 @@ force-sort-within-sections = true
 [tool.pixi.workspace]
 name = "gelos"
 description = "Repository for Geospatial Exploration of Latent Observation Space (GELOS)"
-version = "0.1.0"
+version = "0.3.4"
 channels = ["conda-forge"]
 platforms = ["linux-64"]
 
