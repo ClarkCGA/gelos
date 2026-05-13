@@ -190,7 +190,7 @@ def knn_purity_plot(
             fig.legend(
                 handles,
                 labels,
-                loc="lower center",
+                loc="upper center",
                 ncol=min(len(labels), 4),
                 bbox_to_anchor=(0.5, -0.02),
             )

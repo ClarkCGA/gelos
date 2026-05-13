@@ -7,6 +7,7 @@ import geopandas as gpd
 from matplotlib.patches import Patch
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.metrics import confusion_matrix as sklearn_confusion_matrix
 from sklearn.metrics.pairwise import cosine_similarity
 
 from gelos.transforms import TRANSFORM_TITLES
@@ -161,6 +162,79 @@ def temporal_cosine_similarity(
         f"(Layer {embedding_layer}, {strategy_title})",
         fontsize=16,
     )
+
+    if output_path:
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+def confusion_matrix(
+    predictions: np.ndarray,
+    labels: np.ndarray,
+    chip_indices: list[int],
+    style_cfg: dict,
+    experiment_name: str,
+    strategy_title: str,
+    model_type: str,
+    embedding_layer: str,
+    output_path: str | Path = None,
+) -> None:
+    """Render a row-normalized confusion matrix as a heatmap.
+
+    Cells are annotated with the row-normalized proportion and the raw count.
+    Tick labels resolve through ``style_cfg["labels"]``, falling back to the
+    raw class ID. Auto-dispatched from ``analysis.run_analysis`` after each
+    model — not registered in ``PLOTS``, since it is a fixed artifact rather
+    than a YAML-configurable step.
+    """
+    label_map = {str(k): v for k, v in style_cfg.get("labels", {}).items()}
+
+    labels_str = np.asarray(labels).astype(str)
+    predictions_str = np.asarray(predictions).astype(str)
+    classes = sorted(set(labels_str.tolist()) | set(predictions_str.tolist()))
+
+    cm = sklearn_confusion_matrix(labels_str, predictions_str, labels=classes)
+    row_sums = cm.sum(axis=1, keepdims=True)
+    cm_norm = np.divide(cm, row_sums, out=np.zeros_like(cm, dtype=float), where=row_sums > 0)
+
+    tick_labels = [label_map.get(c, c) for c in classes]
+    n = len(classes)
+
+    fig, ax = plt.subplots(figsize=(max(6, n * 1.2), max(5, n)))
+    im = ax.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
+
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(tick_labels, rotation=45, ha="right")
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(tick_labels)
+    ax.set_xlabel("Predicted Label")
+    ax.set_ylabel("True Label")
+
+    fig.suptitle(
+        f"{experiment_name} — {model_type.upper()} Confusion Matrix",
+        fontsize=14,
+    )
+    ax.set_title(f"{strategy_title} (Layer {embedding_layer})", fontsize=11)
+
+    for i in range(n):
+        for j in range(n):
+            value = cm_norm[i, j]
+            count = int(cm[i, j])
+            text_color = "white" if value > 0.5 else "black"
+            ax.text(
+                j,
+                i,
+                f"{value:.2f}\n({count})",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color=text_color,
+            )
+
+    fig.colorbar(im, ax=ax, label="Proportion (row-normalized)")
+    fig.tight_layout()
 
     if output_path:
         plt.savefig(output_path, dpi=300, bbox_inches="tight")

@@ -14,7 +14,7 @@ import yaml
 from gelos.extraction import extract_embeddings
 from gelos.metrics import METRICS
 from gelos.models import MODELS
-from gelos.plotting import PLOTS, build_style_from_config
+from gelos.plotting import PLOTS, build_style_from_config, confusion_matrix
 from gelos.transforms import TRANSFORMS
 
 app = typer.Typer()
@@ -341,6 +341,22 @@ def run_analysis(
                 m_fn = MODELS[m_type]
                 layer_dir = ctx.output_dir / embedding_layer
                 result = m_fn(data, labels, output_dir=layer_dir, run_name=run_name, **m_params)
+
+                if result.get("predictions") is not None:
+                    cm_path = ctx.figures_dir / f"{prefix}_{m_type}_confusion_matrix.png"
+                    confusion_matrix(
+                        predictions=result["predictions"],
+                        labels=labels,
+                        chip_indices=chip_indices,
+                        style_cfg=ctx.style_cfg,
+                        experiment_name=ctx.experiment_name,
+                        strategy_title=strategy_title,
+                        model_type=m_type,
+                        embedding_layer=embedding_layer,
+                        output_path=cm_path,
+                    )
+                    logger.info(f"confusion matrix saved to {cm_path}")
+
                 all_results[f"{prefix}_{m_type}"] = result
 
     return all_results
