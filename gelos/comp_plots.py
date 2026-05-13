@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from loguru import logger
+from matplotlib.patches import Patch
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -202,8 +203,113 @@ def knn_purity_plot(
     plt.close(fig)
 
 
+def knn_purity_distribution_plot(
+    metric_result: dict,
+    output_path: str | Path = None,
+    class_labels: dict[str, str] | None = None,
+    **kwargs,
+) -> None:
+    """Render KNN per-query purity distribution as a per-class facet grid.
+
+    One subplot per class. Within each subplot, the x-axis enumerates k
+    values and at each k position one boxplot per experiment is drawn
+    side-by-side — exposes the spread of per-query purity that the
+    aggregated line plot collapses to a mean.
+
+    Args:
+        metric_result: Output from ``knn_purity_per_query_comparison`` metric.
+        output_path: Path to save the figure. Shows interactively if None.
+        class_labels: Optional mapping from class id (as string) to display
+            name. Used for facet subplot titles. Falls back to raw class id.
+    """
+    df = metric_result.get("comparison_df", pd.DataFrame())
+    if df.empty:
+        logger.warning("no data for KNN purity distribution plot, skipping")
+        return
+
+    class_labels = class_labels or {}
+
+    experiments = sorted(df["experiment"].unique())
+    classes = sorted(df["class"].unique())
+    k_values = sorted(df["k"].unique())
+    n_classes = len(classes)
+    n_experiments = len(experiments)
+    n_k = len(k_values)
+
+    colors = [plt.colormaps["tab10"](i % 10) for i in range(n_experiments)]
+    box_width = 0.8 / max(n_experiments, 1)
+
+    n_cols = min(6, n_classes) if n_classes else 1
+    n_rows = (n_classes + n_cols - 1) // n_cols if n_classes else 1
+    fig_height = max(3, 2.5 * n_rows)
+    fig = plt.figure(figsize=(3.5 * n_cols, fig_height))
+    gs = fig.add_gridspec(n_rows, n_cols, hspace=0.5, wspace=0.3)
+
+    for idx, cls in enumerate(classes):
+        row = idx // n_cols
+        col = idx % n_cols
+        ax = fig.add_subplot(gs[row, col])
+
+        for i, exp in enumerate(experiments):
+            data_per_k = []
+            positions = []
+            offset = (i - (n_experiments - 1) / 2) * box_width
+            for k_idx, k in enumerate(k_values):
+                values = df[(df["experiment"] == exp) & (df["class"] == cls) & (df["k"] == k)][
+                    "purity"
+                ].to_numpy()
+                if values.size == 0:
+                    continue
+                data_per_k.append(values)
+                positions.append(k_idx + offset)
+            if not data_per_k:
+                continue
+            bp = ax.boxplot(
+                data_per_k,
+                positions=positions,
+                widths=box_width * 0.85,
+                patch_artist=True,
+                showfliers=False,
+            )
+            for box in bp["boxes"]:
+                box.set_facecolor(colors[i])
+                box.set_edgecolor("black")
+            for median in bp["medians"]:
+                median.set_color("black")
+
+        display = class_labels.get(str(cls), str(cls))
+        ax.set_title(display)
+        ax.set_xlabel("k")
+        ax.set_ylabel("Purity")
+        ax.set_ylim(0, 1.05)
+        ax.set_xticks(range(n_k))
+        ax.set_xticklabels([str(k) for k in k_values])
+        ax.set_xlim(-0.5, n_k - 0.5)
+        ax.grid(True, alpha=0.3)
+
+    if n_experiments:
+        handles = [
+            Patch(facecolor=colors[i], edgecolor="black", label=experiments[i])
+            for i in range(n_experiments)
+        ]
+        fig.legend(
+            handles,
+            experiments,
+            loc="upper center",
+            ncol=min(n_experiments, 4),
+            bbox_to_anchor=(0.5, -0.02),
+        )
+
+    if output_path:
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
 COMP_PLOTS: dict[str, callable] = {
     "pca_ablation_table": pca_ablation_table,
     "distance_matrix": distance_matrix,
     "knn_purity_plot": knn_purity_plot,
+    "knn_purity_distribution_plot": knn_purity_distribution_plot,
 }

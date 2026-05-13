@@ -324,6 +324,47 @@ def test_knn_purity_output(synthetic_embeddings, synthetic_labels, tmp_path):
     gc.collect()
 
 
+def test_knn_purity_writes_per_query_csv(synthetic_embeddings, synthetic_labels, tmp_path):
+    """knn_purity writes a per-query CSV alongside the aggregated one."""
+    import pandas as pd
+
+    embeddings, _ = synthetic_embeddings
+    knn_purity(embeddings, output_dir=tmp_path, prefix="test", labels=synthetic_labels)
+
+    per_query_csv = tmp_path / "test_knn_purity_per_query.csv"
+    assert per_query_csv.exists()
+
+    df = pd.read_csv(per_query_csv)
+    assert set(df.columns) == {"k", "class", "query_idx", "purity"}
+    # Default 6 k values × 100 queries (no subsampling)
+    assert len(df) == 6 * N_SAMPLES
+    assert df["purity"].between(0.0, 1.0).all()
+    gc.collect()
+
+
+def test_knn_purity_per_query_respects_subsampling(
+    synthetic_embeddings, synthetic_labels, tmp_path
+):
+    """Per-query CSV row count matches subsampled query count, not full N."""
+    import pandas as pd
+
+    embeddings, _ = synthetic_embeddings
+    knn_purity(
+        embeddings,
+        output_dir=tmp_path,
+        prefix="test_sub",
+        labels=synthetic_labels,
+        n_subsample=30,
+    )
+
+    df = pd.read_csv(tmp_path / "test_sub_knn_purity_per_query.csv")
+    # 6 default k values × <= 30 query rows
+    n_queries = df[df["k"] == df["k"].iloc[0]].shape[0]
+    assert n_queries <= 30
+    assert len(df) == 6 * n_queries
+    gc.collect()
+
+
 def test_knn_purity_subsampling(synthetic_embeddings, synthetic_labels, tmp_path):
     """knn_purity with n_subsample produces valid output with fewer queries."""
     embeddings, _ = synthetic_embeddings
