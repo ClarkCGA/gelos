@@ -8,10 +8,17 @@ from gelos.comp_metrics import (
     COMP_METRICS,
     cosine_distance,
     knn_purity_comparison,
+    knn_purity_per_query_comparison,
     pca_ablation_comparison,
     wasserstein_distance,
 )
-from gelos.comp_plots import COMP_PLOTS, distance_matrix, knn_purity_plot, pca_ablation_table
+from gelos.comp_plots import (
+    COMP_PLOTS,
+    distance_matrix,
+    knn_purity_distribution_plot,
+    knn_purity_plot,
+    pca_ablation_table,
+)
 from gelos.comparison import ComparisonExperiment, setup_comparison
 
 # ---------------------------------------------------------------------------
@@ -43,6 +50,7 @@ def test_comp_metrics_registry_keys():
         "cosine_distance",
         "wasserstein_distance",
         "knn_purity_comparison",
+        "knn_purity_per_query_comparison",
     }
     assert expected <= set(COMP_METRICS.keys())
     for fn in COMP_METRICS.values():
@@ -51,7 +59,12 @@ def test_comp_metrics_registry_keys():
 
 def test_comp_plots_registry_keys():
     """COMP_PLOTS registry has expected keys and callables."""
-    expected = {"pca_ablation_table", "distance_matrix", "knn_purity_plot"}
+    expected = {
+        "pca_ablation_table",
+        "distance_matrix",
+        "knn_purity_plot",
+        "knn_purity_distribution_plot",
+    }
     assert expected <= set(COMP_PLOTS.keys())
     for fn in COMP_PLOTS.values():
         assert callable(fn)
@@ -232,6 +245,69 @@ def test_knn_purity_plot_output(tmp_path):
     )
     output_path = tmp_path / "test_knn_purity.png"
     knn_purity_plot({"comparison_df": df}, output_path=output_path)
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_knn_purity_per_query_comparison(tmp_path):
+    """knn_purity_per_query_comparison merges per-experiment per-query CSVs."""
+    exp_dir = tmp_path / "v3" / "config_a" / "layer_11"
+    exp_dir.mkdir(parents=True)
+    df_a = pd.DataFrame(
+        {
+            "k": [1, 1, 5, 5],
+            "class": ["0", "1", "0", "1"],
+            "query_idx": [0, 1, 0, 1],
+            "purity": [1.0, 0.0, 0.6, 0.4],
+        }
+    )
+    df_a.to_csv(exp_dir / "config_a_cls_layer_11_knn_purity_per_query.csv", index=False)
+
+    experiments = [
+        ComparisonExperiment(
+            data_version="v3", config="config_a", strategy="cls", layer="layer_11", label="Exp A"
+        ),
+    ]
+
+    output_dir = tmp_path / "comparisons"
+    output_dir.mkdir()
+
+    result = knn_purity_per_query_comparison(
+        [(exp.label, None) for exp in experiments],
+        processed_data_dir=tmp_path,
+        output_dir=output_dir,
+        prefix="test",
+        experiments=experiments,
+    )
+    assert "comparison_df" in result
+    assert not result["comparison_df"].empty
+    assert "experiment" in result["comparison_df"].columns
+
+    csv_files = list(output_dir.glob("*_knn_purity_per_query_comparison.csv"))
+    assert len(csv_files) == 1
+    gc.collect()
+
+
+def test_knn_purity_distribution_plot_output(tmp_path):
+    """knn_purity_distribution_plot creates a PNG file from per-query data."""
+    rng = np.random.RandomState(0)
+    rows = []
+    for exp in ["A", "B"]:
+        for cls in ["0", "1"]:
+            for k in [1, 5]:
+                for q_idx in range(20):
+                    rows.append(
+                        {
+                            "experiment": exp,
+                            "class": cls,
+                            "k": k,
+                            "query_idx": q_idx,
+                            "purity": float(rng.rand()),
+                        }
+                    )
+    df = pd.DataFrame(rows)
+    output_path = tmp_path / "test_knn_purity_distribution.png"
+    knn_purity_distribution_plot({"comparison_df": df}, output_path=output_path)
     assert output_path.exists()
     gc.collect()
 

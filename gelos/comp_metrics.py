@@ -198,14 +198,69 @@ def knn_purity_comparison(
     return {"comparison_df": merged}
 
 
+def knn_purity_per_query_comparison(
+    experiment_embeddings: list[tuple[str, np.ndarray | None]],
+    processed_data_dir: Path,
+    output_dir: Path,
+    prefix: str,
+    experiments: list | None = None,
+    **kwargs,
+) -> dict:
+    """Join per-experiment KNN per-query purity CSVs into a comparison table.
+
+    Each experiment's ``{prefix}_knn_purity_per_query.csv`` must already exist
+    (produced by the analysis-stage ``knn_purity`` metric). One row per
+    (query, k) per experiment — the distribution that the aggregated
+    comparison collapses to a mean.
+
+    Args:
+        experiment_embeddings: List of (label, embeddings) tuples (embeddings unused here).
+        processed_data_dir: Root processed directory to resolve per-experiment CSVs.
+        output_dir: Directory to write the comparison CSV.
+        prefix: File name prefix for the comparison output.
+        experiments: List of :class:`ComparisonExperiment` objects for path resolution.
+
+    Returns:
+        Dict with ``comparison_df`` key holding the merged DataFrame.
+    """
+    if experiments is None:
+        raise ValueError(
+            "knn_purity_per_query_comparison requires 'experiments' to resolve CSV paths"
+        )
+
+    frames = []
+    for exp in experiments:
+        csv_path = _resolve_metric_csv(exp, processed_data_dir, "knn_purity_per_query")
+        if not csv_path.exists():
+            logger.warning(
+                f"no knn_purity_per_query CSV found for '{exp.label}' at {csv_path}, skipping"
+            )
+            continue
+        df = pd.read_csv(csv_path)
+        df["experiment"] = exp.label
+        frames.append(df)
+
+    if not frames:
+        logger.warning("no KNN per-query purity data found for any experiment")
+        return {"comparison_df": pd.DataFrame()}
+
+    merged = pd.concat(frames, ignore_index=True)
+    csv_path = output_dir / f"{prefix}_knn_purity_per_query_comparison.csv"
+    merged.to_csv(csv_path, index=False)
+    logger.info(f"saved KNN per-query purity comparison to {csv_path}")
+    return {"comparison_df": merged}
+
+
 pca_ablation_comparison.requires_embeddings = False
 cosine_distance.requires_embeddings = True
 wasserstein_distance.requires_embeddings = True
 knn_purity_comparison.requires_embeddings = False
+knn_purity_per_query_comparison.requires_embeddings = False
 
 COMP_METRICS: dict[str, callable] = {
     "pca_ablation_comparison": pca_ablation_comparison,
     "cosine_distance": cosine_distance,
     "wasserstein_distance": wasserstein_distance,
     "knn_purity_comparison": knn_purity_comparison,
+    "knn_purity_per_query_comparison": knn_purity_per_query_comparison,
 }

@@ -124,6 +124,7 @@ def knn_purity(
     query_labels = labels[query_indices]
 
     rows = []
+    per_query_rows = []
     for k in k_values:
         if k > neighbor_indices.shape[1]:
             logger.warning(f"k={k} exceeds available neighbors, skipping")
@@ -134,6 +135,16 @@ def knn_purity(
         # Purity: fraction of neighbors sharing the query's class
         matches = k_neighbor_labels == query_labels[:, np.newaxis]
         per_query_purity = matches.mean(axis=1)
+
+        for q_idx, (cls, p) in enumerate(zip(query_labels, per_query_purity)):
+            per_query_rows.append(
+                {
+                    "k": k,
+                    "class": str(cls),
+                    "query_idx": int(q_idx),
+                    "purity": float(p),
+                }
+            )
 
         # Overall purity
         overall = float(per_query_purity.mean())
@@ -167,6 +178,11 @@ def knn_purity(
     output_dir.mkdir(exist_ok=True, parents=True)
     df.to_csv(csv_path, index=False)
     logger.info(f"saved KNN purity results to {csv_path}")
+
+    per_query_df = pd.DataFrame(per_query_rows)
+    per_query_csv_path = output_dir / f"{prefix}_knn_purity_per_query.csv"
+    per_query_df.to_csv(per_query_csv_path, index=False)
+    logger.info(f"saved KNN per-query purity to {per_query_csv_path}")
 
     return {"rows": rows, "k_values": k_values}
 
