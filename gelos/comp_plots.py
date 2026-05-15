@@ -122,10 +122,23 @@ def distance_matrix(
     plt.close(fig)
 
 
+def _resolve_experiment_colors(
+    experiments: list[str],
+    experiment_colors: dict[str, str] | None,
+) -> dict[str, str]:
+    """Map experiment labels to colors, falling back to tab10 when unset."""
+    experiment_colors = experiment_colors or {}
+    return {
+        exp: experiment_colors.get(exp, plt.colormaps["tab10"](i % 10))
+        for i, exp in enumerate(experiments)
+    }
+
+
 def knn_purity_plot(
     metric_result: dict,
     output_path: str | Path = None,
     class_labels: dict[str, str] | None = None,
+    experiment_colors: dict[str, str] | None = None,
     **kwargs,
 ) -> None:
     """Render KNN class purity comparison as a per-class facet grid.
@@ -151,6 +164,7 @@ def knn_purity_plot(
     classes = sorted(per_class["class"].unique())
     n_classes = len(classes)
 
+    colors = _resolve_experiment_colors(experiments, experiment_colors)
     markers = ["o", "s", "^", "D", "v", "P", "X", "*"]
 
     n_cols = min(6, n_classes) if n_classes else 1
@@ -176,6 +190,7 @@ def knn_purity_plot(
                 subset["k"],
                 subset["purity"],
                 marker=markers[i % len(markers)],
+                color=colors[exp],
                 label=exp,
             )
 
@@ -209,6 +224,7 @@ def knn_purity_distribution_plot(
     metric_result: dict,
     output_path: str | Path = None,
     class_labels: dict[str, str] | None = None,
+    experiment_colors: dict[str, str] | None = None,
     **kwargs,
 ) -> None:
     """Render KNN per-query purity distribution as a per-class facet grid.
@@ -238,19 +254,18 @@ def knn_purity_distribution_plot(
     n_experiments = len(experiments)
     n_k = len(k_values)
 
-    colors = [plt.colormaps["tab10"](i % 10) for i in range(n_experiments)]
+    color_map = _resolve_experiment_colors(experiments, experiment_colors)
+    colors = [color_map[exp] for exp in experiments]
     box_width = 0.8 / max(n_experiments, 1)
 
-    n_cols = min(6, n_classes) if n_classes else 1
+    n_cols = min(2, n_classes) if n_classes else 1
     n_rows = (n_classes + n_cols - 1) // n_cols if n_classes else 1
-    fig_height = max(3, 2.5 * n_rows)
-    fig = plt.figure(figsize=(3.5 * n_cols, fig_height))
-    gs = fig.add_gridspec(n_rows, n_cols, hspace=0.5, wspace=0.3)
+    fig_height = max(3.5, 3.5 * n_rows)
+    fig = plt.figure(figsize=(12, fig_height), constrained_layout=True)
+    gs = fig.add_gridspec(n_rows, n_cols)
 
     for idx, cls in enumerate(classes):
-        row = idx // n_cols
-        col = idx % n_cols
-        ax = fig.add_subplot(gs[row, col])
+        ax = fig.add_subplot(gs[idx // n_cols, idx % n_cols])
 
         for i, exp in enumerate(experiments):
             data_per_k = []
@@ -272,6 +287,13 @@ def knn_purity_distribution_plot(
                 widths=box_width * 0.85,
                 patch_artist=True,
                 showfliers=False,
+                showmeans=True,
+                meanprops={
+                    "marker": "D",
+                    "markerfacecolor": colors[i],
+                    "markeredgecolor": "black",
+                    "markersize": 4,
+                },
             )
             for box in bp["boxes"]:
                 box.set_facecolor(colors[i])
@@ -313,6 +335,7 @@ def per_class_similarity_distribution_plot(
     metric_result: dict,
     output_path: str | Path = None,
     class_labels: dict[str, str] | None = None,
+    experiment_colors: dict[str, str] | None = None,
     *,
     control_label: str,
     n_cols: int = 3,
@@ -360,7 +383,7 @@ def per_class_similarity_distribution_plot(
     n_classes = len(classes)
     n_experiments = len(experiments)
 
-    colors = {exp: plt.colormaps["tab10"](i % 10) for i, exp in enumerate(experiments)}
+    colors = _resolve_experiment_colors(experiments, experiment_colors)
 
     n_cols_effective = min(n_cols, n_classes) if n_classes else 1
     n_rows = (n_classes + n_cols_effective - 1) // n_cols_effective if n_classes else 1
