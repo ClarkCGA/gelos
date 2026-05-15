@@ -139,7 +139,12 @@ def setup_analysis_run(
         )
         embeddings_directories = []
     else:
-        embeddings_directories = [item for item in input_dir.iterdir() if item.is_dir()]
+        # Skip internal scratch dirs (e.g. cloud-embedding `_footprint_cache/`).
+        embeddings_directories = [
+            item
+            for item in input_dir.iterdir()
+            if item.is_dir() and not item.name.startswith(("_", "."))
+        ]
 
     return AnalysisContext(
         yaml_config=yaml_config,

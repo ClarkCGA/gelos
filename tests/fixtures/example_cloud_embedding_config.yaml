@@ -1,0 +1,53 @@
+experiment_name: "AlphaEarth Baseline (stub backend for tests)"
+data_version: "v0.50.1"
+chip_tracker: "gelos_chip_tracker.geojson"
+chip_id_column: "id"
+
+data:
+  class_path: gelos.gelosdatamodule.GELOSDataModule
+  init_args:
+    dataset_class: tests.test_data.ExampleGELOSDataSet
+    batch_size: 1
+    num_workers: 0
+    bands:
+      S2L2A: [blue, green, red]
+
+cloud_embedding:
+  backend: stub  # tests register a StubBackend via monkeypatch; production uses "alphaearth"
+  reference_sensor: S2L2A
+  patch_size: 16
+  # window_chips: 64  # optional — chips per fetch_batch window; trades memory for chunk-sharing.
+  year_strategy:
+    type: from_column
+    column: year
+  init_args:
+    embedding_dim: 64
+  extraction_strategies:
+    center_2x2:
+      title: "Center 2x2 patches"
+      patches: center_2x2
+    center_2x2_flatten:
+      title: "Center 2x2 patches (flattened)"
+      patches: center_2x2
+      pool: flatten
+
+embedding_extraction_strategies:
+  all_tokens:
+    title: "All cloud-embedding tokens"
+    slice_args:
+      - {start: 0, stop: null, step: 1}
+    transforms:
+      - type: pca
+        params: {n_components: 2}
+    plots:
+      - type: scatter_2d
+        transform: pca
+
+style:
+  category_column: "lulc"
+  colors:
+    "1": "#419bdf"
+    "2": "#397d49"
+  labels:
+    "1": "Water"
+    "2": "Trees"

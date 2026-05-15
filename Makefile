@@ -14,8 +14,9 @@ PYTHON_INTERPRETER = python
 ## Install Python dependencies
 .PHONY: requirements
 requirements:
-	pixi install
-	
+	uv pip install -r requirements.txt
+	uv pip install --no-deps -e .
+
 
 
 
@@ -49,11 +50,9 @@ test:
 ## Set up Python interpreter environment
 .PHONY: create_environment
 create_environment:
-	
-	@echo ">>> Pixi environment configured in pyproject.toml. Run 'make requirements' to install dependencies."
-	
-	@echo ">>> Activate with:\npixi shell"
-	
+	@echo ">>> This project installs into a Docker image (see Dockerfile + compose.yml)."
+	@echo ">>> For local dev: 'uv venv && source .venv/bin/activate && make requirements'."
+
 
 
 
