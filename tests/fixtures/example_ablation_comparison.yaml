@@ -1,0 +1,38 @@
+comparison_name: "S2L2A Band Ablations (10% Noise)"
+experiments:
+  - data_version: v0.50.1
+    config: prithvi_control
+    strategy: cls_token
+    layer: encoder_layer_11
+    label: "Control"
+  - data_version: v0.50.1
+    config: prithvi_blue_perturb_10
+    strategy: cls_token
+    layer: encoder_layer_11
+    label: "S2L2A Blue +10% noise"
+  - data_version: v0.50.1
+    config: prithvi_nir_perturb_10
+    strategy: cls_token
+    layer: encoder_layer_11
+    label: "S2L2A NIR Narrow +10% noise"
+class_labels:
+  "1": Water
+  "2": Trees
+  "3": Bare ground
+  "4": Built area
+  "5": Crops
+  "6": Rangeland
+comp_metrics:
+  - type: per_chip_similarity_to_control
+    params:
+      control_label: "Control"
+      chip_tracker_path: "/app/data/raw/v0.50.1/gelos_chip_tracker.geojson"
+      chip_id_column: "id"
+      category_column: "lulc"
+comp_plots:
+  - type: per_class_similarity_distribution_plot
+    metric: per_chip_similarity_to_control
+    params:
+      control_label: "Control"
+      n_cols: 3
+      bins: 50
