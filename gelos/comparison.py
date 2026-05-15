@@ -25,6 +25,7 @@ class ComparisonExperiment:
     strategy: str
     layer: str
     label: str
+    color: str | None = None
 
 
 @dataclass
@@ -39,14 +40,7 @@ class ComparisonContext:
     output_dir: Path
     figures_dir: Path
     class_labels: dict[str, str]
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-    experiment_colors: dict[str, str] | None = None
-=======
     experiment_colors: dict[str, str]
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 
 
 def _resolve_embedding_path(exp: ComparisonExperiment, processed_data_dir: Path) -> Path:
@@ -88,6 +82,7 @@ def setup_comparison(
                 strategy=exp_cfg["strategy"],
                 layer=exp_cfg["layer"],
                 label=exp_cfg["label"],
+                color=exp_cfg.get("color"),
             )
         )
     experiment_colors = {exp.label: exp.color for exp in experiments if exp.color}
@@ -114,6 +109,7 @@ def setup_comparison(
         output_dir=output_dir,
         figures_dir=figures_dir,
         class_labels=class_labels,
+        experiment_colors=experiment_colors,
     )
 
 
@@ -225,6 +221,7 @@ def run_comparison(
             metric_results[source_metric],
             output_path=output_path,
             class_labels=ctx.class_labels,
+            experiment_colors=ctx.experiment_colors,
             **p_params,
         )
         logger.info(f"comparison plot saved to {output_path}")
