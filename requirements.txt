@@ -15,3 +15,4 @@ pillow
 timm~=1.0.24
 einops
 loguru
+zarr>=3.0

@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import random
 
+from loguru import logger
 import numpy as np
 import pyarrow as pa
 import pyarrow.dataset as ds
