@@ -10,6 +10,7 @@ from gelos.comp_metrics import (
     knn_purity_comparison,
     knn_purity_per_query_comparison,
     pca_ablation_comparison,
+    per_chip_similarity_to_control,
     wasserstein_distance,
 )
 from gelos.comp_plots import (
@@ -18,6 +19,7 @@ from gelos.comp_plots import (
     knn_purity_distribution_plot,
     knn_purity_plot,
     pca_ablation_table,
+    per_class_similarity_distribution_plot,
 )
 from gelos.comparison import ComparisonExperiment, setup_comparison
 
@@ -51,6 +53,7 @@ def test_comp_metrics_registry_keys():
         "wasserstein_distance",
         "knn_purity_comparison",
         "knn_purity_per_query_comparison",
+        "per_chip_similarity_to_control",
     }
     assert expected <= set(COMP_METRICS.keys())
     for fn in COMP_METRICS.values():
@@ -64,6 +67,7 @@ def test_comp_plots_registry_keys():
         "distance_matrix",
         "knn_purity_plot",
         "knn_purity_distribution_plot",
+        "per_class_similarity_distribution_plot",
     }
     assert expected <= set(COMP_PLOTS.keys())
     for fn in COMP_PLOTS.values():
@@ -350,4 +354,200 @@ def test_setup_comparison_missing_path(tmp_path):
     assert ctx.comparison_name == "Test Comparison"
     assert ctx.output_dir.exists()
     assert ctx.figures_dir.exists()
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Tests: per_chip_similarity_to_control
+# ---------------------------------------------------------------------------
+
+
+def _write_experiment_cache(
+    processed_data_dir,
+    exp: ComparisonExperiment,
+    embeddings: np.ndarray,
+    chip_indices: np.ndarray,
+) -> None:
+    """Write ``{prefix}_embeddings.npy`` and ``{prefix}_chip_indices.npy`` for an exp."""
+    from gelos.analysis import build_prefix
+
+    prefix = build_prefix(exp.config, exp.strategy, exp.layer)
+    layer_dir = processed_data_dir / exp.data_version / exp.config / exp.layer
+    layer_dir.mkdir(parents=True, exist_ok=True)
+    np.save(layer_dir / f"{prefix}_embeddings.npy", embeddings)
+    np.save(layer_dir / f"{prefix}_chip_indices.npy", chip_indices)
+
+
+def _write_chip_tracker_csv(path, ids, classes) -> None:
+    pd.DataFrame({"id": ids, "lulc": classes}).to_csv(path, index=False)
+
+
+def test_per_chip_similarity_to_control(tmp_path):
+    """per_chip_similarity_to_control aligns chips and writes both CSVs."""
+    rng = np.random.RandomState(0)
+    chip_ids = np.array([10, 11, 12, 13])
+    classes = ["A", "A", "B", "B"]
+
+    control_emb = rng.rand(4, 8).astype(np.float32)
+    ablation_emb = control_emb + 0.1 * rng.randn(4, 8).astype(np.float32)
+
+    control_exp = ComparisonExperiment(
+        data_version="v1",
+        config="cfg",
+        strategy="cls",
+        layer="layer_11",
+        label="Control",
+    )
+    ablation_exp = ComparisonExperiment(
+        data_version="v1",
+        config="cfg_abl",
+        strategy="cls",
+        layer="layer_11",
+        label="Ablation",
+    )
+    _write_experiment_cache(tmp_path, control_exp, control_emb, chip_ids)
+    _write_experiment_cache(tmp_path, ablation_exp, ablation_emb, chip_ids)
+
+    tracker_path = tmp_path / "tracker.csv"
+    _write_chip_tracker_csv(tracker_path, chip_ids, classes)
+
+    output_dir = tmp_path / "comparisons"
+    output_dir.mkdir()
+
+    result = per_chip_similarity_to_control(
+        [("Control", None), ("Ablation", None)],
+        processed_data_dir=tmp_path,
+        output_dir=output_dir,
+        prefix="test",
+        experiments=[control_exp, ablation_exp],
+        control_label="Control",
+        chip_tracker_path=tracker_path,
+        chip_id_column="id",
+        category_column="lulc",
+    )
+
+    assert "comparison_df" in result and "summary_df" in result
+    long_df = result["comparison_df"]
+    assert set(long_df.columns) == {"experiment", "file_id", "class", "cosine_similarity"}
+    # 2 experiments × 4 chips
+    assert len(long_df) == 8
+
+    control_sims = long_df[long_df["experiment"] == "Control"]["cosine_similarity"].to_numpy()
+    np.testing.assert_allclose(control_sims, 1.0, atol=1e-6)
+
+    summary = result["summary_df"]
+    # 2 experiments × 2 classes
+    assert len(summary) == 4
+    assert {"experiment", "class", "n", "median", "ks_vs_control_stat"} <= set(summary.columns)
+
+    assert (output_dir / "test_per_chip_similarity_to_control.csv").exists()
+    assert (output_dir / "test_per_chip_similarity_to_control_summary.csv").exists()
+    gc.collect()
+
+
+def test_per_chip_similarity_to_control_missing_control(tmp_path):
+    """Unknown control_label raises ValueError."""
+    exp = ComparisonExperiment(
+        data_version="v1",
+        config="cfg",
+        strategy="cls",
+        layer="layer_11",
+        label="Ablation",
+    )
+    with pytest.raises(ValueError, match="control_label"):
+        per_chip_similarity_to_control(
+            [("Ablation", None)],
+            processed_data_dir=tmp_path,
+            output_dir=tmp_path,
+            prefix="test",
+            experiments=[exp],
+            control_label="Control",  # not in experiments
+            chip_tracker_path=tmp_path / "tracker.csv",
+            chip_id_column="id",
+            category_column="lulc",
+        )
+    gc.collect()
+
+
+def test_per_chip_similarity_to_control_partial_overlap(tmp_path):
+    """Chips not in both runs are dropped; result size = intersection × n_experiments."""
+    rng = np.random.RandomState(1)
+    control_ids = np.array([1, 2, 3, 4])
+    ablation_ids = np.array([3, 4, 5, 6])  # 2-chip intersection
+    classes_lookup = {1: "A", 2: "A", 3: "B", 4: "B", 5: "A", 6: "B"}
+
+    control_emb = rng.rand(4, 6).astype(np.float32)
+    ablation_emb = rng.rand(4, 6).astype(np.float32)
+
+    control_exp = ComparisonExperiment(
+        data_version="v1",
+        config="cfg",
+        strategy="cls",
+        layer="layer_11",
+        label="Control",
+    )
+    ablation_exp = ComparisonExperiment(
+        data_version="v1",
+        config="cfg_abl",
+        strategy="cls",
+        layer="layer_11",
+        label="Ablation",
+    )
+    _write_experiment_cache(tmp_path, control_exp, control_emb, control_ids)
+    _write_experiment_cache(tmp_path, ablation_exp, ablation_emb, ablation_ids)
+
+    tracker_path = tmp_path / "tracker.csv"
+    all_ids = sorted(classes_lookup.keys())
+    _write_chip_tracker_csv(tracker_path, all_ids, [classes_lookup[i] for i in all_ids])
+
+    output_dir = tmp_path / "comparisons"
+    output_dir.mkdir()
+
+    result = per_chip_similarity_to_control(
+        [("Control", None), ("Ablation", None)],
+        processed_data_dir=tmp_path,
+        output_dir=output_dir,
+        prefix="test",
+        experiments=[control_exp, ablation_exp],
+        control_label="Control",
+        chip_tracker_path=tracker_path,
+        chip_id_column="id",
+        category_column="lulc",
+    )
+
+    long_df = result["comparison_df"]
+    # 2 experiments × 2-chip intersection
+    assert len(long_df) == 4
+    # The intersection is {3, 4} — each experiment should contain exactly those ids
+    for exp_label in ("Control", "Ablation"):
+        sub = long_df[long_df["experiment"] == exp_label]
+        assert sorted(sub["file_id"].tolist()) == [3, 4]
+    gc.collect()
+
+
+def test_per_class_similarity_distribution_plot_output(tmp_path):
+    """per_class_similarity_distribution_plot creates a PNG from a long-form df."""
+    rng = np.random.RandomState(0)
+    rows = []
+    for exp in ["Control", "Blue", "NIR"]:
+        for cls in ["0", "1"]:
+            for _ in range(30):
+                rows.append(
+                    {
+                        "experiment": exp,
+                        "file_id": rng.randint(0, 10_000),
+                        "class": cls,
+                        "cosine_similarity": (
+                            1.0 if exp == "Control" else float(rng.uniform(0.5, 1.0))
+                        ),
+                    }
+                )
+    df = pd.DataFrame(rows)
+    output_path = tmp_path / "test_per_class_similarity_distribution.png"
+    per_class_similarity_distribution_plot(
+        {"comparison_df": df},
+        output_path=output_path,
+        control_label="Control",
+    )
+    assert output_path.exists()
     gc.collect()

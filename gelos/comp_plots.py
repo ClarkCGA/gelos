@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import combinations
 from pathlib import Path
 
 from loguru import logger
@@ -7,6 +8,7 @@ from matplotlib.patches import Patch
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.stats import ks_2samp
 
 
 def pca_ablation_table(
@@ -307,9 +309,172 @@ def knn_purity_distribution_plot(
     plt.close(fig)
 
 
+def per_class_similarity_distribution_plot(
+    metric_result: dict,
+    output_path: str | Path = None,
+    class_labels: dict[str, str] | None = None,
+    *,
+    control_label: str,
+    n_cols: int = 3,
+    bins: int = 40,
+    x_range: tuple[float, float] | None = None,
+    max_ks_annotations: int = 6,
+    include_control_series: bool = False,
+    **kwargs,
+) -> None:
+    """Per-class overlaid histograms of per-chip cosine similarity to the control.
+
+    One subplot per class; one histogram series per ablation experiment.
+    Dashed vertical lines mark each series' median. KS-test stats for the
+    experiment pairs present in that class are annotated upper-left.
+
+    Args:
+        metric_result: Output from ``per_chip_similarity_to_control``.
+        output_path: Path to save the figure. Shows interactively if None.
+        class_labels: Optional mapping from class id (as string) to display name.
+        control_label: Label of the control experiment. Used to filter the
+            control series from the overlay (since all values are 1.0) unless
+            ``include_control_series`` is True.
+        n_cols: Number of subplot columns in the facet grid.
+        bins: Number of histogram bins.
+        x_range: Optional fixed (min, max) x-axis range. Autoscales if None.
+        max_ks_annotations: When all-pairs KS would exceed this count, fall
+            back to ``<ablation> vs control`` pairs only.
+        include_control_series: If True, render the control's self-similarity
+            series (all values = 1.0). Off by default — it's uninformative.
+    """
+    df = metric_result.get("comparison_df", pd.DataFrame())
+    if df.empty:
+        logger.warning("no data for per-class similarity distribution plot, skipping")
+        return
+
+    class_labels = class_labels or {}
+
+    plot_df = df if include_control_series else df[df["experiment"] != control_label]
+    if plot_df.empty:
+        logger.warning("no ablation series to plot (only control present), skipping")
+        return
+
+    experiments = sorted(plot_df["experiment"].unique().tolist())
+    classes = sorted(plot_df["class"].unique().tolist())
+    n_classes = len(classes)
+    n_experiments = len(experiments)
+
+    colors = {exp: plt.colormaps["tab10"](i % 10) for i, exp in enumerate(experiments)}
+
+    n_cols_effective = min(n_cols, n_classes) if n_classes else 1
+    n_rows = (n_classes + n_cols_effective - 1) // n_cols_effective if n_classes else 1
+    fig_height = max(3, 2.5 * n_rows)
+    fig = plt.figure(figsize=(3.5 * n_cols_effective, fig_height))
+    gs = fig.add_gridspec(n_rows, n_cols_effective, hspace=0.5, wspace=0.3)
+
+    for idx, cls in enumerate(classes):
+        row = idx // n_cols_effective
+        col = idx % n_cols_effective
+        ax = fig.add_subplot(gs[row, col])
+        is_bottom_row = row == n_rows - 1
+        is_left_col = col == 0
+
+        # Per-class data: KS pairs are computed against the *full* df so the
+        # comparison can include the control series even when it isn't drawn.
+        ks_pool = df[df["class"] == cls]
+        ks_experiments = sorted(ks_pool["experiment"].unique().tolist())
+        all_pairs = list(combinations(ks_experiments, 2))
+        if len(all_pairs) > max_ks_annotations and control_label in ks_experiments:
+            ks_pairs = [(a, b) for a, b in all_pairs if control_label in (a, b)]
+            logger.info(
+                f"class '{cls}': truncating {len(all_pairs)} KS pairs to "
+                f"{len(ks_pairs)} control-only pairs"
+            )
+        else:
+            ks_pairs = all_pairs
+
+        ks_lines: list[str] = []
+        for a, b in ks_pairs:
+            va = ks_pool[ks_pool["experiment"] == a]["cosine_similarity"].to_numpy()
+            vb = ks_pool[ks_pool["experiment"] == b]["cosine_similarity"].to_numpy()
+            if va.size == 0 or vb.size == 0:
+                continue
+            res = ks_2samp(va, vb)
+            ks_lines.append(f"{a} vs {b}: KS={res.statistic:.3f}, p={res.pvalue:.2e}")
+
+        any_drawn = False
+        for exp in experiments:
+            values = plot_df[(plot_df["experiment"] == exp) & (plot_df["class"] == cls)][
+                "cosine_similarity"
+            ].to_numpy()
+            if values.size == 0:
+                continue
+            any_drawn = True
+            weights = np.full_like(values, 100.0 / values.size, dtype=float)
+            hist_kwargs = {
+                "bins": bins,
+                "alpha": 0.5,
+                "color": colors[exp],
+                "weights": weights,
+                "label": exp,
+            }
+            if x_range is not None:
+                hist_kwargs["range"] = x_range
+            ax.hist(values, **hist_kwargs)
+            ax.axvline(np.median(values), linestyle="--", color=colors[exp], linewidth=1.2)
+
+        if ks_lines:
+            ax.text(
+                0.02,
+                0.98,
+                "\n".join(ks_lines),
+                transform=ax.transAxes,
+                va="top",
+                ha="left",
+                fontsize=8,
+            )
+
+        display = class_labels.get(str(cls), str(cls))
+        ax.set_title(display)
+        if is_bottom_row:
+            ax.set_xlabel("Cosine Similarity to Control Embeddings")
+        if is_left_col:
+            ax.set_ylabel("Percentage of Samples (%)")
+        if x_range is not None:
+            ax.set_xlim(*x_range)
+        ax.grid(True, alpha=0.3)
+        if not any_drawn:
+            ax.text(
+                0.5,
+                0.5,
+                "no data",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                fontsize=10,
+                color="gray",
+            )
+
+    if n_experiments:
+        handles = [
+            Patch(facecolor=colors[exp], edgecolor="none", alpha=0.5, label=exp)
+            for exp in experiments
+        ]
+        fig.legend(
+            handles,
+            experiments,
+            loc="upper center",
+            ncol=min(n_experiments, 4),
+            bbox_to_anchor=(0.5, -0.02),
+        )
+
+    if output_path:
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
 COMP_PLOTS: dict[str, callable] = {
     "pca_ablation_table": pca_ablation_table,
     "distance_matrix": distance_matrix,
     "knn_purity_plot": knn_purity_plot,
     "knn_purity_distribution_plot": knn_purity_distribution_plot,
+    "per_class_similarity_distribution_plot": per_class_similarity_distribution_plot,
 }
