@@ -39,6 +39,14 @@ class ComparisonContext:
     output_dir: Path
     figures_dir: Path
     class_labels: dict[str, str]
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+    experiment_colors: dict[str, str] | None = None
+=======
+    experiment_colors: dict[str, str]
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 
 
 def _resolve_embedding_path(exp: ComparisonExperiment, processed_data_dir: Path) -> Path:
@@ -82,6 +90,7 @@ def setup_comparison(
                 label=exp_cfg["label"],
             )
         )
+    experiment_colors = {exp.label: exp.color for exp in experiments if exp.color}
 
     comp_metrics = yaml_config.get("comp_metrics", [])
     comp_plots = yaml_config.get("comp_plots", [])
