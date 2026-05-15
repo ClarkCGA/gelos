@@ -8,14 +8,7 @@ Pin to a specific release tag to avoid unexpected breakage:
 pip install git+https://github.com/ClarkCGA/gelos@v0.2.0
 ```
 
-Or with pixi, add it as a pypi dependency in your `pyproject.toml`:
-
-```toml
-[tool.pixi.pypi-dependencies]
-gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v0.2.0"}
-```
-
-Check [Releases](https://github.com/ClarkCGA/gelos/releases) for available versions and changelogs. When updating, bump the tag in your `pyproject.toml` or `requirements.txt` and re-run `pixi install` or `pip install`.
+Check [Releases](https://github.com/ClarkCGA/gelos/releases) for available versions and changelogs. When updating, bump the tag in your install command and reinstall.
 
 ## Environment Setup
 

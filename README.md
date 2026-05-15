@@ -16,14 +16,7 @@ Pin to a specific release tag:
 pip install git+https://github.com/ClarkCGA/gelos@v0.2.0
 ```
 
-Or with pixi:
-
-```toml
-[tool.pixi.pypi-dependencies]
-gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v0.2.0"}
-```
-
-Check [Releases](https://github.com/ClarkCGA/gelos/releases) for available versions and what changed in each. When updating, review the [CHANGELOG](CHANGELOG.md) and bump the tag in your `pyproject.toml` or `requirements.txt`.
+Check [Releases](https://github.com/ClarkCGA/gelos/releases) for available versions and what changed in each. When updating, review the [CHANGELOG](CHANGELOG.md) and bump the tag in your install command.
 
 ## Adapting GELOS to a new dataset
 

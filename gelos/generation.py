@@ -121,6 +121,21 @@ def generate_embeddings(
     embedding_dir: Path,
     overwrite: bool = False,
 ) -> None:
+    with open(yaml_path, "r") as f:
+        yaml_config = yaml.safe_load(f)
+    has_cloud = "cloud_embedding" in yaml_config
+    has_model = "model" in yaml_config
+    if has_cloud and has_model:
+        raise ValueError(
+            f"{yaml_path}: YAML has both 'cloud_embedding' and 'model' blocks; "
+            "choose one — they're mutually exclusive generation paths."
+        )
+    if has_cloud:
+        from gelos.cloud_embeddings.runner import generate_cloud_embeddings
+
+        return generate_cloud_embeddings(
+            yaml_path, raw_data_dir, embedding_dir, overwrite=overwrite
+        )
 
     datamodule, task, trainer, output_dir = setup_embedding_run(
         yaml_path, raw_data_dir, embedding_dir
