@@ -94,8 +94,6 @@ class RawPixelEmbeddingTask(BaseTask):
         timestep_indices = self._resolve_timestep_indices(spec, T)
 
         total = len(timestep_indices) * len(patch_indices)
-        if total > 4:
-            raise ValueError(f"strategy '{name}' resolves to {total} tokens, max is 4")
 
         tokens = [
             grid[:, t_idx, r, c, :] for t_idx, (r, c) in product(timestep_indices, patch_indices)
