@@ -13,7 +13,7 @@ Read the full documentation on using for a project at the [GELOS Docs](https://c
 Pin to a specific release tag:
 
 ```
-pip install git+https://github.com/ClarkCGA/gelos@v0.2.0
+pip install git+https://github.com/ClarkCGA/gelos@v0.3.6
 ```
 
 Check [Releases](https://github.com/ClarkCGA/gelos/releases) for available versions and what changed in each. When updating, review the [CHANGELOG](CHANGELOG.md) and bump the tag in your install command.

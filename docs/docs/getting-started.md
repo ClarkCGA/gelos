@@ -5,7 +5,7 @@
 Pin to a specific release tag to avoid unexpected breakage:
 
 ```
-pip install git+https://github.com/ClarkCGA/gelos@v0.2.0
+pip install git+https://github.com/ClarkCGA/gelos@v0.3.6
 ```
 
 Check [Releases](https://github.com/ClarkCGA/gelos/releases) for available versions and changelogs. When updating, bump the tag in your install command and reinstall.
