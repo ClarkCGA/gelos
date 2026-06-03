@@ -43,10 +43,18 @@ def scatter_2d(
     fig = plt.figure(figsize=(10, 8))
     plt.scatter(embeddings[:, 1], -embeddings[:, 0], c=colors, s=2)
     plt.suptitle(
-        f"{transform_title} Visualization of Embeddings for {experiment_name} Layer {embedding_layer}",
+        f"{transform_title} Visualization of Embeddings for {experiment_name}",
         fontsize=14,
     )
     plt.title(strategy_title)
+    plt.figtext(
+        0.5,
+        0.01,
+        "Embeddings from the model's final transformer layer.",
+        ha="center",
+        fontsize=8,
+        color="gray",
+    )
     plt.xlabel(f"{transform_title} Dimension 1", fontsize=12)
     plt.ylabel(f"{transform_title} Dimension 2", fontsize=12)
     if axis_lim:
@@ -159,8 +167,16 @@ def temporal_cosine_similarity(
 
     fig.suptitle(
         f"{experiment_name} Embedding Trajectories by Land Cover Category "
-        f"(Layer {embedding_layer}, {strategy_title})",
+        f"({strategy_title})",
         fontsize=16,
+    )
+    fig.text(
+        0.5,
+        0.005,
+        "Embeddings from the model's final transformer layer.",
+        ha="center",
+        fontsize=8,
+        color="gray",
     )
 
     if output_path:
@@ -216,7 +232,15 @@ def confusion_matrix(
         f"{experiment_name} — {model_type.upper()} Confusion Matrix",
         fontsize=14,
     )
-    ax.set_title(f"{strategy_title} (Layer {embedding_layer})", fontsize=11)
+    ax.set_title(strategy_title, fontsize=11)
+    fig.text(
+        0.5,
+        0.01,
+        "Embeddings from the model's final transformer layer.",
+        ha="center",
+        fontsize=8,
+        color="gray",
+    )
 
     for i in range(n):
         for j in range(n):

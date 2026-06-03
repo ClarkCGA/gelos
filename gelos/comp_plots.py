@@ -139,6 +139,7 @@ def knn_purity_plot(
     output_path: str | Path = None,
     class_labels: dict[str, str] | None = None,
     experiment_colors: dict[str, str] | None = None,
+    n_cols: int | None = None,
     **kwargs,
 ) -> None:
     """Render KNN class purity comparison as a per-class facet grid.
@@ -167,7 +168,7 @@ def knn_purity_plot(
     colors = _resolve_experiment_colors(experiments, experiment_colors)
     markers = ["o", "s", "^", "D", "v", "P", "X", "*"]
 
-    n_cols = min(6, n_classes) if n_classes else 1
+    n_cols = n_cols if n_cols is not None else (min(6, n_classes) if n_classes else 1)
     n_rows = (n_classes + n_cols - 1) // n_cols if n_classes else 1
     fig_height = max(3, 2.5 * n_rows)
     fig = plt.figure(figsize=(3.5 * n_cols, fig_height))
@@ -336,6 +337,7 @@ def knn_purity_violin_distribution_plot(
     output_path: str | Path = None,
     class_labels: dict[str, str] | None = None,
     experiment_colors: dict[str, str] | None = None,
+    n_cols: int | None = None,
     *,
     split: bool | None = None,
     split_pairs: list[list[str]] | None = None,
@@ -359,6 +361,8 @@ def knn_purity_violin_distribution_plot(
         class_labels: Optional mapping from class id (as string) to display
             name. Used for facet subplot titles. Falls back to raw class id.
         experiment_colors: Optional mapping from experiment label to color.
+        n_cols: Optional override for the number of facet-grid columns. When
+            None (default) it is auto-calculated as ``min(2, n_classes)``.
         split: Force split (True) or side-by-side single (False) violins. When
             None (default) split is used automatically iff there are exactly two
             experiments. Ignored when ``split_pairs`` is provided.
@@ -443,7 +447,7 @@ def knn_purity_violin_distribution_plot(
         med = float(np.median(values))
         ax.hlines(med, x - half, x + half, color="black", linewidth=1)
 
-    n_cols = min(2, n_classes) if n_classes else 1
+    n_cols = n_cols if n_cols is not None else (min(2, n_classes) if n_classes else 1)
     n_rows = (n_classes + n_cols - 1) // n_cols if n_classes else 1
     fig_height = max(3.5, 3.5 * n_rows)
     fig = plt.figure(figsize=(12, fig_height), constrained_layout=True)
