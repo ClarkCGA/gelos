@@ -331,6 +331,282 @@ def knn_purity_distribution_plot(
     plt.close(fig)
 
 
+def knn_purity_violin_distribution_plot(
+    metric_result: dict,
+    output_path: str | Path = None,
+    class_labels: dict[str, str] | None = None,
+    experiment_colors: dict[str, str] | None = None,
+    *,
+    split: bool | None = None,
+    split_pairs: list[list[str]] | None = None,
+    **kwargs,
+) -> None:
+    """Render KNN per-query purity distribution as violin plots.
+
+    A violin alternative to :func:`knn_purity_distribution_plot`. Consumes the
+    identical metric output (``knn_purity_per_query_comparison``). One subplot
+    per class; the x-axis enumerates k values. When exactly two experiments are
+    compared the violins at each k are drawn as a *split* violin (experiment 0 =
+    left half, experiment 1 = right half) which is especially effective for
+    contrasting two groups (e.g. multitemporal vs single time step). Otherwise
+    (1 or 3+ experiments) side-by-side single violins are drawn. The mean is
+    marked with a diamond and the median with a short horizontal line, matching
+    the box-plot variant.
+
+    Args:
+        metric_result: Output from ``knn_purity_per_query_comparison`` metric.
+        output_path: Path to save the figure. Shows interactively if None.
+        class_labels: Optional mapping from class id (as string) to display
+            name. Used for facet subplot titles. Falls back to raw class id.
+        experiment_colors: Optional mapping from experiment label to color.
+        split: Force split (True) or side-by-side single (False) violins. When
+            None (default) split is used automatically iff there are exactly two
+            experiments. Ignored when ``split_pairs`` is provided.
+        split_pairs: Optional list of 2-element experiment-name lists. Each pair
+            is rendered as one split violin (``exp[0]`` = left half, ``exp[1]`` =
+            right half) per k tick, with the pairs laid out side-by-side. Any
+            experiment not named in a valid, retained pair is appended as a
+            single violin (in sorted ``experiments`` order). When provided,
+            ``split_pairs`` takes precedence over ``split`` (and the automatic
+            two-experiment split rule). A malformed pair (not exactly two names)
+            or a pair naming an experiment absent from the data logs a warning
+            and is skipped.
+    """
+    df = metric_result.get("comparison_df", pd.DataFrame())
+    if df.empty:
+        logger.warning("no data for KNN purity violin distribution plot, skipping")
+        return
+
+    class_labels = class_labels or {}
+
+    experiments = sorted(df["experiment"].unique())
+    classes = sorted(df["class"].unique())
+    k_values = sorted(df["k"].unique())
+    n_classes = len(classes)
+    n_experiments = len(experiments)
+    n_k = len(k_values)
+
+    color_map = _resolve_experiment_colors(experiments, experiment_colors)
+    colors = [color_map[exp] for exp in experiments]
+    violin_width = 0.8 / max(n_experiments, 1)
+
+    do_split = split if split is not None else (n_experiments == 2)
+
+    # Build a validated slot layout when split_pairs is provided. This takes
+    # precedence over `split`/`do_split` (see docstring).
+    slots: list[tuple] = []
+    slot_width = 0.8
+    if split_pairs is not None:
+        experiment_set = set(experiments)
+        valid_pairs: list[tuple[str, str]] = []
+        for pair in split_pairs:
+            if len(pair) != 2:
+                logger.warning(
+                    f"split_pairs entry {pair!r} is not a pair of two experiments, skipping"
+                )
+                continue
+            e0, e1 = pair
+            missing = [e for e in (e0, e1) if e not in experiment_set]
+            if missing:
+                logger.warning(
+                    f"split_pairs entry {pair!r} names experiment(s) {missing!r} "
+                    "not present in the data, skipping"
+                )
+                continue
+            valid_pairs.append((e0, e1))
+        paired = {e for pair in valid_pairs for e in pair}
+        unpaired = [e for e in experiments if e not in paired]
+        slots = [("pair", e0, e1) for (e0, e1) in valid_pairs]
+        slots += [("single", e) for e in unpaired]
+        n_slots = len(slots)
+        slot_width = 0.8 / max(n_slots, 1)
+
+    def _style_body(body, color):
+        body.set_facecolor(color)
+        body.set_edgecolor("black")
+        body.set_alpha(0.7)
+
+    def _mean_median(ax, x, values, color, half=None):
+        """Draw the mean diamond and a short median line for one violin/half."""
+        if half is None:
+            half = violin_width * 0.2
+        ax.plot(
+            x,
+            float(np.mean(values)),
+            marker="D",
+            markerfacecolor=color,
+            markeredgecolor="black",
+            markersize=4,
+            linestyle="none",
+            zorder=5,
+        )
+        med = float(np.median(values))
+        ax.hlines(med, x - half, x + half, color="black", linewidth=1)
+
+    n_cols = min(2, n_classes) if n_classes else 1
+    n_rows = (n_classes + n_cols - 1) // n_cols if n_classes else 1
+    fig_height = max(3.5, 3.5 * n_rows)
+    fig = plt.figure(figsize=(12, fig_height), constrained_layout=True)
+    gs = fig.add_gridspec(n_rows, n_cols)
+
+    for idx, cls in enumerate(classes):
+        ax = fig.add_subplot(gs[idx // n_cols, idx % n_cols])
+
+        if split_pairs is not None:
+            for k_idx, k in enumerate(k_values):
+                center = float(k_idx)
+                for s_idx, slot in enumerate(slots):
+                    slot_center = center + (s_idx - (n_slots - 1) / 2) * slot_width
+                    if slot[0] == "pair":
+                        _, e0, e1 = slot
+                        drew_center_line = False
+                        for half_idx, exp in enumerate((e0, e1)):
+                            values = df[
+                                (df["experiment"] == exp) & (df["class"] == cls) & (df["k"] == k)
+                            ]["purity"].to_numpy()
+                            if values.size == 0:
+                                continue
+                            left = half_idx == 0
+                            marker_x = slot_center + (
+                                -slot_width * 0.25 if left else slot_width * 0.25
+                            )
+                            if values.size >= 2 and np.ptp(values) > 0:
+                                parts = ax.violinplot(
+                                    [values],
+                                    positions=[slot_center],
+                                    # Clamp the split-body width to the slot so
+                                    # adjacent slots do not overlap.
+                                    widths=min(slot_width * 1.7, slot_width),
+                                    showextrema=False,
+                                    showmeans=False,
+                                    showmedians=False,
+                                )
+                                for body in parts["bodies"]:
+                                    verts = body.get_paths()[0].vertices
+                                    if left:
+                                        verts[:, 0] = np.minimum(verts[:, 0], slot_center)
+                                    else:
+                                        verts[:, 0] = np.maximum(verts[:, 0], slot_center)
+                                    _style_body(body, color_map[exp])
+                                if not drew_center_line:
+                                    ax.axvline(
+                                        slot_center,
+                                        color="black",
+                                        linewidth=0.6,
+                                        alpha=0.4,
+                                        zorder=1,
+                                    )
+                                    drew_center_line = True
+                            _mean_median(
+                                ax, marker_x, values, color_map[exp], half=slot_width * 0.2
+                            )
+                    else:
+                        _, exp = slot
+                        values = df[
+                            (df["experiment"] == exp) & (df["class"] == cls) & (df["k"] == k)
+                        ]["purity"].to_numpy()
+                        if values.size == 0:
+                            continue
+                        if values.size >= 2 and np.ptp(values) > 0:
+                            parts = ax.violinplot(
+                                [values],
+                                positions=[slot_center],
+                                widths=slot_width * 0.85,
+                                showextrema=False,
+                                showmeans=False,
+                                showmedians=False,
+                            )
+                            for body in parts["bodies"]:
+                                _style_body(body, color_map[exp])
+                        _mean_median(
+                            ax, slot_center, values, color_map[exp], half=slot_width * 0.2
+                        )
+        elif do_split and n_experiments == 2:
+            for k_idx, k in enumerate(k_values):
+                center = float(k_idx)
+                drew_center_line = False
+                for i, exp in enumerate(experiments):
+                    values = df[(df["experiment"] == exp) & (df["class"] == cls) & (df["k"] == k)][
+                        "purity"
+                    ].to_numpy()
+                    if values.size == 0:
+                        continue
+                    left = i == 0
+                    # Nudge the mean/median marker toward the populated half.
+                    marker_x = center + (-violin_width * 0.25 if left else violin_width * 0.25)
+                    if values.size >= 2 and np.ptp(values) > 0:
+                        parts = ax.violinplot(
+                            [values],
+                            positions=[center],
+                            widths=violin_width * 1.7,
+                            showextrema=False,
+                            showmeans=False,
+                            showmedians=False,
+                        )
+                        for body in parts["bodies"]:
+                            verts = body.get_paths()[0].vertices
+                            if left:
+                                verts[:, 0] = np.minimum(verts[:, 0], center)
+                            else:
+                                verts[:, 0] = np.maximum(verts[:, 0], center)
+                            _style_body(body, colors[i])
+                        if not drew_center_line:
+                            ax.axvline(center, color="black", linewidth=0.6, alpha=0.4, zorder=1)
+                            drew_center_line = True
+                    _mean_median(ax, marker_x, values, colors[i])
+        else:
+            for i, exp in enumerate(experiments):
+                offset = (i - (n_experiments - 1) / 2) * violin_width
+                for k_idx, k in enumerate(k_values):
+                    values = df[(df["experiment"] == exp) & (df["class"] == cls) & (df["k"] == k)][
+                        "purity"
+                    ].to_numpy()
+                    if values.size == 0:
+                        continue
+                    x = k_idx + offset
+                    if values.size >= 2 and np.ptp(values) > 0:
+                        parts = ax.violinplot(
+                            [values],
+                            positions=[x],
+                            widths=violin_width * 0.85,
+                            showextrema=False,
+                            showmeans=False,
+                            showmedians=False,
+                        )
+                        for body in parts["bodies"]:
+                            _style_body(body, colors[i])
+                    _mean_median(ax, x, values, colors[i])
+
+        display = class_labels.get(str(cls), str(cls))
+        ax.set_title(display)
+        ax.set_xlabel("k")
+        ax.set_ylabel("Purity")
+        ax.set_ylim(0, 1.05)
+        ax.set_xticks(range(n_k))
+        ax.set_xticklabels([str(k) for k in k_values])
+        ax.set_xlim(-0.5, n_k - 0.5)
+        ax.grid(True, alpha=0.3)
+
+    if n_experiments:
+        handles = [
+            Patch(facecolor=colors[i], edgecolor="black", label=experiments[i])
+            for i in range(n_experiments)
+        ]
+        fig.legend(
+            handles,
+            experiments,
+            loc="upper center",
+            ncol=min(n_experiments, 4),
+            bbox_to_anchor=(0.5, -0.02),
+        )
+
+    if output_path:
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
 def per_class_similarity_distribution_plot(
     metric_result: dict,
     output_path: str | Path = None,
@@ -499,5 +775,6 @@ COMP_PLOTS: dict[str, callable] = {
     "distance_matrix": distance_matrix,
     "knn_purity_plot": knn_purity_plot,
     "knn_purity_distribution_plot": knn_purity_distribution_plot,
+    "knn_purity_violin_distribution_plot": knn_purity_violin_distribution_plot,
     "per_class_similarity_distribution_plot": per_class_similarity_distribution_plot,
 }

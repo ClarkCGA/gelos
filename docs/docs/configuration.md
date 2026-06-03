@@ -188,6 +188,45 @@ For plots and models, the `transform` field selects which data to use as input: 
 
 Maps category values from your metadata to colors and labels for plotting. `category_column` must match a column accessible via `chip_gdf[category_column].loc[chip_indices]` in the analysis pipeline.
 
+### Comparison plots
+
+Comparison configs may list `comp_plots`, each with a `type` from the comparison
+plot registry and an optional `params` block. Each plot reads the output of a
+comparison metric; by default the source metric is derived from the plot `type`
+(stripping the `_plot`/`_table` suffix), but it can be set explicitly with a
+`metric` field — required when the names don't match.
+
+| Type | Description | Key params |
+|------|-------------|------------|
+| `knn_purity_distribution_plot` | Per-class box plots of per-query KNN purity vs k | (none) |
+| `knn_purity_violin_distribution_plot` | Per-class violin plots of per-query KNN purity vs k. Split violin (one half per group) when exactly two experiments are compared, otherwise side-by-side single violins. Mean shown as a diamond, median as a short line | `split` (bool, default auto: split iff exactly two experiments). `split_pairs` (list of 2-element experiment-name lists; each pair → one split violin per k; unpaired experiments → single violins; takes precedence over `split`). Requires `metric: knn_purity_per_query_comparison` |
+
+Example:
+
+```yaml
+comp_plots:
+  - type: knn_purity_violin_distribution_plot
+    metric: knn_purity_per_query_comparison
+    params:
+      split: true
+```
+
+To contrast several pairs of experiments as side-by-side split violins (for
+example multitemporal vs single-time-step variants of two models), use
+`split_pairs`. Each inner list names the two experiments of one split violin;
+any experiment not named in a valid pair is drawn as a single violin. When
+`split_pairs` is set it takes precedence over `split`:
+
+```yaml
+comp_plots:
+  - type: knn_purity_violin_distribution_plot
+    metric: knn_purity_per_query_comparison
+    params:
+      split_pairs:
+        - [model_A_multi, model_A_single]
+        - [model_B_multi, model_B_single]
+```
+
 ## Raw-pixel baseline configs
 
 Randomly-initialized (or mis-pretrained) foundation-model weights can still produce embedding spaces that look reasonable on downstream probes. To sanity-check how much a model is actually contributing, GELOS ships `gelos.raw_pixels.RawPixelEmbeddingTask` — a passthrough task that skips the model entirely and writes the normalized raw pixels themselves as "embeddings". The output parquets match `EmbeddingGenerationTask`'s schema, so analysis and comparison stages consume them with no special-casing.
