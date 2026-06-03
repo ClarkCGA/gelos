@@ -18,6 +18,7 @@ from gelos.comp_plots import (
     distance_matrix,
     knn_purity_distribution_plot,
     knn_purity_plot,
+    knn_purity_violin_distribution_plot,
     pca_ablation_table,
     per_class_similarity_distribution_plot,
 )
@@ -67,6 +68,7 @@ def test_comp_plots_registry_keys():
         "distance_matrix",
         "knn_purity_plot",
         "knn_purity_distribution_plot",
+        "knn_purity_violin_distribution_plot",
         "per_class_similarity_distribution_plot",
     }
     assert expected <= set(COMP_PLOTS.keys())
@@ -312,6 +314,175 @@ def test_knn_purity_distribution_plot_output(tmp_path):
     df = pd.DataFrame(rows)
     output_path = tmp_path / "test_knn_purity_distribution.png"
     knn_purity_distribution_plot({"comparison_df": df}, output_path=output_path)
+    assert output_path.exists()
+    gc.collect()
+
+
+def _make_per_query_df(experiments, classes=("0", "1"), ks=(1, 5), n_queries=20, seed=0):
+    """Build a synthetic per-query purity df for the violin plot tests."""
+    rng = np.random.RandomState(seed)
+    rows = []
+    for exp in experiments:
+        for cls in classes:
+            for k in ks:
+                for q_idx in range(n_queries):
+                    rows.append(
+                        {
+                            "experiment": exp,
+                            "class": cls,
+                            "k": k,
+                            "query_idx": q_idx,
+                            "purity": float(rng.rand()),
+                        }
+                    )
+    return pd.DataFrame(rows)
+
+
+def test_knn_purity_violin_distribution_plot_output(tmp_path):
+    """Two experiments -> split-violin path saves a PNG."""
+    df = _make_per_query_df(["A", "B"], seed=0)
+    output_path = tmp_path / "test_knn_purity_violin_distribution.png"
+    knn_purity_violin_distribution_plot({"comparison_df": df}, output_path=output_path)
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_knn_purity_violin_distribution_plot_single_experiment(tmp_path):
+    """One experiment -> single-violin fallback saves a PNG."""
+    df = _make_per_query_df(["A"], seed=1)
+    output_path = tmp_path / "test_knn_purity_violin_single.png"
+    knn_purity_violin_distribution_plot({"comparison_df": df}, output_path=output_path)
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_knn_purity_violin_distribution_plot_three_experiments(tmp_path):
+    """Three experiments -> side-by-side single-violin fallback saves a PNG."""
+    df = _make_per_query_df(["A", "B", "C"], seed=2)
+    output_path = tmp_path / "test_knn_purity_violin_three.png"
+    knn_purity_violin_distribution_plot({"comparison_df": df}, output_path=output_path)
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_knn_purity_violin_distribution_plot_force_single_split(tmp_path):
+    """split=False forces single violins even with two experiments."""
+    df = _make_per_query_df(["A", "B"], seed=3)
+    output_path = tmp_path / "test_knn_purity_violin_force_single.png"
+    knn_purity_violin_distribution_plot(
+        {"comparison_df": df}, output_path=output_path, split=False
+    )
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_knn_purity_violin_distribution_plot_degenerate(tmp_path):
+    """Constant/single-sample purity exercises the small-sample guard without raising."""
+    rows = []
+    # One experiment, constant purity (np.ptp == 0) and a single-sample group.
+    for cls, n in [("0", 5), ("1", 1)]:
+        for q_idx in range(n):
+            rows.append(
+                {"experiment": "A", "class": cls, "k": 1, "query_idx": q_idx, "purity": 0.5}
+            )
+    df = pd.DataFrame(rows)
+    output_path = tmp_path / "test_knn_purity_violin_degenerate.png"
+    knn_purity_violin_distribution_plot({"comparison_df": df}, output_path=output_path)
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_knn_purity_violin_distribution_plot_empty(tmp_path):
+    """Empty comparison_df returns early without writing a file."""
+    output_path = tmp_path / "test_knn_purity_violin_empty.png"
+    knn_purity_violin_distribution_plot({"comparison_df": pd.DataFrame()}, output_path=output_path)
+    assert not output_path.exists()
+    gc.collect()
+
+
+def test_knn_purity_violin_distribution_plot_split_pairs_two_pairs(tmp_path):
+    """Two pairs (4 experiments) -> two split violins per k, PNG written."""
+    df = _make_per_query_df(["A1", "A2", "B1", "B2"], seed=4)
+    output_path = tmp_path / "test_knn_purity_violin_split_pairs_two.png"
+    knn_purity_violin_distribution_plot(
+        {"comparison_df": df},
+        output_path=output_path,
+        split_pairs=[["A1", "A2"], ["B1", "B2"]],
+    )
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_knn_purity_violin_distribution_plot_split_pairs_one_pair_one_unpaired(tmp_path):
+    """One pair + one unpaired experiment -> split + single coexist, PNG written."""
+    df = _make_per_query_df(["A1", "A2", "C"], seed=5)
+    output_path = tmp_path / "test_knn_purity_violin_split_pairs_mixed.png"
+    knn_purity_violin_distribution_plot(
+        {"comparison_df": df},
+        output_path=output_path,
+        split_pairs=[["A1", "A2"]],
+    )
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_knn_purity_violin_distribution_plot_split_pairs_missing_experiment(tmp_path):
+    """A pair naming a missing experiment warns and is skipped; PNG still written."""
+    from loguru import logger
+
+    df = _make_per_query_df(["A", "B"], seed=6)
+    output_path = tmp_path / "test_knn_purity_violin_split_pairs_missing.png"
+
+    messages: list[str] = []
+    sink_id = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
+    try:
+        knn_purity_violin_distribution_plot(
+            {"comparison_df": df},
+            output_path=output_path,
+            split_pairs=[["A", "ghost"]],
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert any("ghost" in msg for msg in messages)
+    # The invalid pair is skipped; A and B fall through as unpaired singles.
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_knn_purity_violin_distribution_plot_split_pairs_overrides_split_flag(tmp_path):
+    """split_pairs takes precedence whether split is True or False; PNG written."""
+    df = _make_per_query_df(["A1", "A2", "B1", "B2"], seed=7)
+
+    out_true = tmp_path / "test_knn_purity_violin_split_pairs_override_true.png"
+    knn_purity_violin_distribution_plot(
+        {"comparison_df": df},
+        output_path=out_true,
+        split=True,
+        split_pairs=[["A1", "A2"], ["B1", "B2"]],
+    )
+    assert out_true.exists()
+
+    out_false = tmp_path / "test_knn_purity_violin_split_pairs_override_false.png"
+    knn_purity_violin_distribution_plot(
+        {"comparison_df": df},
+        output_path=out_false,
+        split=False,
+        split_pairs=[["A1", "A2"], ["B1", "B2"]],
+    )
+    assert out_false.exists()
+    gc.collect()
+
+
+def test_knn_purity_violin_distribution_plot_split_pairs_empty(tmp_path):
+    """split_pairs=[] -> all experiments rendered as single violins, no crash."""
+    df = _make_per_query_df(["A", "B", "C"], seed=8)
+    output_path = tmp_path / "test_knn_purity_violin_split_pairs_empty.png"
+    knn_purity_violin_distribution_plot(
+        {"comparison_df": df},
+        output_path=output_path,
+        split_pairs=[],
+    )
     assert output_path.exists()
     gc.collect()
 
