@@ -38,6 +38,7 @@ class AnalysisContext:
     input_dir: Path
     output_dir: Path
     figures_dir: Path
+    null_handling: str = "drop"
     embeddings_directories: list[Path] = field(default_factory=list)
 
 
@@ -88,6 +89,92 @@ def _load_cached_transform(cache_path: Path) -> tuple[np.ndarray, list[int]]:
     return df[data_cols].to_numpy(), chip_indices
 
 
+def drop_null_rows(
+    embeddings: np.ndarray,
+    chip_indices: list[int],
+    labels: np.ndarray,
+) -> tuple[np.ndarray, list[int], np.ndarray]:
+    """Drop rows with non-finite embeddings or null labels, keeping all three aligned.
+
+    A row is dropped when its embedding vector contains any non-finite value
+    (``NaN``/``inf`` — e.g. the AlphaEarth nodata sentinel ``-128`` dequantized to
+    ``NaN``) or when its resolved label is null. Dropping (rather than imputing)
+    avoids introducing bias and keeps sklearn transforms/metrics/models from
+    raising ``ValueError: Input contains NaN``.
+
+    Args:
+        embeddings: ``(N, D)`` embedding matrix.
+        chip_indices: Length-``N`` list of chip ids aligned with ``embeddings``.
+        labels: Length-``N`` array of resolved labels aligned with ``embeddings``.
+
+    Returns:
+        Filtered ``(embeddings, chip_indices, labels)`` with the same row order,
+        all three reduced to the kept rows. If no rows survive, returns empty
+        arrays/list so the caller can skip gracefully instead of crashing sklearn.
+    """
+    finite_mask = np.isfinite(embeddings).all(axis=1)
+    label_mask = ~pd.isna(labels)
+    keep = finite_mask & label_mask
+
+    n_total = len(chip_indices)
+    n_kept = int(keep.sum())
+    if n_kept < n_total:
+        n_nonfinite = int((~finite_mask).sum())
+        n_null_label = int((finite_mask & ~label_mask).sum())
+        logger.info(
+            f"dropping {n_total - n_kept}/{n_total} rows with nulls "
+            f"({n_nonfinite} non-finite embedding, {n_null_label} null label)"
+        )
+
+    if n_kept == 0:
+        logger.error("all rows dropped after null filtering; nothing to analyze for this strategy")
+
+    filtered_indices = [c for c, k in zip(chip_indices, keep) if k]
+    return embeddings[keep], filtered_indices, labels[keep]
+
+
+def fill_null_rows(
+    embeddings: np.ndarray,
+    chip_indices: list[int],
+    labels: np.ndarray,
+) -> tuple[np.ndarray, list[int], np.ndarray]:
+    """Replace non-finite embedding values with 0; drop rows with null labels only.
+
+    Unlike :func:`drop_null_rows`, this keeps rows whose embeddings contain
+    ``NaN``/``inf`` by imputing those individual cells to ``0`` (e.g. the
+    AlphaEarth nodata sentinel ``-128`` dequantized to ``NaN``). Rows whose
+    resolved label is null are still dropped, since a missing label leaves
+    nothing to train or evaluate against.
+
+    Args:
+        embeddings: ``(N, D)`` embedding matrix.
+        chip_indices: Length-``N`` list of chip ids aligned with ``embeddings``.
+        labels: Length-``N`` array of resolved labels aligned with ``embeddings``.
+
+    Returns:
+        Filtered ``(embeddings, chip_indices, labels)`` with non-finite embedding
+        cells zeroed and null-label rows removed, all three kept aligned. If no
+        rows survive the label filter, returns empty arrays/list.
+    """
+    n_zeroed = int((~np.isfinite(embeddings)).sum())
+    embeddings = np.nan_to_num(embeddings, nan=0.0, posinf=0.0, neginf=0.0)
+
+    label_mask = ~pd.isna(labels)
+    n_total = len(chip_indices)
+    n_kept = int(label_mask.sum())
+    n_null_label = n_total - n_kept
+
+    if n_zeroed:
+        logger.info(f"zeroed {n_zeroed} non-finite embedding values")
+    if n_null_label:
+        logger.info(f"dropping {n_null_label}/{n_total} rows with null label")
+    if n_kept == 0:
+        logger.error("all rows dropped after null filtering; nothing to analyze for this strategy")
+
+    filtered_indices = [c for c, k in zip(chip_indices, label_mask) if k]
+    return embeddings[label_mask], filtered_indices, labels[label_mask]
+
+
 def setup_analysis_run(
     yaml_path: Path,
     raw_data_dir: Path,
@@ -121,6 +208,13 @@ def setup_analysis_run(
     data_version = yaml_config["data_version"]
     experiment_name = yaml_config["experiment_name"]
     embedding_extraction_strategies = yaml_config["embedding_extraction_strategies"]
+
+    # How to handle non-finite embedding values: "drop" the affected rows
+    # (default, backward-compatible) or "zero" them in place. Configs that
+    # predate this option omit it and fall back to "drop".
+    null_handling = yaml_config.get("null_handling", "drop")
+    if null_handling not in ("drop", "zero"):
+        raise ValueError(f"null_handling must be 'drop' or 'zero', got '{null_handling}'")
     output_dir = processed_data_dir / data_version / config_stem
     input_dir = embedding_dir / data_version / config_stem
 
@@ -157,6 +251,7 @@ def setup_analysis_run(
         input_dir=input_dir,
         output_dir=output_dir,
         figures_dir=figures_dir,
+        null_handling=null_handling,
         embeddings_directories=embeddings_directories,
     )
 
@@ -230,6 +325,23 @@ def run_analysis(
                 np.save(idx_cache, np.array(chip_indices))
                 logger.info(f"cached embeddings to {emb_cache}")
 
+            # --- Resolve labels and drop null rows (covers cached + fresh paths) ---
+            # Resolved here (before transforms) so a single mask keeps embeddings,
+            # chip_indices, and labels aligned for every downstream step. The cache
+            # stores raw extracted embeddings that may contain NaN, so filtering must
+            # happen post-load.
+            labels = ctx.chip_gdf[ctx.category_column].loc[chip_indices].to_numpy()
+            null_handling = getattr(ctx, "null_handling", "drop")
+            if null_handling == "zero":
+                embeddings, chip_indices, labels = fill_null_rows(embeddings, chip_indices, labels)
+            else:
+                embeddings, chip_indices, labels = drop_null_rows(embeddings, chip_indices, labels)
+            if len(chip_indices) == 0:
+                logger.warning(
+                    f"no valid rows for strategy '{strategy_key}' after null filtering, skipping"
+                )
+                continue
+
             # --- Run transforms ---
             transform_results: dict[str, np.ndarray] = {"raw": embeddings}
             for t_cfg in strategy_cfg.get("transforms", []):
@@ -254,9 +366,6 @@ def run_analysis(
                     transform_results[t_type] = result
                     layer_dir.mkdir(exist_ok=True, parents=True)
                     _save_transform_result(result, chip_indices, cache_path, t_type, prefix)
-
-            # --- Resolve labels (used by metrics and models) ---
-            labels = ctx.chip_gdf[ctx.category_column].loc[chip_indices].to_numpy()
 
             # --- Run metrics ---
             for met_cfg in strategy_cfg.get("metrics", []):

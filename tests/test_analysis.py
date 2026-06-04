@@ -507,6 +507,153 @@ def test_chip_id_column_sets_index(tmp_path, synthetic_labels):
 
 
 # ---------------------------------------------------------------------------
+# Tests: drop_null_rows
+# ---------------------------------------------------------------------------
+
+
+def test_drop_null_rows_removes_nonfinite_and_null_labels():
+    """Rows with NaN/inf embeddings or null labels are dropped, alignment preserved."""
+    from gelos.analysis import drop_null_rows
+
+    embeddings = np.array(
+        [
+            [1.0, 2.0, 3.0],  # keep
+            [np.nan, 1.0, 1.0],  # drop: NaN embedding
+            [4.0, 5.0, 6.0],  # drop: null label
+            [np.inf, 0.0, 0.0],  # drop: inf embedding
+            [7.0, 8.0, 9.0],  # keep
+        ],
+        dtype=np.float64,
+    )
+    chip_indices = [10, 11, 12, 13, 14]
+    labels = np.array([0.0, 1.0, np.nan, 2.0, 1.0])
+
+    emb_out, idx_out, lab_out = drop_null_rows(embeddings, chip_indices, labels)
+
+    # Only rows 0 and 4 survive (finite embedding AND non-null label).
+    assert len(emb_out) == len(idx_out) == len(lab_out) == 2
+    assert idx_out == [10, 14]
+    np.testing.assert_array_equal(emb_out, np.array([[1.0, 2.0, 3.0], [7.0, 8.0, 9.0]]))
+    np.testing.assert_array_equal(lab_out, np.array([0.0, 1.0]))
+
+
+def test_drop_null_rows_no_nulls_returns_unchanged():
+    """With no nulls, all rows are kept and order is preserved."""
+    from gelos.analysis import drop_null_rows
+
+    embeddings = np.arange(12, dtype=np.float64).reshape(4, 3)
+    chip_indices = [1, 2, 3, 4]
+    labels = np.array(["a", "b", "c", "d"], dtype=object)
+
+    emb_out, idx_out, lab_out = drop_null_rows(embeddings, chip_indices, labels)
+
+    assert idx_out == chip_indices
+    np.testing.assert_array_equal(emb_out, embeddings)
+    np.testing.assert_array_equal(lab_out, labels)
+
+
+def test_drop_null_rows_object_label_none():
+    """None entries in an object-dtype label array are treated as null."""
+    from gelos.analysis import drop_null_rows
+
+    embeddings = np.ones((3, 2), dtype=np.float64)
+    chip_indices = [5, 6, 7]
+    labels = np.array(["forest", None, "water"], dtype=object)
+
+    emb_out, idx_out, lab_out = drop_null_rows(embeddings, chip_indices, labels)
+
+    assert idx_out == [5, 7]
+    assert list(lab_out) == ["forest", "water"]
+
+
+def test_drop_null_rows_all_null_returns_empty():
+    """When every row is null, returns empty arrays/list without raising."""
+    from gelos.analysis import drop_null_rows
+
+    embeddings = np.full((3, 4), np.nan, dtype=np.float64)
+    chip_indices = [1, 2, 3]
+    labels = np.array([0, 1, 2])
+
+    emb_out, idx_out, lab_out = drop_null_rows(embeddings, chip_indices, labels)
+
+    assert idx_out == []
+    assert emb_out.shape[0] == 0
+    assert lab_out.shape[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: fill_null_rows
+# ---------------------------------------------------------------------------
+
+
+def test_fill_null_rows_zeros_nonfinite_and_drops_null_labels():
+    """NaN/inf embeddings are zeroed; only null-label rows are dropped."""
+    from gelos.analysis import fill_null_rows
+
+    embeddings = np.array(
+        [
+            [1.0, 2.0, 3.0],  # keep as-is
+            [np.nan, 1.0, 1.0],  # keep, NaN -> 0
+            [4.0, 5.0, 6.0],  # drop: null label
+            [np.inf, 0.0, -np.inf],  # keep, inf -> 0
+            [7.0, 8.0, 9.0],  # keep as-is
+        ],
+        dtype=np.float64,
+    )
+    chip_indices = [10, 11, 12, 13, 14]
+    labels = np.array([0.0, 1.0, np.nan, 2.0, 1.0])
+
+    emb_out, idx_out, lab_out = fill_null_rows(embeddings, chip_indices, labels)
+
+    # Row 2 (null label) dropped; the other four survive with non-finite cells zeroed.
+    assert len(emb_out) == len(idx_out) == len(lab_out) == 4
+    assert idx_out == [10, 11, 13, 14]
+    np.testing.assert_array_equal(
+        emb_out,
+        np.array(
+            [
+                [1.0, 2.0, 3.0],
+                [0.0, 1.0, 1.0],
+                [0.0, 0.0, 0.0],
+                [7.0, 8.0, 9.0],
+            ]
+        ),
+    )
+    np.testing.assert_array_equal(lab_out, np.array([0.0, 1.0, 2.0, 1.0]))
+    assert np.isfinite(emb_out).all()
+
+
+def test_fill_null_rows_all_finite_passes_through():
+    """All-finite embeddings with valid labels are returned unchanged."""
+    from gelos.analysis import fill_null_rows
+
+    embeddings = np.arange(12, dtype=np.float64).reshape(4, 3)
+    chip_indices = [1, 2, 3, 4]
+    labels = np.array(["a", "b", "c", "d"], dtype=object)
+
+    emb_out, idx_out, lab_out = fill_null_rows(embeddings, chip_indices, labels)
+
+    assert idx_out == chip_indices
+    np.testing.assert_array_equal(emb_out, embeddings)
+    np.testing.assert_array_equal(lab_out, labels)
+
+
+def test_fill_null_rows_all_null_labels_returns_empty():
+    """When every label is null, returns empty arrays/list without raising."""
+    from gelos.analysis import fill_null_rows
+
+    embeddings = np.full((3, 4), np.nan, dtype=np.float64)
+    chip_indices = [1, 2, 3]
+    labels = np.array([None, None, None], dtype=object)
+
+    emb_out, idx_out, lab_out = fill_null_rows(embeddings, chip_indices, labels)
+
+    assert idx_out == []
+    assert emb_out.shape[0] == 0
+    assert lab_out.shape[0] == 0
+
+
+# ---------------------------------------------------------------------------
 # Tests: temporal_cosine_similarity plot
 # ---------------------------------------------------------------------------
 
