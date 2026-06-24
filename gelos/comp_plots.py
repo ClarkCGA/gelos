@@ -667,8 +667,8 @@ def per_class_similarity_distribution_plot(
 
     n_cols_effective = min(n_cols, n_classes) if n_classes else 1
     n_rows = (n_classes + n_cols_effective - 1) // n_cols_effective if n_classes else 1
-    fig_height = max(3, 2.5 * n_rows)
-    fig = plt.figure(figsize=(3.5 * n_cols_effective, fig_height))
+    fig_height = max(4, 3.5 * n_rows)
+    fig = plt.figure(figsize=(5 * n_cols_effective, fig_height))
     gs = fig.add_gridspec(n_rows, n_cols_effective, hspace=0.5, wspace=0.3)
 
     for idx, cls in enumerate(classes):
