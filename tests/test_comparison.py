@@ -20,6 +20,7 @@ from gelos.comp_plots import (
     knn_purity_plot,
     knn_purity_violin_distribution_plot,
     pca_ablation_table,
+    per_class_ecdf_plot,
     per_class_similarity_distribution_plot,
 )
 from gelos.comparison import ComparisonExperiment, setup_comparison
@@ -70,6 +71,7 @@ def test_comp_plots_registry_keys():
         "knn_purity_distribution_plot",
         "knn_purity_violin_distribution_plot",
         "per_class_similarity_distribution_plot",
+        "per_class_ecdf_plot",
     }
     assert expected <= set(COMP_PLOTS.keys())
     for fn in COMP_PLOTS.values():
@@ -721,4 +723,61 @@ def test_per_class_similarity_distribution_plot_output(tmp_path):
         control_label="Control",
     )
     assert output_path.exists()
+    gc.collect()
+
+
+def test_per_class_ecdf_plot_output(tmp_path):
+    """per_class_ecdf_plot creates a PNG from a long-form df."""
+    rng = np.random.RandomState(0)
+    rows = []
+    for exp in ["Control", "Blue", "NIR"]:
+        for cls in ["0", "1"]:
+            for _ in range(30):
+                rows.append(
+                    {
+                        "experiment": exp,
+                        "file_id": rng.randint(0, 10_000),
+                        "class": cls,
+                        "cosine_similarity": (
+                            1.0 if exp == "Control" else float(rng.uniform(0.5, 1.0))
+                        ),
+                    }
+                )
+    df = pd.DataFrame(rows)
+    output_path = tmp_path / "test_per_class_ecdf.png"
+    per_class_ecdf_plot(
+        {"comparison_df": df},
+        output_path=output_path,
+        control_label="Control",
+    )
+    assert output_path.exists()
+    gc.collect()
+
+
+def test_per_class_ecdf_plot_empty_df(tmp_path):
+    """Empty comparison_df returns early and writes nothing."""
+    output_path = tmp_path / "test_per_class_ecdf_empty.png"
+    per_class_ecdf_plot(
+        {"comparison_df": pd.DataFrame()},
+        output_path=output_path,
+        control_label="Control",
+    )
+    assert not output_path.exists()
+    gc.collect()
+
+
+def test_per_class_ecdf_plot_control_only(tmp_path):
+    """Only the control series present -> plot_df empty, returns early."""
+    rows = [
+        {"experiment": "Control", "file_id": i, "class": "0", "cosine_similarity": 1.0}
+        for i in range(10)
+    ]
+    df = pd.DataFrame(rows)
+    output_path = tmp_path / "test_per_class_ecdf_control_only.png"
+    per_class_ecdf_plot(
+        {"comparison_df": df},
+        output_path=output_path,
+        control_label="Control",
+    )
+    assert not output_path.exists()
     gc.collect()
