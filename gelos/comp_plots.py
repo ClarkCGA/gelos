@@ -4,11 +4,41 @@ from itertools import combinations
 from pathlib import Path
 
 from loguru import logger
+from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import ks_2samp
+
+
+def _strip_common_prefix(labels: list[str], max_len: int = 25) -> dict[str, str]:
+    """Return a mapping from full label to a shortened display label.
+
+    Strips any common leading substring shared by ALL labels, then truncates
+    each result to max_len characters. Falls back to the original if stripping
+    produces an empty string.
+    """
+    if not labels:
+        return {}
+    # Find common prefix length
+    prefix_len = 0
+    for chars in zip(*labels):
+        if len(set(chars)) == 1:
+            prefix_len += 1
+        else:
+            break
+    # Walk back to the nearest word boundary so we don't cut mid-word
+    while prefix_len > 0 and prefix_len < len(labels[0]) and labels[0][prefix_len - 1] not in (
+        " ",
+        "_",
+        "-",
+    ):
+        prefix_len -= 1
+    short = {}
+    for label in labels:
+        s = label[prefix_len:].strip() or label
+        short[label] = s[:max_len] if len(s) > max_len else s
+    return short
 
 
 def pca_ablation_table(
@@ -166,6 +196,7 @@ def knn_purity_plot(
     n_classes = len(classes)
 
     colors = _resolve_experiment_colors(experiments, experiment_colors)
+    short_labels = _strip_common_prefix(experiments)
     markers = ["o", "s", "^", "D", "v", "P", "X", "*"]
 
     n_cols = n_cols if n_cols is not None else (min(6, n_classes) if n_classes else 1)
@@ -192,7 +223,7 @@ def knn_purity_plot(
                 subset["purity"],
                 marker=markers[i % len(markers)],
                 color=colors[exp],
-                label=exp,
+                label=short_labels[exp],
             )
 
         display = class_labels.get(str(cls), str(cls))
@@ -257,6 +288,7 @@ def knn_purity_distribution_plot(
 
     color_map = _resolve_experiment_colors(experiments, experiment_colors)
     colors = [color_map[exp] for exp in experiments]
+    short_labels = _strip_common_prefix(experiments)
     box_width = 0.8 / max(n_experiments, 1)
 
     n_cols = min(2, n_classes) if n_classes else 1
@@ -314,12 +346,12 @@ def knn_purity_distribution_plot(
 
     if n_experiments:
         handles = [
-            Patch(facecolor=colors[i], edgecolor="black", label=experiments[i])
+            Patch(facecolor=colors[i], edgecolor="black", label=short_labels[experiments[i]])
             for i in range(n_experiments)
         ]
         fig.legend(
             handles,
-            experiments,
+            [short_labels[e] for e in experiments],
             loc="upper center",
             ncol=min(n_experiments, 4),
             bbox_to_anchor=(0.5, -0.02),
@@ -392,6 +424,7 @@ def knn_purity_violin_distribution_plot(
 
     color_map = _resolve_experiment_colors(experiments, experiment_colors)
     colors = [color_map[exp] for exp in experiments]
+    short_labels = _strip_common_prefix(experiments)
     violin_width = 0.8 / max(n_experiments, 1)
 
     do_split = split if split is not None else (n_experiments == 2)
@@ -593,12 +626,12 @@ def knn_purity_violin_distribution_plot(
 
     if n_experiments:
         handles = [
-            Patch(facecolor=colors[i], edgecolor="black", label=experiments[i])
+            Patch(facecolor=colors[i], edgecolor="black", label=short_labels[experiments[i]])
             for i in range(n_experiments)
         ]
         fig.legend(
             handles,
-            experiments,
+            [short_labels[e] for e in experiments],
             loc="upper center",
             ncol=min(n_experiments, 4),
             bbox_to_anchor=(0.5, -0.02),
@@ -664,6 +697,7 @@ def per_class_similarity_distribution_plot(
     n_experiments = len(experiments)
 
     colors = _resolve_experiment_colors(experiments, experiment_colors)
+    short_labels = _strip_common_prefix(experiments)
 
     n_cols_effective = min(n_cols, n_classes) if n_classes else 1
     n_rows = (n_classes + n_cols_effective - 1) // n_cols_effective if n_classes else 1
@@ -677,29 +711,6 @@ def per_class_similarity_distribution_plot(
         ax = fig.add_subplot(gs[row, col])
         is_bottom_row = row == n_rows - 1
         is_left_col = col == 0
-
-        # Per-class data: KS pairs are computed against the *full* df so the
-        # comparison can include the control series even when it isn't drawn.
-        ks_pool = df[df["class"] == cls]
-        ks_experiments = sorted(ks_pool["experiment"].unique().tolist())
-        all_pairs = list(combinations(ks_experiments, 2))
-        if len(all_pairs) > max_ks_annotations and control_label in ks_experiments:
-            ks_pairs = [(a, b) for a, b in all_pairs if control_label in (a, b)]
-            logger.info(
-                f"class '{cls}': truncating {len(all_pairs)} KS pairs to "
-                f"{len(ks_pairs)} control-only pairs"
-            )
-        else:
-            ks_pairs = all_pairs
-
-        ks_lines: list[str] = []
-        for a, b in ks_pairs:
-            va = ks_pool[ks_pool["experiment"] == a]["cosine_similarity"].to_numpy()
-            vb = ks_pool[ks_pool["experiment"] == b]["cosine_similarity"].to_numpy()
-            if va.size == 0 or vb.size == 0:
-                continue
-            res = ks_2samp(va, vb)
-            ks_lines.append(f"{a} vs {b}: KS={res.statistic:.3f}, p={res.pvalue:.2e}")
 
         any_drawn = False
         for exp in experiments:
@@ -715,23 +726,12 @@ def per_class_similarity_distribution_plot(
                 "alpha": 0.5,
                 "color": colors[exp],
                 "weights": weights,
-                "label": exp,
+                "label": short_labels[exp],
             }
             if x_range is not None:
                 hist_kwargs["range"] = x_range
             ax.hist(values, **hist_kwargs)
             ax.axvline(np.median(values), linestyle="--", color=colors[exp], linewidth=1.2)
-
-        if ks_lines:
-            ax.text(
-                0.02,
-                0.98,
-                "\n".join(ks_lines),
-                transform=ax.transAxes,
-                va="top",
-                ha="left",
-                fontsize=8,
-            )
 
         display = class_labels.get(str(cls), str(cls))
         ax.set_title(display)
@@ -756,12 +756,188 @@ def per_class_similarity_distribution_plot(
 
     if n_experiments:
         handles = [
-            Patch(facecolor=colors[exp], edgecolor="none", alpha=0.5, label=exp)
+            Patch(facecolor=colors[exp], edgecolor="none", alpha=0.5, label=short_labels[exp])
             for exp in experiments
         ]
         fig.legend(
             handles,
-            experiments,
+            [short_labels[e] for e in experiments],
+            loc="upper center",
+            ncol=min(n_experiments, 4),
+            bbox_to_anchor=(0.5, -0.02),
+        )
+
+    if output_path:
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+def per_class_ecdf_plot(
+    metric_result: dict,
+    output_path: str | Path = None,
+    class_labels: dict[str, str] | None = None,
+    experiment_colors: dict[str, str] | None = None,
+    *,
+    control_label: str,
+    n_cols: int = 3,
+    x_range: tuple[float, float] | None = None,
+    max_ks_annotations: int = 6,
+    include_control_series: bool = False,
+    **kwargs,
+) -> None:
+    """Per-class ECDF curves of per-chip cosine similarity to the control.
+
+    One subplot per class; one empirical CDF step curve per ablation
+    experiment. Unlike overlaid histograms, near-identical distributions
+    render as clearly separated monotone S-curves. KS-test stats for the
+    experiment pairs present in that class are annotated upper-left, and a
+    vertical double-arrow marks the x where the two-sample CDF gap is maximal
+    for the most relevant pair (this gap equals that pair's KS statistic).
+
+    Args:
+        metric_result: Output from ``per_chip_similarity_to_control``.
+        output_path: Path to save the figure. Shows interactively if None.
+        class_labels: Optional mapping from class id (as string) to display name.
+        control_label: Label of the control experiment. Used to filter the
+            control series from the overlay (since all values are 1.0) unless
+            ``include_control_series`` is True.
+        n_cols: Number of subplot columns in the facet grid.
+        x_range: Optional fixed (min, max) x-axis range. Autoscales if None.
+        max_ks_annotations: When all-pairs KS would exceed this count, fall
+            back to ``<ablation> vs control`` pairs only.
+        include_control_series: If True, render the control's self-similarity
+            series (all values = 1.0). Off by default — it's uninformative.
+    """
+    df = metric_result.get("comparison_df", pd.DataFrame())
+    if df.empty:
+        logger.warning("no data for per-class ECDF plot, skipping")
+        return
+
+    class_labels = class_labels or {}
+
+    plot_df = df if include_control_series else df[df["experiment"] != control_label]
+    if plot_df.empty:
+        logger.warning("no ablation series to plot (only control present), skipping")
+        return
+
+    experiments = sorted(plot_df["experiment"].unique().tolist())
+    classes = sorted(plot_df["class"].unique().tolist())
+    n_classes = len(classes)
+    n_experiments = len(experiments)
+
+    colors = _resolve_experiment_colors(experiments, experiment_colors)
+    short_labels = _strip_common_prefix(experiments)
+
+    n_cols_effective = min(n_cols, n_classes) if n_classes else 1
+    n_rows = (n_classes + n_cols_effective - 1) // n_cols_effective if n_classes else 1
+    fig_height = max(3, 2.5 * n_rows)
+    fig = plt.figure(figsize=(3.5 * n_cols_effective, fig_height))
+    gs = fig.add_gridspec(n_rows, n_cols_effective, hspace=0.5, wspace=0.3)
+
+    for idx, cls in enumerate(classes):
+        row = idx // n_cols_effective
+        col = idx % n_cols_effective
+        ax = fig.add_subplot(gs[row, col])
+        is_bottom_row = row == n_rows - 1
+        is_left_col = col == 0
+
+        # Per-class data: KS pairs are computed against the *full* df so the
+        # comparison can include the control series even when it isn't drawn.
+        # ks_pairs drives the max-gap arrow annotation below.
+        ks_pool = df[df["class"] == cls]
+        ks_experiments = sorted(ks_pool["experiment"].unique().tolist())
+        all_pairs = list(combinations(ks_experiments, 2))
+        if len(all_pairs) > max_ks_annotations and control_label in ks_experiments:
+            ks_pairs = [(a, b) for a, b in all_pairs if control_label in (a, b)]
+            logger.info(
+                f"class '{cls}': truncating {len(all_pairs)} KS pairs to "
+                f"{len(ks_pairs)} control-only pairs"
+            )
+        else:
+            ks_pairs = all_pairs
+
+        any_drawn = False
+        for exp in experiments:
+            values = plot_df[(plot_df["experiment"] == exp) & (plot_df["class"] == cls)][
+                "cosine_similarity"
+            ].to_numpy()
+            if values.size == 0:
+                continue
+            any_drawn = True
+            sx = np.sort(values)
+            y = np.arange(1, sx.size + 1) / sx.size
+            ax.step(sx, y, where="post", color=colors[exp], label=short_labels[exp], linewidth=1.5)
+        ax.set_ylim(0, 1.0)
+
+        # Max-gap annotation: prefer the first KS pair containing the control,
+        # else the first KS pair. The gap equals that pair's KS statistic.
+        annotation_pair = None
+        for a, b in ks_pairs:
+            if control_label in (a, b):
+                annotation_pair = (a, b)
+                break
+        if annotation_pair is None and ks_pairs:
+            annotation_pair = ks_pairs[0]
+
+        if annotation_pair is not None:
+            a, b = annotation_pair
+            va = ks_pool[ks_pool["experiment"] == a]["cosine_similarity"].to_numpy()
+            vb = ks_pool[ks_pool["experiment"] == b]["cosine_similarity"].to_numpy()
+            if va.size and vb.size:
+                grid = np.sort(np.concatenate([va, vb]))
+                sva = np.sort(va)
+                svb = np.sort(vb)
+                cdf_a = np.searchsorted(sva, grid, side="right") / va.size
+                cdf_b = np.searchsorted(svb, grid, side="right") / vb.size
+                gaps = np.abs(cdf_a - cdf_b)
+                i = int(gaps.argmax())
+                x_star = grid[i]
+                ax.annotate(
+                    "",
+                    xy=(x_star, cdf_a[i]),
+                    xytext=(x_star, cdf_b[i]),
+                    arrowprops=dict(arrowstyle="<->", color="black", lw=1.2),
+                )
+                ax.text(
+                    x_star,
+                    (cdf_a[i] + cdf_b[i]) / 2,
+                    f" D={gaps[i]:.3f}",
+                    fontsize=7,
+                    va="center",
+                    ha="left",
+                )
+
+        display = class_labels.get(str(cls), str(cls))
+        ax.set_title(display)
+        if is_bottom_row:
+            ax.set_xlabel("Cosine Similarity to Control Embeddings")
+        if is_left_col:
+            ax.set_ylabel("Cumulative Proportion")
+        if x_range is not None:
+            ax.set_xlim(*x_range)
+        ax.grid(True, alpha=0.3)
+        if not any_drawn:
+            ax.text(
+                0.5,
+                0.5,
+                "no data",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                fontsize=10,
+                color="gray",
+            )
+
+    if n_experiments:
+        handles = [
+            Line2D([0], [0], color=colors[exp], linewidth=1.5, label=short_labels[exp])
+            for exp in experiments
+        ]
+        fig.legend(
+            handles,
+            [short_labels[e] for e in experiments],
             loc="upper center",
             ncol=min(n_experiments, 4),
             bbox_to_anchor=(0.5, -0.02),
@@ -781,4 +957,5 @@ COMP_PLOTS: dict[str, callable] = {
     "knn_purity_distribution_plot": knn_purity_distribution_plot,
     "knn_purity_violin_distribution_plot": knn_purity_violin_distribution_plot,
     "per_class_similarity_distribution_plot": per_class_similarity_distribution_plot,
+    "per_class_ecdf_plot": per_class_ecdf_plot,
 }
