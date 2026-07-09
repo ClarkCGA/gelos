@@ -1,4 +1,6 @@
-FROM pytorch/pytorch:2.8.0-cuda12.9-cudnn9-runtime AS base
+# olmoearth-pretrain requires torch>=2.7,<2.8 — keep the base torch inside that
+# range so the requirements install doesn't replace the baked-in torch.
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime AS base
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 

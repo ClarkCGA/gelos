@@ -152,6 +152,10 @@ def test_forward_features_mean_matches_keep_averaged():
     torch.manual_seed(42)
     keep_bb = OlmoEarthBackbone(temporal_pooling="keep", **kwargs)
     keep_bb.load_state_dict(mean_bb.state_dict())
+    # eval() disables the encoder's DropPath layers; in train mode the two
+    # forward passes diverge stochastically.
+    mean_bb.eval()
+    keep_bb.eval()
 
     with torch.no_grad():
         mean_tokens = mean_bb.forward_features(x)[0]  # (1, 64, D)
