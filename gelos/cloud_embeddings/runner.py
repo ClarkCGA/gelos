@@ -12,14 +12,12 @@ import yaml
 from gelos.cloud_embeddings.aggregate import POOLS, write_chip_parquet
 from gelos.cloud_embeddings.backends.alphaearth import AlphaEarthBackend
 from gelos.cloud_embeddings.backends.base import FetchRequest
-from gelos.cloud_embeddings.backends.olmoearth import OlmoEarthBackend
 from gelos.cloud_embeddings.footprints import compute_footprint_manifest
 from gelos.cloud_embeddings.year import resolve_chip_year
 from gelos.generation import instantiate_recursive
 
 BACKENDS: dict[str, type] = {
     "alphaearth": AlphaEarthBackend,
-    "olmoearth": OlmoEarthBackend,
 }
 
 DEFAULT_WINDOW_CHIPS = 256

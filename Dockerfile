@@ -16,6 +16,12 @@ RUN uv pip install --system --no-cache -r requirements.txt
 
 COPY pyproject.toml README.md Makefile LICENSE /app/
 COPY gelos/ /app/gelos/
+# custom_modules/ is auto-imported by terratorch from the working directory
+# (WORKDIR=/app) for user-defined per-project backbones.
+# OlmoEarth backbone is now inside gelos/backbones/ (copied with gelos/ above).
+# models/ contains other per-project model modules (e.g. prithvi_eo_v2.py).
+COPY models/ /app/models/
+COPY custom_modules/ /app/custom_modules/
 RUN uv pip install --system --no-cache --no-deps -e . && \
     chmod -R a+w /app
 

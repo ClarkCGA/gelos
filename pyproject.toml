@@ -17,7 +17,7 @@ classifiers = [
 ]
 requires-python = "~=3.11.0"
 dependencies = [
-    "terratorch>=1.1,<2",
+    "terratorch==1.1.1",
     "pyarrow>=23",
     "typer",
     "tqdm",
@@ -33,6 +33,7 @@ dependencies = [
     "loguru",
     "umap-learn>=0.5,<0.6",
     "zarr>=3.0",
+    "olmoearth-pretrain>=0.1.0",
 ]
 
 [project.optional-dependencies]

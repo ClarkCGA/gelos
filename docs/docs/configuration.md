@@ -144,11 +144,71 @@ style:
 
 | Field | Purpose |
 |-------|---------|
-| `model` | TerraTorch model identifier (e.g., `prithvi_eo_v2_300`, `prithvi_eo_v2_600`, `terramind_v1_base`) |
+| `model` | TerraTorch model identifier (e.g., `prithvi_eo_v2_300`, `prithvi_eo_v2_600`, `terramind_v1_base`, `olmoearth_v1_base`, `olmoearth_v1_base_s1s2`) |
 | `model_args.bands` | Band names as the **model** expects them (may differ from your dataset band names) |
+| `model_args.bands_s1` | S1 band names for OlmoEarth S1+S2 models (e.g., `[VV, VH]`). Omit or set to null to disable S1. |
 | `layers` | Which transformer layers to extract embeddings from. `-1` means the last layer |
 | `embedding_pooling` | Set to `null` to keep the full token sequence |
 | `has_cls` | Whether the model produces a CLS token at position 0 |
+
+#### OlmoEarth (`olmoearth_v1_base`, `olmoearth_v1_base_s1s2`, and size variants)
+
+Ai2's [OlmoEarth](https://pypi.org/project/olmoearth-pretrain/) is supported as a
+terratorch-compatible backbone via a wrapper in `gelos/backbones/olmoearth_backbone.py`,
+which registers itself automatically when `gelos.generation` is imported. No file
+placement is required — install the extra and use the model identifiers directly.
+Four model sizes are available:
+`nano` (D=128), `tiny` (D=192), `base` (D=768), and `large` (D=1024). Each size
+has a Sentinel-2-only variant and a combined S2+S1 variant:
+
+| Model identifier | Sensors | Hidden dim |
+|---|---|---|
+| `olmoearth_v1_nano` | S2 only | 128 |
+| `olmoearth_v1_tiny` | S2 only | 192 |
+| `olmoearth_v1_base` | S2 only | 768 |
+| `olmoearth_v1_large` | S2 only | 1024 |
+| `olmoearth_v1_nano_s1s2` | S2 + S1 | 128 |
+| `olmoearth_v1_tiny_s1s2` | S2 + S1 | 192 |
+| `olmoearth_v1_base_s1s2` | S2 + S1 | 768 |
+| `olmoearth_v1_large_s1s2` | S2 + S1 | 1024 |
+
+Notes and limitations:
+
+- **Included in core install.** OlmoEarth support ships with gelos — no extra
+  install step required beyond `pip install gelos`.
+- **Sentinel-2 L2A, full 12 bands required.** The wrapper reorders the input
+  channels to OlmoEarth's expected 12-band S2L2A order
+  (`B02,B03,B04,B08,B05,B06,B07,B8A,B11,B12,B01,B09`). Your `data.bands.S2L2A` and
+  `model_args.bands` must supply all 12 (including `nir09` / B09); a missing band
+  raises a clear `ValueError`. See `configs/olmoearth_v1_base.yaml`.
+- **Sentinel-1 support (S1+S2 models).** Pass `model_args.bands_s1: [VV, VH]` and
+  add `S1RTC: [VV, VH]` to `data.bands` to enable S1. The S1 tensor is fused with
+  the S2 embedding via equal-weight averaging. Backward compatibility: omitting
+  `bands_s1` (or the S2-only model variants) requires no changes to existing configs.
+  **S1 data must be in decibel scale** — OlmoEarth pretraining used dB values
+  (VV mean≈-11.6 dB, VH mean≈-17.7 dB); linear-power S1 inputs produce incorrect
+  embeddings without raising an error. See `configs/olmoearth_v1_base_s1s2.yaml`.
+- **Temporal pooling (`model_args.temporal_pooling`).** The OlmoEarth encoder
+  outputs one token per (spatial patch × timestep); the wrapper controls what
+  happens to the time axis. `mean` (default) averages over timesteps, returning
+  `(B, H'*W', D)`. `keep` preserves per-timestep tokens flattened time-major to
+  `(B, T*H'*W', D)` — token `t*H'*W' + i` is spatial patch `i` at timestep `t` —
+  so strided `slice_args` can extract single-timestep vs. all-timestep features,
+  matching the Prithvi token layout. Note that with `keep`, a single timestep's
+  tokens still come from one joint space-time attention pass over all timesteps.
+- **Spatial pooling (`model_args.spatial_pooling`).** Optional integer factor `s`
+  (default off): after encoding, the `H'×W'` token grid is average-pooled over
+  non-overlapping `s×s` neighborhoods, so each output token covers
+  `(s*patch_size)²` input pixels. Use it to match the spatial footprint of
+  larger-patch models — e.g. `patch_size: 4, spatial_pooling: 4` yields tokens
+  covering 16×16 pixels whose grid and indices line up exactly with
+  Prithvi/TerraMind's 16-pixel patches, so the same `slice_args` strategies
+  apply across models. Encoding still runs at the fine `patch_size`; only the
+  output tokens are aggregated.
+- **Dummy timestamps (known limitation).** GELOS batches do not carry acquisition
+  dates, so per-timestep timestamps are set to a constant `[15, 0, 2020]`
+  (day=15, month=Jan, year=2020). Any acquisition-date-dependent temporal encoding
+  will therefore not reflect true seasonality.
 
 ### Embedding extraction strategies
 
