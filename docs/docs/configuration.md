@@ -205,10 +205,13 @@ Notes and limitations:
   Prithvi/TerraMind's 16-pixel patches, so the same `slice_args` strategies
   apply across models. Encoding still runs at the fine `patch_size`; only the
   output tokens are aggregated.
-- **Dummy timestamps (known limitation).** GELOS batches do not carry acquisition
-  dates, so per-timestep timestamps are set to a constant `[15, 0, 2020]`
-  (day=15, month=Jan, year=2020). Any acquisition-date-dependent temporal encoding
-  will therefore not reflect true seasonality.
+- **Timestamps.** When the batch carries per-timestep acquisition dates (a
+  `timestamps` key of shape `(B, T, 3)` as `[day, month_index, year]`), the
+  generation task threads them into the backbone so OlmoEarth's temporal
+  encoding reflects true acquisition dates. When absent, timestamps fall back
+  to a constant `[15, 0, 2020]` (day=15, month=Jan, year=2020), and
+  acquisition-date-dependent temporal encoding will not reflect true
+  seasonality.
 
 ### Embedding extraction strategies
 
