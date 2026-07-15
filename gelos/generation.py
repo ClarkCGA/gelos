@@ -11,12 +11,49 @@ import yaml
 
 from gelos.gelosdatamodule import GELOSDataModule
 
+try:
+    import gelos.backbones.olmoearth_backbone  # noqa: F401 — registers OlmoEarth factories
+except ImportError:
+    pass
+
 app = typer.Typer()
 
 
 class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
     def check_file_ids(self, file_ids, x):
         return
+
+    @torch.no_grad()
+    def predict_step(self, batch: dict) -> Any:
+        """Thread per-batch acquisition dates into a date-aware backbone.
+
+        Stock terratorch ``predict_step``/``get_embeddings`` only forward
+        ``batch["image"]`` to the backbone, so the outer ``"timestamps"`` key
+        cannot reach it through the normal call path. We pop it here and stash it
+        on the backbone (or its ``.encoder`` when wrapped by ``TemporalWrapper``)
+        via ``set_batch_timestamps``, then clear it in ``finally`` so the stash
+        never outlives one batch. The override is a no-op for backbones lacking
+        the setter (e.g. Prithvi, TerraMind), keeping the task generic.
+
+        ``@torch.no_grad()`` mirrors the parent ``predict_step``.
+        """
+        timestamps = batch.pop("timestamps", None)
+        backbone = getattr(self, "model", None)
+        # OlmoEarth backbone is either self.model or self.model.encoder if wrapped.
+        target = getattr(backbone, "encoder", None)
+        if hasattr(backbone, "set_batch_timestamps"):
+            setter_obj = backbone
+        elif hasattr(target, "set_batch_timestamps"):
+            setter_obj = target
+        else:
+            setter_obj = None
+        if timestamps is not None and setter_obj is not None:
+            setter_obj.set_batch_timestamps(timestamps)
+        try:
+            return super().predict_step(batch)
+        finally:
+            if setter_obj is not None:
+                setter_obj.clear_batch_timestamps()
 
 
 def instantiate_recursive(node: Any) -> Any:

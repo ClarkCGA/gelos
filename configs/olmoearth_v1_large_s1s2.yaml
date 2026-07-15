@@ -1,0 +1,115 @@
+experiment_name: "OlmoEarth V1 Large - S2+S1"
+data_version: "v0.50.1"
+chip_tracker: "gelos_chip_tracker.geojson"
+chip_id_column: "id"
+
+seed_everything: 0
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  callbacks: []
+  max_epochs: 0
+
+data:
+  class_path: gelos.gelosdatamodule.GELOSDataModule
+  init_args:
+    dataset_class: gelos.gelosdataset.GELOSDataSet
+    batch_size: 8
+    num_workers: 4
+    # OlmoEarth S2+S1 mode. S2 requires the full 12-band S2L2A set (including
+    # WATER_VAPOR / B09). S1 requires VV and VH in decibel scale.
+    # NOTE: S1 data must be in decibel scale (VV mean≈-11.6 dB, VH mean≈-17.7 dB).
+    bands:
+      S2L2A:
+        - COASTAL_AEROSOL   # B01
+        - BLUE              # B02
+        - GREEN             # B03
+        - RED               # B04
+        - RED_EDGE_1        # B05
+        - RED_EDGE_2        # B06
+        - RED_EDGE_3        # B07
+        - NIR_BROAD         # B08
+        - NIR_NARROW        # B8A
+        - WATER_VAPOR       # B09
+        - SWIR_1            # B11
+        - SWIR_2            # B12
+      S1RTC:
+        - VV
+        - VH
+    transform:
+      - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
+      - class_path: albumentations.augmentations.geometric.resize.Resize
+        init_args:
+          height: 96
+          width: 96
+          interpolation: 0 # Nearest Neighbor
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
+      - class_path: terratorch.datasets.transforms.UnflattenTemporalFromChannels
+        init_args:
+          n_timesteps: 4
+model:
+  class_path: terratorch.tasks.EmbeddingGenerationTask
+  title: OlmoEarth V1 Large S2+S1
+  init_args:
+    model: olmoearth_v1_large_s1s2  # registered via gelos.backbones.olmoearth_backbone
+    model_args:
+      model_id: allenai/OlmoEarth-v1-Large
+      pretrained: True
+      patch_size: 4
+      # Bands in the order the incoming tensor presents them; the wrapper reorders
+      # to OlmoEarth's internal 12-band order. Must match data.bands.S2L2A above.
+      bands:
+        - COASTAL_AEROSOL
+        - BLUE
+        - GREEN
+        - RED
+        - RED_EDGE_1
+        - RED_EDGE_2
+        - RED_EDGE_3
+        - NIR_BROAD
+        - NIR_NARROW
+        - WATER_VAPOR
+        - SWIR_1
+        - SWIR_2
+      # S1 bands in the order the incoming tensor presents them. Must match
+      # data.bands.S1RTC above. NOTE: S1 data must be in decibel scale.
+      bands_s1:
+        - VV
+        - VH
+    output_format: parquet
+    embed_file_key: filename
+    layers: [-1] # Model layers to extract embeddings from, -1 means the last layer
+    embedding_pooling: null
+    has_cls: False
+    temporal_cfg:
+      # temporal_wrapper MUST be False for OlmoEarth. TemporalWrapper.forward
+      # reshapes (B,C,T,H,W) -> (B*T,C,H,W) (4D) before calling the backbone, but
+      # OlmoEarthBackbone.forward_features requires a 5D (B,C,T,H,W) tensor and
+      # raises on 4D input. OlmoEarth runs on the un-wrapped 5D path, where the
+      # per-timestep (B,T,3) timestamps also align with the temporal axis.
+      temporal_wrapper: False
+      temporal_pooling: keep
+
+# each strategy defines extraction args (slice_args) and optional analysis steps
+embedding_extraction_strategies:
+  all_embeddings:
+    title: "All Embeddings"
+    slice_args:
+      - start: 0
+        stop: null
+        step:
+    transforms:
+      - type: pca
+        params:
+          n_components: 2
+
+style:
+  category_column: "lulc"
+  colors:
+    "1": "#419bdf"    # Water
+    "2": "#397d49"    # Trees
+  labels:
+    "1": "Water"
+    "2": "Trees"

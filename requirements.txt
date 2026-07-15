@@ -16,3 +16,4 @@ timm~=1.0.24
 einops
 loguru
 zarr>=3.0
+olmoearth-pretrain~=0.1.1

@@ -166,8 +166,7 @@ def temporal_cosine_similarity(
         axes[j].set_visible(False)
 
     fig.suptitle(
-        f"{experiment_name} Embedding Trajectories by Land Cover Category "
-        f"({strategy_title})",
+        f"{experiment_name} Embedding Trajectories by Land Cover Category ({strategy_title})",
         fontsize=16,
     )
     fig.text(

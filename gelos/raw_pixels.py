@@ -93,8 +93,6 @@ class RawPixelEmbeddingTask(BaseTask):
         patch_indices = self._resolve_patch_indices(spec, n_rows, n_cols)
         timestep_indices = self._resolve_timestep_indices(spec, T)
 
-        total = len(timestep_indices) * len(patch_indices)
-
         tokens = [
             grid[:, t_idx, r, c, :] for t_idx, (r, c) in product(timestep_indices, patch_indices)
         ]

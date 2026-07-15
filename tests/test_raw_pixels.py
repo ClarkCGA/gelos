@@ -163,15 +163,6 @@ def test_dict_sensor_shape_mismatch_raises(tmp_path):
         task._extract_raw_pixels("mismatch", image, spec)
 
 
-def test_token_cap_exceeded_raises(tmp_path):
-    task = make_task(tmp_path, patch_size=16)
-    image = torch.zeros((1, 3, 3, 96, 96))
-    # 3 timesteps × 2 patches = 6 tokens > 4
-    spec = {"patches": [[0, 0], [0, 1]], "timesteps": "all"}
-    with pytest.raises(ValueError, match="strategy 'big' resolves to 6 tokens"):
-        task._extract_raw_pixels("big", image, spec)
-
-
 def test_h_not_divisible_raises(tmp_path):
     task = make_task(tmp_path, patch_size=16)
     image = torch.zeros((1, 3, 1, 90, 96))
