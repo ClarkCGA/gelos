@@ -7,6 +7,7 @@ import threading
 from loguru import logger
 import numpy as np
 from rasterio.enums import Resampling
+from rasterio.transform import from_bounds
 from rasterio.warp import transform_bounds
 import rioxarray  # noqa: F401 — registers .rio accessor on xarray objects
 import xarray as xr
@@ -47,10 +48,16 @@ class AlphaEarthBackend:
 
     1. cache lookup keyed on ``(crs, year, bbox, out_shape)`` — short-circuits S3 if present,
     2. reproject the requested bbox to WGS84,
-    3. lazy-isel the year slab and ``.sel`` the bbox along x/y,
+    3. lazy-isel the year slab and ``.sel`` the bbox along x/y — padded by one
+       source-mosaic pixel per side when the request will be reprojected, so
+       nearest-neighbor resampling near the footprint edge always finds a real
+       source pixel instead of falling off the clipped slab into nodata,
     4. write the source CRS and nodata onto the slab via rioxarray,
     5. reproject to the requested ``crs`` (and optionally to ``out_shape``) with
-       nearest-neighbor to preserve raw embedding values,
+       nearest-neighbor to preserve raw embedding values; the output grid is
+       pinned to the request's original bbox (``from_bounds`` when ``out_shape``
+       is given, ``clip_box`` otherwise) so the padding never widens the output
+       footprint,
     6. persist the clipped + reprojected raster into the cache so re-runs and
        aggregation experiments skip the network entirely,
     7. dequantize int8 → float32 with ``-128`` mapped to NaN.
@@ -58,8 +65,11 @@ class AlphaEarthBackend:
     Cache key format is ``"mosaic_{crs}_{year}_{minx:.3f}_{miny:.3f}_{maxx:.3f}_"``
     ``"{maxy:.3f}_{8-char-sha256}.tif"``. The ``mosaic_`` prefix namespaces away
     from any pre-existing COG-era cache. The hash includes the full-precision
-    bbox tuple plus ``out_shape`` so two distinct footprints or output shapes
-    can never collide. Invalidate the cache by deleting the directory.
+    bbox tuple plus ``out_shape`` and a ``pad1`` version token (bumped when the
+    edge-padding fix landed, so pre-fix caches with false edge nodata are
+    orphaned rather than silently reused) — two distinct footprints, output
+    shapes, or extraction versions can never collide. Invalidate the cache by
+    deleting the directory.
 
     :meth:`fetch_batch` inverts the conventional chip-first loop: it iterates
     over the unique ``(year, cy, cx)`` zarr chunks touched by any uncached
@@ -256,7 +266,10 @@ class AlphaEarthBackend:
         out_shape: tuple[int, int] | None = None,
     ) -> str:
         minx, miny, maxx, maxy = bbox
-        raw = f"{crs}|{year}|{minx!r}|{miny!r}|{maxx!r}|{maxy!r}|{out_shape!r}"
+        # "pad1" versions the extraction algorithm (1-pixel edge padding +
+        # bbox-pinned output grid): bumping it orphans pre-fix cache entries
+        # whose edges hold false nodata, instead of silently reusing them.
+        raw = f"{crs}|{year}|{minx!r}|{miny!r}|{maxx!r}|{maxy!r}|{out_shape!r}|pad1"
         short_hash = hashlib.sha256(raw.encode()).hexdigest()[:8]
         safe_crs = crs.replace(":", "").replace("/", "_")
         return (
@@ -292,6 +305,33 @@ class AlphaEarthBackend:
         else:
             slab = slab.sel(y=slice(miny, maxy))
         return slab
+
+    def _pad_bbox_wgs84(
+        self, bbox: tuple[float, float, float, float]
+    ) -> tuple[float, float, float, float]:
+        """Expand a WGS84 bbox by one source-mosaic pixel step per side.
+
+        :meth:`_select_bbox` keeps only source pixels whose *centers* fall
+        inside the bbox, so an unpadded selection starves nearest-neighbor
+        reprojection at the footprint edge: a target pixel whose center lies
+        inside the request bbox can have its nearest source-pixel center just
+        *outside* the clipped slab, and rasterio then fills it with nodata.
+        One pixel of padding suffices for ``Resampling.nearest`` — any target
+        pixel center inside the bbox has its nearest source-pixel center
+        within half a source pixel of the bbox edge. Over-padding past the
+        mosaic edge is harmless: ``.sel`` clips to the coordinate range,
+        :meth:`_chunks_intersecting_bbox` clamps chunk indices, and genuinely
+        missing mosaic data stays nodata.
+        """
+        self._ensure_chunk_layout()
+        _y_chunk_px, _x_chunk_px, _y0, _x0, y_step, x_step = self._chunk_layout
+        minx, miny, maxx, maxy = bbox
+        return (
+            minx - abs(x_step),
+            miny - abs(y_step),
+            maxx + abs(x_step),
+            maxy + abs(y_step),
+        )
 
     def fetch(
         self,
@@ -345,12 +385,29 @@ class AlphaEarthBackend:
             )
 
         if req.crs != "EPSG:4326" or req.out_shape is not None:
-            sub = sub.rio.reproject(
-                req.crs,
-                resampling=Resampling.nearest,
-                nodata=self.nodata,
-                shape=req.out_shape,
-            )
+            # ``bbox_wgs84`` arrives padded by one source pixel (see
+            # _pad_bbox_wgs84), so pin the output grid to the request's
+            # ORIGINAL bbox — the pad feeds the resampler without widening
+            # the output footprint.
+            if req.out_shape is not None:
+                sub = sub.rio.reproject(
+                    req.crs,
+                    resampling=Resampling.nearest,
+                    nodata=self.nodata,
+                    shape=req.out_shape,
+                    transform=from_bounds(
+                        *req.bbox, width=req.out_shape[1], height=req.out_shape[0]
+                    ),
+                )
+            else:
+                sub = sub.rio.reproject(
+                    req.crs,
+                    resampling=Resampling.nearest,
+                    nodata=self.nodata,
+                )
+                # Mean-pool path: trim the pad ring so it can't leak into
+                # pooled statistics or the cache.
+                sub = sub.rio.clip_box(*req.bbox)
 
         if cache_path is not None:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -400,12 +457,26 @@ class AlphaEarthBackend:
             )
 
             bboxes_wgs84: dict[int, tuple[float, float, float, float]] = {}
+            sel_bboxes: dict[int, tuple[float, float, float, float]] = {}
             for i in uncached:
                 req = requests[i]
                 bboxes_wgs84[i] = (
                     req.bbox
                     if req.crs == "EPSG:4326"
                     else tuple(transform_bounds(req.crs, "EPSG:4326", *req.bbox))
+                )
+                # Pad the source selection when the request will be
+                # reprojected (see _pad_bbox_wgs84). The padded bbox drives
+                # BOTH chunk intersection and slab slicing — otherwise a bbox
+                # flush against a zarr-chunk boundary would pad into a chunk
+                # that was never loaded and _select_bbox would silently clip
+                # the pad away. Pure-WGS84 pass-through stays unpadded so its
+                # output shape is unchanged.
+                needs_reproject = req.crs != "EPSG:4326" or req.out_shape is not None
+                sel_bboxes[i] = (
+                    self._pad_bbox_wgs84(bboxes_wgs84[i])
+                    if needs_reproject
+                    else bboxes_wgs84[i]
                 )
 
             if len(uncached) == 1:
@@ -415,7 +486,7 @@ class AlphaEarthBackend:
                 i = uncached[0]
                 req = requests[i]
                 year_idx = self._year_to_index(req.year)
-                chunk_pairs = self._chunks_intersecting_bbox(bboxes_wgs84[i])
+                chunk_pairs = self._chunks_intersecting_bbox(sel_bboxes[i])
                 if not chunk_pairs:
                     raise ValueError(
                         f"AlphaEarth mosaic: bbox {bboxes_wgs84[i]} "
@@ -425,14 +496,14 @@ class AlphaEarthBackend:
                     (year_idx, cy, cx): self._load_chunk(year_idx, cy, cx)
                     for (cy, cx) in sorted(chunk_pairs)
                 }
-                _, arr = self._extract_request(i, req, bboxes_wgs84[i], needed, cache_paths[i])
+                _, arr = self._extract_request(i, req, sel_bboxes[i], needed, cache_paths[i])
                 results[i] = arr
             else:
                 chunks_per_req: dict[int, set[tuple[int, int, int]]] = {}
                 chunk_to_reqs: dict[tuple[int, int, int], list[int]] = {}
                 for i in uncached:
                     year_idx = self._year_to_index(requests[i].year)
-                    chunk_pairs = self._chunks_intersecting_bbox(bboxes_wgs84[i])
+                    chunk_pairs = self._chunks_intersecting_bbox(sel_bboxes[i])
                     if not chunk_pairs:
                         raise ValueError(
                             f"AlphaEarth mosaic: bbox {bboxes_wgs84[i]} "
@@ -480,7 +551,7 @@ class AlphaEarthBackend:
                                         self._extract_request,
                                         j,
                                         requests[j],
-                                        bboxes_wgs84[j],
+                                        sel_bboxes[j],
                                         needed,
                                         cache_paths[j],
                                     )
