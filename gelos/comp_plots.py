@@ -900,14 +900,6 @@ def per_class_ecdf_plot(
                     xytext=(x_star, cdf_b[i]),
                     arrowprops=dict(arrowstyle="<->", color="black", lw=1.2),
                 )
-                ax.text(
-                    x_star,
-                    (cdf_a[i] + cdf_b[i]) / 2,
-                    f" D={gaps[i]:.3f}",
-                    fontsize=7,
-                    va="center",
-                    ha="left",
-                )
 
         display = class_labels.get(str(cls), str(cls))
         ax.set_title(display)
