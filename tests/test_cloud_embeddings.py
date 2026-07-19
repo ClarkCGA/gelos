@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 import rasterio
 from rasterio.transform import from_origin
+from rasterio.warp import transform_bounds
 from tests.test_data import ExampleGELOSDataSet  # noqa: F401 — resolves class_path in YAML
 from tests.utils import create_test_geojson
 import xarray as xr
@@ -630,6 +631,116 @@ def test_alphaearth_fetch_batch_empty_returns_empty(tmp_path):
     assert backend.fetch_batch([]) == []
     # data_array should remain unopened
     assert backend._da is None
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# AlphaEarth edge-nodata fix (padded selection + bbox-pinned output grid)
+# ---------------------------------------------------------------------------
+
+
+def test_alphaearth_utm_out_shape_has_no_edge_nodata(tmp_path):
+    """Regression: UTM fetch with out_shape must not fabricate nodata at edges.
+
+    Pre-fix, _select_bbox clipped the source slab strictly to the request
+    bbox, so nearest-neighbor reprojection filled edge target pixels (whose
+    nearest source-pixel center fell just outside the slab) with -128 → NaN.
+    The synthetic zarr has full coverage, so ANY NaN here is fabricated.
+    """
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path)
+    backend = AlphaEarthBackend(url=str(zarr_path), anon=False)
+    # lon -72…-71 sits in UTM zone 19N
+    bbox_utm = tuple(transform_bounds("EPSG:4326", "EPSG:32619", -71.7, 42.2, -71.5, 42.5))
+    arr = backend.fetch(bbox_utm, crs="EPSG:32619", year=2018, out_shape=(16, 16))
+    assert arr.shape == (16, 16, 64)
+    n_nan = int(np.isnan(arr[..., 0]).sum())
+    assert not np.isnan(arr).any(), f"false edge nodata: {n_nan} NaN cells in band 0"
+    gc.collect()
+
+
+def test_alphaearth_out_shape_grid_anchored_to_bbox(tmp_path):
+    """The cached tif's bounds equal the request bbox (from_bounds pinning).
+
+    The padded source selection must not widen the output footprint: the
+    16x16 output grid covers exactly the requested chip footprint.
+    """
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path)
+    cache_dir = tmp_path / "cache"
+    backend = AlphaEarthBackend(url=str(zarr_path), anon=False, cache_dir=cache_dir)
+    bbox_utm = tuple(transform_bounds("EPSG:4326", "EPSG:32619", -71.7, 42.2, -71.5, 42.5))
+    backend.fetch(bbox_utm, crs="EPSG:32619", year=2018, out_shape=(16, 16))
+
+    cached_files = list(cache_dir.glob("mosaic_*.tif"))
+    assert len(cached_files) == 1, f"expected one cached tif, got {cached_files}"
+    with rasterio.open(cached_files[0]) as src:
+        bounds = src.bounds
+        assert src.width == 16 and src.height == 16
+    assert bounds.left == pytest.approx(bbox_utm[0], abs=1e-6)
+    assert bounds.bottom == pytest.approx(bbox_utm[1], abs=1e-6)
+    assert bounds.right == pytest.approx(bbox_utm[2], abs=1e-6)
+    assert bounds.top == pytest.approx(bbox_utm[3], abs=1e-6)
+    gc.collect()
+
+
+def test_alphaearth_genuine_nodata_preserved(tmp_path):
+    """Padding must not fabricate data over genuine mosaic gaps.
+
+    The synthetic zarr marks the top-left source pixel (lon -72.0, lat 43.0)
+    of year 2017 as nodata. A UTM fetch covering that corner must keep NaN at
+    the corresponding output cells and stay NaN-free away from them.
+    """
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path, nodata_corner=True)
+    backend = AlphaEarthBackend(url=str(zarr_path), anon=False)
+    bbox_utm = tuple(transform_bounds("EPSG:4326", "EPSG:32619", -72.0, 42.9, -71.9, 43.0))
+    arr = backend.fetch(bbox_utm, crs="EPSG:32619", year=2017, out_shape=(16, 16))
+    # Output row 0 = north (lat 43), col 0 = west (lon -72): the nodata
+    # source pixel maps to the top-left output cells.
+    assert np.isnan(arr[0, 0, :]).all(), "genuine nodata at the corner was papered over"
+    # The single nodata source pixel covers only a small top-left block of
+    # the 16x16 grid; everything away from that corner must be data.
+    assert not np.isnan(arr[6:, :, :]).any()
+    assert not np.isnan(arr[:, 6:, :]).any()
+    gc.collect()
+
+
+def test_alphaearth_pad_at_mosaic_boundary(tmp_path):
+    """Bbox flush against the mosaic's outer edge: the pad is clipped, not fatal.
+
+    Padding beyond maxy=43.0 (the synthetic mosaic's top edge) must be
+    silently clipped by .sel / chunk-index clamping — no 'does not intersect'
+    and no fabricated nodata for the fully-covered footprint.
+    """
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path)
+    backend = AlphaEarthBackend(url=str(zarr_path), anon=False)
+    bbox_utm = tuple(transform_bounds("EPSG:4326", "EPSG:32619", -71.6, 42.9, -71.5, 43.0))
+    arr = backend.fetch(bbox_utm, crs="EPSG:32619", year=2018, out_shape=(16, 16))
+    assert arr.shape == (16, 16, 64)
+    assert not np.isnan(arr).any()
+    gc.collect()
+
+
+def test_alphaearth_pad_crosses_chunk_boundary(tmp_path):
+    """The padded bbox must drive chunk loading, not just slab slicing.
+
+    32x32 grid with 16x16 chunks: the request's WGS84 envelope ends at
+    lon -71.49, inside chunk column 0 (last center kept: pixel 15 at
+    -71.516), while the one-pixel pad reaches pixel 16 (-71.484) in chunk
+    column 1. If chunk intersection used the unpadded bbox, chunk (0, 1)
+    would never load, _select_bbox would silently clip the pad away, and the
+    right output column would come back NaN.
+    """
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path, H=32, W=32, chunks_yx=(16, 16))
+    backend = AlphaEarthBackend(url=str(zarr_path), anon=False)
+    bbox_utm = tuple(transform_bounds("EPSG:4326", "EPSG:32619", -71.7, 42.7, -71.49, 42.8))
+    arr = backend.fetch(bbox_utm, crs="EPSG:32619", year=2018, out_shape=(16, 16))
+    assert arr.shape == (16, 16, 64)
+    n_nan = int(np.isnan(arr[..., 0]).sum())
+    assert not np.isnan(arr).any(), f"pad did not cross chunk boundary: {n_nan} NaN cells"
     gc.collect()
 
 
