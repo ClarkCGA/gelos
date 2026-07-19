@@ -37,6 +37,32 @@ def test_resolve_center_2x2(tmp_path):
     assert indices == [(2, 2), (2, 3), (3, 2), (3, 3)]
 
 
+def test_resolve_center_1x4(tmp_path):
+    task = make_task(tmp_path)
+    spec = {"patches": "center_1x4", "timesteps": [0]}
+    indices = task._resolve_patch_indices(spec, n_rows=6, n_cols=6)
+    # r0 = (6 - 1) // 2 = 2, c0 = (6 - 4) // 2 = 1 → centered horizontal line
+    assert indices == [(2, 1), (2, 2), (2, 3), (2, 4)]
+    # Row-major contiguity: single row, consecutive columns.
+    assert len({r for r, _ in indices}) == 1
+    cols = [c for _, c in indices]
+    assert cols == list(range(cols[0], cols[0] + len(cols)))
+
+
+def test_resolve_center_1x8_col_overflow_raises(tmp_path):
+    task = make_task(tmp_path)
+    spec = {"patches": "center_1x8", "timesteps": [0]}
+    with pytest.raises(ValueError):
+        task._resolve_patch_indices(spec, n_rows=6, n_cols=6)
+
+
+def test_resolve_center_8x1_row_overflow_raises(tmp_path):
+    task = make_task(tmp_path)
+    spec = {"patches": "center_8x1", "timesteps": [0]}
+    with pytest.raises(ValueError):
+        task._resolve_patch_indices(spec, n_rows=6, n_cols=6)
+
+
 def test_resolve_center_1x1_odd_grid(tmp_path):
     task = make_task(tmp_path)
     spec = {"patches": "center_1x1", "timesteps": [0]}

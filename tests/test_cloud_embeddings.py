@@ -49,6 +49,13 @@ def test_resolve_patches_center_2x2():
     assert resolve_patch_indices(spec, n_rows=6, n_cols=6) == [(2, 2), (2, 3), (3, 2), (3, 3)]
 
 
+def test_resolve_patches_center_1x4():
+    spec = {"patches": "center_1x4"}
+    indices = resolve_patch_indices(spec, n_rows=6, n_cols=6)
+    # Centered horizontal line: single row, consecutive cols → contiguous row-major.
+    assert indices == [(2, 1), (2, 2), (2, 3), (2, 4)]
+
+
 def test_resolve_patches_explicit_list():
     spec = {"patches": [[0, 0], [2, 3]]}
     assert resolve_patch_indices(spec, n_rows=6, n_cols=6) == [(0, 0), (2, 3)]
