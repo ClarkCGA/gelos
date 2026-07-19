@@ -37,7 +37,7 @@ def write_chip_parquet(
 ) -> Path:
     """Write a chip's stacked patch vectors as ``{stem}_embedding.parquet``.
 
-    Schema mirrors :func:`gelos.raw_pixels.RawPixelEmbeddingTask.write_parquet`:
+    Schema mirrors :func:`gelos.spectral_bands.SpectralBandsEmbeddingTask.write_parquet`:
     ``{"embedding": list[list[float]], "file_id": int}``.
 
     Args:
