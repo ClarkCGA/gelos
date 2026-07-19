@@ -130,9 +130,9 @@ def setup_embedding_run(
     yaml_config["model"].setdefault("init_args", {})
     yaml_config["model"]["init_args"]["output_dir"] = str(output_dir)
 
-    if "raw_pixel_extraction" in yaml_config:
+    if "spectral_band_extraction" in yaml_config:
         yaml_config["model"]["init_args"]["extraction_strategies"] = yaml_config[
-            "raw_pixel_extraction"
+            "spectral_band_extraction"
         ]
 
     datamodule: GELOSDataModule = instantiate_recursive(yaml_config["data"])
