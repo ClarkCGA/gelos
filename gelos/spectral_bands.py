@@ -12,8 +12,8 @@ from torchgeo.trainers import BaseTask
 from gelos.cloud_embeddings.patches import resolve_patch_indices, resolve_timestep_indices
 
 
-class RawPixelEmbeddingTask(BaseTask):
-    """Passthrough Lightning task that writes raw normalized pixels as 'embeddings'.
+class SpectralBandsEmbeddingTask(BaseTask):
+    """Passthrough Lightning task that writes normalized spectral band values as 'embeddings'.
 
     Mirrors the output layout of ``terratorch.tasks.EmbeddingGenerationTask`` so
     baseline runs flow through the existing analysis/comparison stages
@@ -67,7 +67,7 @@ class RawPixelEmbeddingTask(BaseTask):
     def _resolve_timestep_indices(self, spec: dict, T: int) -> list[int]:
         return resolve_timestep_indices(spec, T)
 
-    def _extract_raw_pixels(
+    def _extract_spectral_bands(
         self,
         name: str,
         image: torch.Tensor | dict[str, torch.Tensor],
@@ -105,7 +105,7 @@ class RawPixelEmbeddingTask(BaseTask):
         file_ids = batch.get("file_id")
 
         for name, spec in self.extraction_strategies.items():
-            tokens = self._extract_raw_pixels(name, image, spec)
+            tokens = self._extract_spectral_bands(name, image, spec)
             out_dir = self.output_path / name
             out_dir.mkdir(parents=True, exist_ok=True)
             B = tokens.shape[0]
@@ -156,4 +156,4 @@ class RawPixelEmbeddingTask(BaseTask):
         df.to_parquet(out_path, index=False)
 
 
-__all__ = ["RawPixelEmbeddingTask"]
+__all__ = ["SpectralBandsEmbeddingTask"]

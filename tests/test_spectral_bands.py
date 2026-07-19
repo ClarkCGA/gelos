@@ -10,15 +10,15 @@ import torch
 
 from gelos.analysis import run_analysis
 from gelos.generation import generate_embeddings
-from gelos.raw_pixels import RawPixelEmbeddingTask
+from gelos.spectral_bands import SpectralBandsEmbeddingTask
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def make_task(tmp_path: Path, patch_size: int = 16, strategies=None) -> RawPixelEmbeddingTask:
-    return RawPixelEmbeddingTask(
+def make_task(tmp_path: Path, patch_size: int = 16, strategies=None) -> SpectralBandsEmbeddingTask:
+    return SpectralBandsEmbeddingTask(
         output_dir=str(tmp_path),
         extraction_strategies=strategies or {},
         patch_size=patch_size,
@@ -122,7 +122,7 @@ def test_extract_shape_tensor(tmp_path):
     task = make_task(tmp_path, patch_size=16)
     image = torch.zeros((2, 3, 4, 96, 96))
     spec = {"patches": "center_2x2", "timesteps": [0]}
-    tokens = task._extract_raw_pixels("s", image, spec)
+    tokens = task._extract_spectral_bands("s", image, spec)
     assert tuple(tokens.shape) == (2, 4, 3 * 16 * 16)
 
 
@@ -134,7 +134,7 @@ def test_extract_shape_dict(tmp_path):
         "DEM": torch.zeros((2, 1, 4, 96, 96)),
     }
     spec = {"patches": "center_2x2", "timesteps": [0]}
-    tokens = task._extract_raw_pixels("s", image, spec)
+    tokens = task._extract_spectral_bands("s", image, spec)
     assert tuple(tokens.shape) == (2, 4, (6 + 2 + 1) * 16 * 16)
 
 
@@ -148,12 +148,12 @@ def test_extract_values_tensor(tmp_path):
     # [B=1, C=1, T=1, H=4, W=4] with sequential values
     image = torch.arange(16, dtype=torch.float32).reshape(1, 1, 1, 4, 4)
     spec = {"patches": [[0, 0]], "timesteps": [0]}
-    tokens = task._extract_raw_pixels("s", image, spec)
+    tokens = task._extract_spectral_bands("s", image, spec)
     # top-left 2x2 patch flattens to [0, 1, 4, 5]
     assert torch.equal(tokens[0, 0], torch.tensor([0.0, 1.0, 4.0, 5.0]))
 
     spec = {"patches": [[1, 1]], "timesteps": [0]}
-    tokens = task._extract_raw_pixels("s", image, spec)
+    tokens = task._extract_spectral_bands("s", image, spec)
     # bottom-right 2x2 patch flattens to [10, 11, 14, 15]
     assert torch.equal(tokens[0, 0], torch.tensor([10.0, 11.0, 14.0, 15.0]))
 
@@ -166,7 +166,7 @@ def test_extract_values_dict_channel_order(tmp_path):
         "C": torch.full((1, 1, 1, 4, 4), 3.0),
     }
     spec = {"patches": [[0, 0]], "timesteps": [0]}
-    tokens = task._extract_raw_pixels("s", image, spec)
+    tokens = task._extract_spectral_bands("s", image, spec)
     # flat_dim per sensor = 1*2*2 = 4 → sensor A occupies [0:4], B [4:8], C [8:12]
     assert torch.equal(tokens[0, 0, 0:4], torch.full((4,), 1.0))
     assert torch.equal(tokens[0, 0, 4:8], torch.full((4,), 2.0))
@@ -186,7 +186,7 @@ def test_dict_sensor_shape_mismatch_raises(tmp_path):
     }
     spec = {"patches": "center_1x1", "timesteps": [0]}
     with pytest.raises(ValueError, match="S1RTC"):
-        task._extract_raw_pixels("mismatch", image, spec)
+        task._extract_spectral_bands("mismatch", image, spec)
 
 
 def test_h_not_divisible_raises(tmp_path):
@@ -259,7 +259,7 @@ def test_predict_step_writes_parquet_dict(tmp_path):
 
 
 @pytest.fixture()
-def raw_pixel_run_dirs(tmp_path):
+def spectral_band_run_dirs(tmp_path):
     """Build raw_data_dir/<data_version>/ with dummy chips and return directory paths."""
     data_version = "v0.50.1"
     raw_data_dir = tmp_path / "raw"
@@ -295,18 +295,18 @@ def raw_pixel_run_dirs(tmp_path):
     }
 
 
-def test_raw_pixel_generation_e2e(raw_pixel_run_dirs):
-    yaml_path = Path(__file__).parent / "fixtures" / "example_raw_pixel_config.yaml"
+def test_spectral_band_generation_e2e(spectral_band_run_dirs):
+    yaml_path = Path(__file__).parent / "fixtures" / "example_spectral_band_config.yaml"
 
     generate_embeddings(
         yaml_path,
-        raw_data_dir=raw_pixel_run_dirs["raw_data_dir"],
-        embedding_dir=raw_pixel_run_dirs["embedding_dir"],
+        raw_data_dir=spectral_band_run_dirs["raw_data_dir"],
+        embedding_dir=spectral_band_run_dirs["embedding_dir"],
     )
 
     config_stem = yaml_path.stem
-    data_version = raw_pixel_run_dirs["data_version"]
-    output_dir = raw_pixel_run_dirs["embedding_dir"] / data_version / config_stem
+    data_version = spectral_band_run_dirs["data_version"]
+    output_dir = spectral_band_run_dirs["embedding_dir"] / data_version / config_stem
 
     for strategy in ("center_2x2_t0", "all_timesteps_center_patch"):
         strat_dir = output_dir / strategy
@@ -323,13 +323,13 @@ def test_raw_pixel_generation_e2e(raw_pixel_run_dirs):
 
     run_analysis(
         yaml_path,
-        raw_data_dir=raw_pixel_run_dirs["raw_data_dir"],
-        embedding_dir=raw_pixel_run_dirs["embedding_dir"],
-        processed_data_dir=raw_pixel_run_dirs["processed_data_dir"],
-        figures_base_dir=raw_pixel_run_dirs["figures_dir"],
+        raw_data_dir=spectral_band_run_dirs["raw_data_dir"],
+        embedding_dir=spectral_band_run_dirs["embedding_dir"],
+        processed_data_dir=spectral_band_run_dirs["processed_data_dir"],
+        figures_base_dir=spectral_band_run_dirs["figures_dir"],
     )
 
-    processed_root = raw_pixel_run_dirs["processed_data_dir"] / data_version / config_stem
+    processed_root = spectral_band_run_dirs["processed_data_dir"] / data_version / config_stem
     cached = list(processed_root.rglob("*_embeddings.npy"))
     assert cached, f"expected cached _embeddings.npy under {processed_root}"
 

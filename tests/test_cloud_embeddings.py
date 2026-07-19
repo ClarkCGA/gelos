@@ -40,7 +40,7 @@ def _rewrite_tiff_with_transform(path: Path, transform, crs: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shared patch resolution util (mirror of tests/test_raw_pixels.py::test_resolve_*)
+# Shared patch resolution util (mirror of tests/test_spectral_bands.py::test_resolve_*)
 # ---------------------------------------------------------------------------
 
 
