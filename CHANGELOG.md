@@ -14,6 +14,17 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **Model-matched normalization by default in `gelos.generation`.** New module
+  `gelos.normalization` maps backbone names to their pretraining statistics (Prithvi EO V2,
+  TerraMind v1 — imported from terratorch with hard-coded fallbacks) and required scale
+  conversions, and `setup_embedding_run` now injects them into the datamodule config:
+  Prithvi/TerraMind get their pretraining `means`/`stds` (plus `db_scale_bands` for
+  TerraMind S1, whose stats are in dB), OlmoEarth gets `normalize: false` (its backbone
+  normalizes internally). Rationale: frozen encoders should see inputs normalized the way
+  they were pretrained, not with dataset statistics. Keys set explicitly under
+  `data.init_args` always win; unregistered models fall back to dataset statistics; a
+  registered model with a configured band that has no pretraining stat raises (override
+  with explicit `means`/`stds`).
 - **Fix: silent normalization no-op in `GELOSDataModule`.** Stats were only looked up on
   lowercase `means`/`stds` dataset-class attributes, so downstream classes defining uppercase
   `MEANS`/`STDS` (e.g. gelos-lc's `GELOSLCDataSet`) silently resolved every band to mean 0.0 /

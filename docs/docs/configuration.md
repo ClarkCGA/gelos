@@ -149,9 +149,20 @@ style:
 | `bands` | Dict of `{sensor: [band_names]}`. Keys must match sensors in your class's `all_band_names`, values must be subsets of those band lists |
 | `repeat_bands` | Optional. Repeat static modalities (e.g., DEM) along the temporal axis to match the number of timesteps of other sensors |
 | `perturb_bands` | Optional. Add Gaussian noise for ablation experiments. Format: `{sensor: {band: weight}}` where weight ranges from 0 (no noise) to 1 (full noise) |
-| `means` / `stds` | Optional. Per-modality/band normalization statistics: `{sensor: {band: value}}`. Resolution order per band: these explicit args → lowercase `means`/`stds` class attributes on the dataset class → uppercase `MEANS`/`STDS` class attributes → default (mean 0.0, std 1.0). If an entire modality resolves to the defaults, normalization is an identity and a loud warning is logged |
-| `normalize` | Optional, default `true`. Set to `false` to skip z-score normalization entirely (identity aug) — for backbones that apply their own pretraining normalization internally, e.g. OlmoEarth |
+| `means` / `stds` | Optional. Per-modality/band normalization statistics: `{sensor: {band: value}}`. Resolution order per band: these explicit args → model-matched pretraining stats injected by `gelos.generation` (see below) → lowercase `means`/`stds` class attributes on the dataset class → uppercase `MEANS`/`STDS` class attributes → default (mean 0.0, std 1.0). If an entire modality resolves to the defaults, normalization is an identity and a loud warning is logged |
+| `normalize` | Optional, default `true`. Set to `false` to skip z-score normalization entirely (identity aug) — for backbones that apply their own pretraining normalization internally, e.g. OlmoEarth (injected automatically for OlmoEarth models, see below) |
 | `db_scale_bands` | Optional. Convert listed bands from linear power to decibels (`10 * log10(clip(x, 1e-10))`) at load time, e.g. `{S1RTC: [VV, VH]}`. Do not use together with OlmoEarth's built-in normalization, which already converts S1 to dB |
+
+**Model-matched normalization defaults.** For recognized backbones, `gelos.generation`
+automatically fills any of `means`/`stds`/`db_scale_bands`/`normalize` you did not set,
+using the model's own pretraining statistics (`gelos.normalization`): Prithvi EO V2 and
+TerraMind v1 get their published pretraining means/stds (TerraMind's S1 stats are in dB, so
+`db_scale_bands: {S1RTC: [VV, VH]}` is injected alongside), and OlmoEarth gets
+`normalize: false` because its backbone normalizes internally. Rationale: frozen encoders
+should see inputs distributed the way they were pretrained — dataset statistics are the
+fallback for models without registered stats, and anything you set explicitly in the config
+always wins. A registered model combined with a band it was not pretrained on (e.g. Prithvi
+with `COASTAL_AEROSOL`) raises an error; override with explicit `means`/`stds` if intended.
 | `transform` | Albumentations/TerraTorch transforms. Use `FlattenTemporalIntoChannels`/`UnflattenTemporalFromChannels` to apply spatial transforms across timesteps |
 
 ### Model
