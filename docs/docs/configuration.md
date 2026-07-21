@@ -41,6 +41,17 @@ data:
     #   S2L2A:
     #     blue: 0.1
 
+    # optional: disable z-score normalization entirely (default true). Set to
+    # false for backbones that apply their own pretraining normalization
+    # internally (e.g. OlmoEarth) so the model receives raw sensor values.
+    # normalize: false
+
+    # optional: convert linear-power bands to decibels at load time
+    # (10 * log10(clip(x, 1e-10))), e.g. for models pretrained on dB-scale S1.
+    # Do NOT combine with OlmoEarth's built-in normalization (see below).
+    # db_scale_bands:
+    #   S1RTC: [VV, VH]
+
     # albumentations / terratorch transforms applied to each chip.
     # FlattenTemporalIntoChannels and UnflattenTemporalFromChannels are needed
     # to apply spatial transforms across all timesteps.
@@ -138,6 +149,20 @@ style:
 | `bands` | Dict of `{sensor: [band_names]}`. Keys must match sensors in your class's `all_band_names`, values must be subsets of those band lists |
 | `repeat_bands` | Optional. Repeat static modalities (e.g., DEM) along the temporal axis to match the number of timesteps of other sensors |
 | `perturb_bands` | Optional. Add Gaussian noise for ablation experiments. Format: `{sensor: {band: weight}}` where weight ranges from 0 (no noise) to 1 (full noise) |
+| `means` / `stds` | Optional. Per-modality/band normalization statistics: `{sensor: {band: value}}`. Resolution order per band: these explicit args → model-matched pretraining stats injected by `gelos.generation` (see below) → lowercase `means`/`stds` class attributes on the dataset class → uppercase `MEANS`/`STDS` class attributes → default (mean 0.0, std 1.0). If an entire modality resolves to the defaults, normalization is an identity and a loud warning is logged |
+| `normalize` | Optional, default `true`. Set to `false` to skip z-score normalization entirely (identity aug) — for backbones that apply their own pretraining normalization internally, e.g. OlmoEarth (injected automatically for OlmoEarth models, see below) |
+| `db_scale_bands` | Optional. Convert listed bands from linear power to decibels (`10 * log10(clip(x, 1e-10))`) at load time, e.g. `{S1RTC: [VV, VH]}`. Do not use together with OlmoEarth's built-in normalization, which already converts S1 to dB |
+
+**Model-matched normalization defaults.** For recognized backbones, `gelos.generation`
+automatically fills any of `means`/`stds`/`db_scale_bands`/`normalize` you did not set,
+using the model's own pretraining statistics (`gelos.normalization`): Prithvi EO V2 and
+TerraMind v1 get their published pretraining means/stds (TerraMind's S1 stats are in dB, so
+`db_scale_bands: {S1RTC: [VV, VH]}` is injected alongside), and OlmoEarth gets
+`normalize: false` because its backbone normalizes internally. Rationale: frozen encoders
+should see inputs distributed the way they were pretrained — dataset statistics are the
+fallback for models without registered stats, and anything you set explicitly in the config
+always wins. A registered model combined with a band it was not pretrained on (e.g. Prithvi
+with `COASTAL_AEROSOL`) raises an error; override with explicit `means`/`stds` if intended.
 | `transform` | Albumentations/TerraTorch transforms. Use `FlattenTemporalIntoChannels`/`UnflattenTemporalFromChannels` to apply spatial transforms across timesteps |
 
 ### Model
@@ -185,9 +210,19 @@ Notes and limitations:
   add `S1RTC: [VV, VH]` to `data.bands` to enable S1. The S1 tensor is fused with
   the S2 embedding via equal-weight averaging. Backward compatibility: omitting
   `bands_s1` (or the S2-only model variants) requires no changes to existing configs.
-  **S1 data must be in decibel scale** — OlmoEarth pretraining used dB values
-  (VV mean≈-11.6 dB, VH mean≈-17.7 dB); linear-power S1 inputs produce incorrect
-  embeddings without raising an error. See `configs/olmoearth_v1_base_s1s2.yaml`.
+  See `configs/olmoearth_v1_base_s1s2.yaml`.
+- **Built-in pretraining normalization
+  (`model_args.apply_pretraining_normalization`, default `true`).** OlmoEarth's
+  encoder performs no normalization itself — during pretraining its data loader
+  normalized inputs. The wrapper replicates that exactly: S1 linear power is
+  clipped at `1e-10`, converted to dB (`10*log10`), then min-max scaled per band
+  over `mean±2σ`; S2 raw DN (0–10000) is min-max scaled per band over `mean±2σ`
+  (no log). Stats come from `olmoearth_pretrain`'s `computed.json`. Inputs must
+  therefore be **RAW sensor scale** (S1 linear-power gamma0, S2 L2A digital
+  numbers): set `normalize: false` under `data.init_args` and do **not** apply
+  `db_scale_bands` to S1, or values get double-transformed. Set
+  `apply_pretraining_normalization: false` only if you pre-normalize inputs to
+  OlmoEarth's pretraining scale yourself.
 - **Temporal pooling (`model_args.temporal_pooling`).** The OlmoEarth encoder
   outputs one token per (spatial patch × timestep); the wrapper controls what
   happens to the time axis. `mean` (default) averages over timesteps, returning
@@ -321,7 +356,7 @@ spectral_band_extraction:
 
 Notes:
 
-- **Normalization is reused from the datamodule.** The task trusts `GELOSDataModule.aug` (defaults to z-score via means/stds) — set real per-band statistics on your dataset class or in `data.init_args.means/stds`, or baseline pixels stay un-normalized.
+- **Normalization is reused from the datamodule.** The task trusts `GELOSDataModule.aug` (defaults to z-score via means/stds) — set real per-band statistics on your dataset class (`means`/`stds` or `MEANS`/`STDS` attributes) or in `data.init_args.means/stds`, or baseline pixels stay un-normalized (the datamodule logs a loud warning when a modality resolves entirely to default stats).
 - **Patch grid is derived from `H, W, patch_size`**, not configured. All of `H`, `W` must be divisible by `patch_size`, and for multi-sensor configs all sensors must share `T`, `H`, `W` after normalization (use `repeat_bands` to align single-timestep modalities like DEM).
 - **Multi-modal runs channel-concatenate per token.** Do NOT set `concat_bands: True` on the datamodule — the task handles concat itself. Sensor order follows `data.bands` YAML key order, which becomes the dict iteration order. Reordering that block between runs produces parquets of the same shape but different channel layouts.
 - **Comparison workflow.** Each modality combination is its own generation config (`spectral_s2.yaml`, `spectral_s2s1dem.yaml`, etc.) with its own `data.bands` and its own `spectral_band_extraction`. Comparison configs reference spectral-band runs by the same `(config, strategy, layer)` triple as any model run. S2 pixels getting written twice is bounded (~kB/chip per run at the 4-token cap).

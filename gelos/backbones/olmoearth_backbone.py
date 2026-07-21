@@ -26,12 +26,31 @@ S1 extension (API NOTE R2):
   S1 mask shape: (B, H, W, T, 1) — 1 band set.
   S1 output key: out["tokens_and_masks"].sentinel1, shape (B, H', W', T, 1, D).
   S2 mask shape: (B, H, W, T, 3) — 3 band sets (10m/20m/60m).
-  S1 data must be in decibel scale (VV mean≈-11.6 dB, VH mean≈-17.7 dB).
   Source: verified against allenai/olmoearth_pretrain datatypes.py and constants.py.
+
+Pretraining normalization (``apply_pretraining_normalization=True``, the default):
+  OlmoEarth was pretrained on data normalized by its own data loader (the encoder
+  itself performs no normalization), replicating
+  ``olmoearth_pretrain.data.normalize.Normalizer._normalize_computed``
+  (std_multiplier=2) and ``olmoearth_pretrain.data.utils.convert_to_db``:
+
+  - S1 (RAW LINEAR POWER in): ``clip(x, 1e-10)`` -> ``10*log10(x)`` -> per-band
+    min-max over mean±2σ: ``(x_dB - (mean - 2σ)) / (4σ)``.
+  - S2 L2A (RAW DN 0–10000 in): per-band ``(x - (mean - 2σ)) / (4σ)``, no log.
+
+  Inputs to this backbone must therefore be RAW sensor scale: S1 linear-power
+  gamma0 (e.g. Planetary Computer sentinel-1-rtc) and S2 L2A digital numbers.
+  Configure the datamodule with ``normalize: false`` and do NOT apply
+  ``db_scale_bands`` to S1, or values get double-transformed. Per-band stats are
+  read from the installed ``olmoearth_pretrain`` package's
+  ``data/norm_configs/computed.json`` when importable, else from a hard-coded
+  copy of those constants.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+import json
 import warnings
 
 import torch
@@ -62,6 +81,133 @@ OLMOEARTH_S2_BAND_ORDER: list[str] = [
 # GELOS-LC names these "VV" and "VH" (uppercase); mapping is case-insensitive.
 # S1 has 1 band set (S=1), so sentinel1_mask shape is (B, H, W, T, 1).
 OLMOEARTH_S1_BAND_ORDER: list[str] = ["vv", "vh"]
+
+# GELOS band name -> olmoearth_pretrain computed.json sentinel2_l2a band key.
+GELOS_TO_OLMOEARTH_S2_KEY: dict[str, str] = {
+    "COASTAL_AEROSOL": "B01",
+    "BLUE": "B02",
+    "GREEN": "B03",
+    "RED": "B04",
+    "RED_EDGE_1": "B05",
+    "RED_EDGE_2": "B06",
+    "RED_EDGE_3": "B07",
+    "NIR_BROAD": "B08",
+    "NIR_NARROW": "B8A",
+    "WATER_VAPOR": "B09",
+    "SWIR_1": "B11",
+    "SWIR_2": "B12",
+}
+
+# Hard-coded copy of the per-band pretraining stats from
+# olmoearth_pretrain/data/norm_configs/computed.json (keys "sentinel1" and
+# "sentinel2_l2a"), used as a fallback when the installed package cannot be read.
+_FALLBACK_COMPUTED_STATS: dict[str, dict[str, dict[str, float]]] = {
+    "sentinel1": {
+        "vv": {"mean": -11.648990747328444, "std": 10.840350299936597},
+        "vh": {"mean": -17.745436133270044, "std": 10.216274681392647},
+    },
+    "sentinel2_l2a": {
+        "B01": {"mean": 1115.8494388252218, "std": 1955.6991794280914},
+        "B02": {"mean": 1188.9412572078477, "std": 1859.1923971769581},
+        "B03": {"mean": 1407.7739105458452, "std": 1727.7387413631088},
+        "B04": {"mean": 1513.0573882432757, "std": 1740.7757298757895},
+        "B05": {"mean": 1890.9893042634167, "std": 1754.7320388511766},
+        "B06": {"mean": 2483.7812315422448, "std": 1622.1172720635755},
+        "B07": {"mean": 2722.728248756412, "std": 1621.8226170190276},
+        "B08": {"mean": 2755.481305028308, "std": 1612.2565699990187},
+        "B09": {"mean": 3269.812554170875, "std": 2651.088425085525},
+        "B11": {"mean": 2562.852607796968, "std": 1441.5471830655151},
+        "B12": {"mean": 1914.1383249044113, "std": 1328.8914382756407},
+        "B8A": {"mean": 2885.570263047681, "std": 1611.3587521042082},
+    },
+}
+
+
+def _load_computed_stats() -> dict[str, dict[str, dict[str, float]]]:
+    """Load OlmoEarth's computed normalization stats.
+
+    Prefers the ``computed.json`` shipped inside the installed
+    ``olmoearth_pretrain`` package (the authoritative source); falls back to the
+    hard-coded copy above when the package is not importable.
+    """
+    try:
+        from importlib.resources import files
+
+        with (files("olmoearth_pretrain.data.norm_configs") / "computed.json").open() as f:
+            return json.load(f)
+    except Exception:
+        return _FALLBACK_COMPUTED_STATS
+
+
+OLMOEARTH_COMPUTED_STATS: dict[str, dict[str, dict[str, float]]] = _load_computed_stats()
+
+
+def convert_to_db(x: torch.Tensor) -> torch.Tensor:
+    """Convert linear-power SAR backscatter to decibels.
+
+    Replicates ``olmoearth_pretrain.data.utils.convert_to_db``: clip to 1e-10 to
+    avoid log(0), then ``10 * log10(x)``.
+    """
+    return 10.0 * torch.log10(torch.clamp(x, min=1e-10))
+
+
+def minmax_normalize(
+    x: torch.Tensor,
+    means: Sequence[float],
+    stds: Sequence[float],
+    std_multiplier: float = 2.0,
+) -> torch.Tensor:
+    """Per-band mean±kσ min-max normalization over the last (channel) axis.
+
+    Replicates ``olmoearth_pretrain.data.normalize.Normalizer._normalize_computed``
+    with its default ``std_multiplier=2``:
+    ``(x - (mean - k*std)) / ((mean + k*std) - (mean - k*std))``.
+    """
+    mean_vals = torch.as_tensor(means, dtype=x.dtype, device=x.device)
+    std_vals = torch.as_tensor(stds, dtype=x.dtype, device=x.device)
+    min_vals = mean_vals - std_multiplier * std_vals
+    max_vals = mean_vals + std_multiplier * std_vals
+    return (x - min_vals) / (max_vals - min_vals)
+
+
+def resolve_s2_band_stats(bands: Sequence[str]) -> tuple[list[float], list[float]]:
+    """Per-band (means, stds) for GELOS-named S2 bands from computed.json.
+
+    Args:
+        bands: GELOS band names (e.g. ``"BLUE"``) in tensor channel order.
+
+    Raises:
+        ValueError: if a band has no computed.json mapping.
+    """
+    s2_stats = OLMOEARTH_COMPUTED_STATS["sentinel2_l2a"]
+    missing = [b for b in bands if b not in GELOS_TO_OLMOEARTH_S2_KEY]
+    if missing:
+        raise ValueError(
+            f"No OlmoEarth normalization stats mapping for S2 band(s) {missing}. "
+            f"Known bands: {sorted(GELOS_TO_OLMOEARTH_S2_KEY)}."
+        )
+    keys = [GELOS_TO_OLMOEARTH_S2_KEY[b] for b in bands]
+    return [s2_stats[k]["mean"] for k in keys], [s2_stats[k]["std"] for k in keys]
+
+
+def resolve_s1_band_stats(bands: Sequence[str]) -> tuple[list[float], list[float]]:
+    """Per-band (means, stds) for S1 bands (case-insensitive VV/VH) from computed.json.
+
+    Note: the computed.json sentinel1 stats are in DECIBELS — apply them to
+    dB-converted data (see :func:`convert_to_db`).
+
+    Raises:
+        ValueError: if a band is not vv/vh.
+    """
+    s1_stats = OLMOEARTH_COMPUTED_STATS["sentinel1"]
+    keys = [b.lower() for b in bands]
+    missing = [b for b, k in zip(bands, keys) if k not in s1_stats]
+    if missing:
+        raise ValueError(
+            f"No OlmoEarth normalization stats for S1 band(s) {missing}. "
+            f"Known bands: {sorted(s1_stats)}."
+        )
+    return [s1_stats[k]["mean"] for k in keys], [s1_stats[k]["std"] for k in keys]
 
 
 def build_s1_band_reorder_index(bands_s1: list[str]) -> list[int]:
@@ -129,9 +275,21 @@ class OlmoEarthBackbone(nn.Module):
 
     Accepts GELOS's channels-first ``(B, C, T, H, W)`` Sentinel-2 L2A tensor,
     reorders bands to OlmoEarth's expected 12-band order, transposes to
-    channels-last ``(B, H, W, T, C)``, runs the OlmoEarth encoder, mean-pools the
+    channels-last ``(B, H, W, T, C)``, applies OlmoEarth's pretraining
+    normalization (see below), runs the OlmoEarth encoder, mean-pools the
     token tensor over the spectral-group axis, and returns a single-element list
     ``[tokens]`` (terratorch necks expect a list of layer tensors).
+
+    With ``apply_pretraining_normalization=True`` (default), inputs must be RAW
+    sensor scale — S2 L2A digital numbers (0–10000) and S1 linear-power gamma0 —
+    and the wrapper replicates the normalization OlmoEarth's pretraining data
+    loader applied (the encoder itself has none): S1 is converted to dB
+    (``10*log10(clip(x, 1e-10))``) and both modalities are min-max scaled per
+    band over mean±2σ using ``olmoearth_pretrain``'s computed.json stats. The
+    datamodule must be configured with ``normalize: false`` and must NOT apply
+    ``db_scale_bands`` to S1, or values get double-transformed. Set
+    ``apply_pretraining_normalization=False`` only if you pre-normalize inputs
+    to OlmoEarth's pretraining scale yourself.
 
     The temporal axis is handled per ``temporal_pooling``:
 
@@ -165,6 +323,7 @@ class OlmoEarthBackbone(nn.Module):
         warn_missing_s1: bool = True,
         temporal_pooling: str = "mean",
         spatial_pooling: int | None = None,
+        apply_pretraining_normalization: bool = True,
         **kwargs,  # tolerate terratorch-injected args
     ) -> None:
         super().__init__()
@@ -201,6 +360,18 @@ class OlmoEarthBackbone(nn.Module):
         self.reorder_index_s1 = (
             build_s1_band_reorder_index(self.bands_s1) if self.bands_s1 is not None else None
         )
+
+        # Pretraining normalization stats, resolved for the POST-reorder channel
+        # order (reordering maps the configured band subset/order onto the
+        # canonical OlmoEarth orders, so stats are always indexed consistently).
+        self.apply_pretraining_normalization = apply_pretraining_normalization
+        if apply_pretraining_normalization:
+            self._s2_norm_means, self._s2_norm_stds = resolve_s2_band_stats(
+                OLMOEARTH_S2_BAND_ORDER
+            )
+            self._s1_norm_means, self._s1_norm_stds = resolve_s1_band_stats(
+                OLMOEARTH_S1_BAND_ORDER
+            )
 
         try:
             from olmoearth_pretrain.model_loader import (  # type: ignore[import-not-found]
@@ -298,6 +469,11 @@ class OlmoEarthBackbone(nn.Module):
         # 2. channels-first -> channels-last: (B, C, T, H, W) -> (B, H, W, T, C)
         x_s2 = x_s2.permute(0, 3, 4, 2, 1).contiguous()  # (B, H, W, T, 12)
 
+        # 2b. Pretraining normalization (expects RAW DN 0-10000): per-band
+        # min-max over mean±2σ, replicating olmoearth_pretrain's Normalizer.
+        if self.apply_pretraining_normalization:
+            x_s2 = minmax_normalize(x_s2, self._s2_norm_means, self._s2_norm_stds)
+
         # 3. Per-timestep timestamps (real or dummy fallback).
         timestamps = None
         if self._batch_timestamps is not None:
@@ -335,6 +511,12 @@ class OlmoEarthBackbone(nn.Module):
             idx_s1 = torch.as_tensor(self.reorder_index_s1, device=x_s1.device, dtype=torch.long)
             x_s1 = x_s1.index_select(dim=1, index=idx_s1)  # (B, 2, T, H, W)
             x_s1 = x_s1.permute(0, 3, 4, 2, 1).contiguous()  # (B, H, W, T, 2)
+            # Pretraining normalization (expects RAW LINEAR POWER): clip 1e-10 ->
+            # 10*log10 -> per-band min-max over mean±2σ (dB-scale stats).
+            if self.apply_pretraining_normalization:
+                x_s1 = minmax_normalize(
+                    convert_to_db(x_s1), self._s1_norm_means, self._s1_norm_stds
+                )
             sentinel1_tensor = x_s1
             # S1 has 1 band set -> mask shape (B, H, W, T, 1)
             sentinel1_mask = (
@@ -395,6 +577,7 @@ def olmoearth_v1_nano(
     model_id: str = "allenai/OlmoEarth-v1-Nano",
     bands: list[str] | None = None,
     patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
     hidden_dim: int | None = 128,
     **kwargs,
 ) -> OlmoEarthBackbone:
@@ -403,12 +586,18 @@ def olmoearth_v1_nano(
     Registered under its own name (``olmoearth_v1_nano``) in
     ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_nano",
     **model_args)`` returns an :class:`OlmoEarthBackbone`.
+
+    NOTE: inputs must be RAW S2 L2A digital numbers (0-10000). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper min-max
+    normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
+    loader did. Configure the datamodule with ``normalize: false``.
     """
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
         bands=bands,
         patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
         hidden_dim=hidden_dim,
         **kwargs,
     )
@@ -419,6 +608,7 @@ def olmoearth_v1_tiny(
     model_id: str = "allenai/OlmoEarth-v1-Tiny",
     bands: list[str] | None = None,
     patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
     hidden_dim: int | None = 192,
     **kwargs,
 ) -> OlmoEarthBackbone:
@@ -427,12 +617,18 @@ def olmoearth_v1_tiny(
     Registered under its own name (``olmoearth_v1_tiny``) in
     ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_tiny",
     **model_args)`` returns an :class:`OlmoEarthBackbone`.
+
+    NOTE: inputs must be RAW S2 L2A digital numbers (0-10000). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper min-max
+    normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
+    loader did. Configure the datamodule with ``normalize: false``.
     """
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
         bands=bands,
         patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
         hidden_dim=hidden_dim,
         **kwargs,
     )
@@ -443,6 +639,7 @@ def olmoearth_v1_base(
     model_id: str = "allenai/OlmoEarth-v1-Base",
     bands: list[str] | None = None,
     patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
     hidden_dim: int | None = 768,
     **kwargs,
 ) -> OlmoEarthBackbone:
@@ -451,12 +648,18 @@ def olmoearth_v1_base(
     Registered under its own name (``olmoearth_v1_base``) in
     ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_base",
     **model_args)`` returns an :class:`OlmoEarthBackbone`.
+
+    NOTE: inputs must be RAW S2 L2A digital numbers (0-10000). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper min-max
+    normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
+    loader did. Configure the datamodule with ``normalize: false``.
     """
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
         bands=bands,
         patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
         hidden_dim=hidden_dim,
         **kwargs,
     )
@@ -467,6 +670,7 @@ def olmoearth_v1_large(
     model_id: str = "allenai/OlmoEarth-v1-Large",
     bands: list[str] | None = None,
     patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
     hidden_dim: int | None = 1024,
     **kwargs,
 ) -> OlmoEarthBackbone:
@@ -475,12 +679,18 @@ def olmoearth_v1_large(
     Registered under its own name (``olmoearth_v1_large``) in
     ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_large",
     **model_args)`` returns an :class:`OlmoEarthBackbone`.
+
+    NOTE: inputs must be RAW S2 L2A digital numbers (0-10000). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper min-max
+    normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
+    loader did. Configure the datamodule with ``normalize: false``.
     """
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
         bands=bands,
         patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
         hidden_dim=hidden_dim,
         **kwargs,
     )
@@ -492,6 +702,7 @@ def olmoearth_v1_nano_s1s2(
     bands: list[str] | None = None,
     bands_s1: list[str] | None = None,
     patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
     hidden_dim: int | None = 128,
     **kwargs,
 ) -> OlmoEarthBackbone:
@@ -500,9 +711,13 @@ def olmoearth_v1_nano_s1s2(
     Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
     Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_nano``.
 
-    NOTE: S1 data must be in decibel scale. OlmoEarth pretraining used S1 dB values
-    (VV mean≈-11.6 dB, VH mean≈-17.7 dB). Linear-power S1 inputs produce incorrect
-    embeddings without raising an error.
+    NOTE: inputs must be RAW sensor scale — S2 L2A digital numbers (0-10000) and
+    S1 linear-power gamma0 (e.g. Planetary Computer sentinel-1-rtc). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper converts S1 to
+    dB and min-max normalizes both modalities per band over mean±2σ, exactly as
+    OlmoEarth's pretraining data loader did. Configure the datamodule with
+    ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
+    double-transformed.
     """
     return OlmoEarthBackbone(
         pretrained=pretrained,
@@ -510,6 +725,7 @@ def olmoearth_v1_nano_s1s2(
         bands=bands,
         bands_s1=bands_s1,
         patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
         hidden_dim=hidden_dim,
         **kwargs,
     )
@@ -521,6 +737,7 @@ def olmoearth_v1_tiny_s1s2(
     bands: list[str] | None = None,
     bands_s1: list[str] | None = None,
     patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
     hidden_dim: int | None = 192,
     **kwargs,
 ) -> OlmoEarthBackbone:
@@ -529,9 +746,13 @@ def olmoearth_v1_tiny_s1s2(
     Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
     Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_tiny``.
 
-    NOTE: S1 data must be in decibel scale. OlmoEarth pretraining used S1 dB values
-    (VV mean≈-11.6 dB, VH mean≈-17.7 dB). Linear-power S1 inputs produce incorrect
-    embeddings without raising an error.
+    NOTE: inputs must be RAW sensor scale — S2 L2A digital numbers (0-10000) and
+    S1 linear-power gamma0 (e.g. Planetary Computer sentinel-1-rtc). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper converts S1 to
+    dB and min-max normalizes both modalities per band over mean±2σ, exactly as
+    OlmoEarth's pretraining data loader did. Configure the datamodule with
+    ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
+    double-transformed.
     """
     return OlmoEarthBackbone(
         pretrained=pretrained,
@@ -539,6 +760,7 @@ def olmoearth_v1_tiny_s1s2(
         bands=bands,
         bands_s1=bands_s1,
         patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
         hidden_dim=hidden_dim,
         **kwargs,
     )
@@ -550,6 +772,7 @@ def olmoearth_v1_base_s1s2(
     bands: list[str] | None = None,
     bands_s1: list[str] | None = None,
     patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
     hidden_dim: int | None = 768,
     **kwargs,
 ) -> OlmoEarthBackbone:
@@ -558,9 +781,13 @@ def olmoearth_v1_base_s1s2(
     Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
     Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_base``.
 
-    NOTE: S1 data must be in decibel scale. OlmoEarth pretraining used S1 dB values
-    (VV mean≈-11.6 dB, VH mean≈-17.7 dB). Linear-power S1 inputs produce incorrect
-    embeddings without raising an error.
+    NOTE: inputs must be RAW sensor scale — S2 L2A digital numbers (0-10000) and
+    S1 linear-power gamma0 (e.g. Planetary Computer sentinel-1-rtc). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper converts S1 to
+    dB and min-max normalizes both modalities per band over mean±2σ, exactly as
+    OlmoEarth's pretraining data loader did. Configure the datamodule with
+    ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
+    double-transformed.
     """
     return OlmoEarthBackbone(
         pretrained=pretrained,
@@ -568,6 +795,7 @@ def olmoearth_v1_base_s1s2(
         bands=bands,
         bands_s1=bands_s1,
         patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
         hidden_dim=hidden_dim,
         **kwargs,
     )
@@ -579,6 +807,7 @@ def olmoearth_v1_large_s1s2(
     bands: list[str] | None = None,
     bands_s1: list[str] | None = None,
     patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
     hidden_dim: int | None = 1024,
     **kwargs,
 ) -> OlmoEarthBackbone:
@@ -587,9 +816,13 @@ def olmoearth_v1_large_s1s2(
     Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
     Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_large``.
 
-    NOTE: S1 data must be in decibel scale. OlmoEarth pretraining used S1 dB values
-    (VV mean≈-11.6 dB, VH mean≈-17.7 dB). Linear-power S1 inputs produce incorrect
-    embeddings without raising an error.
+    NOTE: inputs must be RAW sensor scale — S2 L2A digital numbers (0-10000) and
+    S1 linear-power gamma0 (e.g. Planetary Computer sentinel-1-rtc). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper converts S1 to
+    dB and min-max normalizes both modalities per band over mean±2σ, exactly as
+    OlmoEarth's pretraining data loader did. Configure the datamodule with
+    ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
+    double-transformed.
     """
     return OlmoEarthBackbone(
         pretrained=pretrained,
@@ -597,6 +830,7 @@ def olmoearth_v1_large_s1s2(
         bands=bands,
         bands_s1=bands_s1,
         patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
         hidden_dim=hidden_dim,
         **kwargs,
     )

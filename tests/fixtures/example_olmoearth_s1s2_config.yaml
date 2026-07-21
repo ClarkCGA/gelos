@@ -22,8 +22,11 @@ data:
     # production 12-band GELOS-LC dataset for live inference. ExampleGELOSDataSet
     # defines only 11 S2L2A bands and lacks WATER_VAPOR (B09), which OlmoEarth
     # requires. A real smoke run therefore needs a dataset that supplies the full
-    # 12-band S2L2A set and S1RTC with VV/VH bands in decibel scale.
-    # NOTE: S1 data must be in decibel scale (VV mean≈-11.6 dB, VH mean≈-17.7 dB).
+    # 12-band S2L2A set and S1RTC with VV/VH bands as RAW LINEAR POWER — the
+    # backbone converts S1 to dB and applies OlmoEarth's pretraining
+    # normalization internally, hence normalize: false below. Do NOT set
+    # db_scale_bands for S1 here, or values get double-transformed.
+    normalize: false
     bands:
       S2L2A:
         - coastal
@@ -72,8 +75,8 @@ model:
         - nir08
         - swir16
         - swir22
-      # S1 bands in the order the incoming tensor presents them.
-      # NOTE: S1 data must be in decibel scale.
+      # S1 bands in the order the incoming tensor presents them. S1 input must be
+      # RAW linear power; the wrapper converts to dB and normalizes internally.
       bands_s1:
         - VV
         - VH

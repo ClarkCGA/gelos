@@ -10,6 +10,7 @@ import typer
 import yaml
 
 from gelos.gelosdatamodule import GELOSDataModule
+from gelos.normalization import inject_model_normalization
 
 try:
     import gelos.backbones.olmoearth_backbone  # noqa: F401 — registers OlmoEarth factories
@@ -134,6 +135,10 @@ def setup_embedding_run(
         yaml_config["model"]["init_args"]["extraction_strategies"] = yaml_config[
             "spectral_band_extraction"
         ]
+
+    model_name = yaml_config["model"]["init_args"].get("model")
+    if isinstance(model_name, str):
+        inject_model_normalization(yaml_config["data"].setdefault("init_args", {}), model_name)
 
     datamodule: GELOSDataModule = instantiate_recursive(yaml_config["data"])
 

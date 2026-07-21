@@ -377,12 +377,144 @@ def test_s1_band_reorder_index_missing_band_raises():
         build_s1_band_reorder_index(["VV"])
 
 
+# ---------------------------------------------------------------------------
+# Pretraining normalization helper tests — pure math, no model dependency.
+# Expected values are hand-computed as (x - (mean - 2σ)) / (4σ) using the
+# constants from olmoearth_pretrain/data/norm_configs/computed.json.
+# ---------------------------------------------------------------------------
+
+# computed.json sentinel1 stats (dB scale).
+_VV_MEAN, _VV_STD = -11.648990747328444, 10.840350299936597
+_VH_MEAN, _VH_STD = -17.745436133270044, 10.216274681392647
+# computed.json sentinel2_l2a stats for B02 (BLUE) and B08 (NIR_BROAD).
+_B02_MEAN, _B02_STD = 1188.9412572078477, 1859.1923971769581
+_B08_MEAN, _B08_STD = 2755.481305028308, 1612.2565699990187
+
+
+def _expected_minmax(x: float, mean: float, std: float) -> float:
+    return (x - (mean - 2 * std)) / (4 * std)
+
+
+def test_convert_to_db_matches_10_log10():
+    from gelos.backbones.olmoearth_backbone import convert_to_db
+
+    x = torch.tensor([1.0, 0.1, 0.01])
+    torch.testing.assert_close(convert_to_db(x), torch.tensor([0.0, -10.0, -20.0]))
+
+
+def test_convert_to_db_clips_at_1e_minus_10():
+    from gelos.backbones.olmoearth_backbone import convert_to_db
+
+    # Zero (and negative) linear power is clipped to 1e-10 -> -100 dB, not -inf.
+    x = torch.tensor([0.0, -5.0, 1e-12])
+    torch.testing.assert_close(convert_to_db(x), torch.tensor([-100.0, -100.0, -100.0]))
+
+
+def test_s1_normalization_matches_hand_computed():
+    from gelos.backbones.olmoearth_backbone import (
+        convert_to_db,
+        minmax_normalize,
+        resolve_s1_band_stats,
+    )
+
+    means, stds = resolve_s1_band_stats(["VV", "VH"])
+    assert means == [_VV_MEAN, _VH_MEAN]
+    assert stds == [_VV_STD, _VH_STD]
+
+    # Raw linear power (VV, VH), last axis = bands.
+    x = torch.tensor([[0.1, 0.01]], dtype=torch.float64)  # -> -10 dB, -20 dB
+    out = minmax_normalize(convert_to_db(x), means, stds)
+    expected = torch.tensor(
+        [
+            [
+                _expected_minmax(-10.0, _VV_MEAN, _VV_STD),
+                _expected_minmax(-20.0, _VH_MEAN, _VH_STD),
+            ]
+        ],
+        dtype=torch.float64,
+    )
+    torch.testing.assert_close(out, expected)
+
+
+def test_s2_normalization_matches_hand_computed():
+    from gelos.backbones.olmoearth_backbone import minmax_normalize, resolve_s2_band_stats
+
+    means, stds = resolve_s2_band_stats(["BLUE", "NIR_BROAD"])
+    assert means == [_B02_MEAN, _B08_MEAN]
+    assert stds == [_B02_STD, _B08_STD]
+
+    # Raw DN values, no log for S2.
+    x = torch.tensor([[1500.0, 3000.0]], dtype=torch.float64)
+    out = minmax_normalize(x, means, stds)
+    expected = torch.tensor(
+        [
+            [
+                _expected_minmax(1500.0, _B02_MEAN, _B02_STD),
+                _expected_minmax(3000.0, _B08_MEAN, _B08_STD),
+            ]
+        ],
+        dtype=torch.float64,
+    )
+    torch.testing.assert_close(out, expected)
+
+
+def test_s2_normalization_band_mean_maps_to_half():
+    # By construction, x == mean must normalize to exactly 0.5.
+    from gelos.backbones.olmoearth_backbone import minmax_normalize, resolve_s2_band_stats
+
+    means, stds = resolve_s2_band_stats(OLMOEARTH_S2_BAND_ORDER)
+    x = torch.tensor(means, dtype=torch.float64)
+    out = minmax_normalize(x, means, stds)
+    torch.testing.assert_close(out, torch.full_like(out, 0.5))
+
+
+def test_resolve_s2_band_stats_full_order_covers_all_12_bands():
+    from gelos.backbones.olmoearth_backbone import (
+        GELOS_TO_OLMOEARTH_S2_KEY,
+        OLMOEARTH_COMPUTED_STATS,
+        resolve_s2_band_stats,
+    )
+
+    means, stds = resolve_s2_band_stats(OLMOEARTH_S2_BAND_ORDER)
+    s2_stats = OLMOEARTH_COMPUTED_STATS["sentinel2_l2a"]
+    expected_keys = [GELOS_TO_OLMOEARTH_S2_KEY[b] for b in OLMOEARTH_S2_BAND_ORDER]
+    assert means == [s2_stats[k]["mean"] for k in expected_keys]
+    assert stds == [s2_stats[k]["std"] for k in expected_keys]
+
+
+def test_resolve_s2_band_stats_unknown_band_raises():
+    from gelos.backbones.olmoearth_backbone import resolve_s2_band_stats
+
+    with pytest.raises(ValueError, match="NOT_A_BAND"):
+        resolve_s2_band_stats(["BLUE", "NOT_A_BAND"])
+
+
+def test_resolve_s1_band_stats_unknown_band_raises():
+    from gelos.backbones.olmoearth_backbone import resolve_s1_band_stats
+
+    with pytest.raises(ValueError, match="HH"):
+        resolve_s1_band_stats(["HH"])
+
+
+def test_minmax_normalize_broadcasts_over_leading_dims():
+    # Same per-band math must apply at every (B, H, W, T) position.
+    from gelos.backbones.olmoearth_backbone import minmax_normalize
+
+    means, stds = [10.0, 20.0], [2.0, 4.0]
+    x = torch.full((2, 3, 3, 4, 2), 10.0)
+    x[..., 1] = 20.0  # each band sits exactly at its mean
+    out = minmax_normalize(x, means, stds)
+    torch.testing.assert_close(out, torch.full_like(out, 0.5))
+
+
 def test_example_s1s2_fixture_yaml_valid():
     import yaml
     from pathlib import Path
 
     path = Path(__file__).parent / "fixtures" / "example_olmoearth_s1s2_config.yaml"
     config = yaml.safe_load(path.read_text())
+    # The backbone normalizes internally; the datamodule must not double-normalize.
+    assert config["data"]["init_args"]["normalize"] is False
     bands = config["data"]["init_args"]["bands"]
     assert "S1RTC" in bands
     assert set(bands["S1RTC"]) == {"VV", "VH"}

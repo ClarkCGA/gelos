@@ -54,6 +54,7 @@ class GELOSDataSet(NonGeoDataset):
         concat_bands: bool = False,
         repeat_bands: dict[str, int] | None = None,
         perturb_bands: dict[str, dict[str, float]] | None = None,
+        db_scale_bands: dict[str, list[str]] | None = None,
     ) -> None:
 
         self.bands = bands
@@ -61,6 +62,7 @@ class GELOSDataSet(NonGeoDataset):
         self.concat_bands = concat_bands
         self.repeat_bands = repeat_bands
         self.perturb_bands = perturb_bands
+        self.db_scale_bands = db_scale_bands
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
             f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
@@ -104,6 +106,17 @@ class GELOSDataSet(NonGeoDataset):
         for sensor in self.bands.keys():
             image = self._load_sensor_images(index, sensor)
             output[sensor] = image.astype(np.float32)
+
+        # Convert linear-power bands to decibels right after loading, before any
+        # perturbation or transforms. Matches olmoearth_pretrain's convert_to_db:
+        # clip to 1e-10 to avoid log(0), then 10 * log10(x).
+        if self.db_scale_bands:
+            for sensor, db_band_list in self.db_scale_bands.items():
+                band_indices = [self.bands[sensor].index(band) for band in db_band_list]
+                for band_index in band_indices:
+                    output[sensor][..., band_index] = 10 * np.log10(
+                        np.clip(output[sensor][..., band_index], 1e-10, None)
+                    )
 
         if self.repeat_bands:
             for sensor, repeats in self.repeat_bands.items():
