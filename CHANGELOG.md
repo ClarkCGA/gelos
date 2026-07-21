@@ -14,6 +14,30 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **Fix: silent normalization no-op in `GELOSDataModule`.** Stats were only looked up on
+  lowercase `means`/`stds` dataset-class attributes, so downstream classes defining uppercase
+  `MEANS`/`STDS` (e.g. gelos-lc's `GELOSLCDataSet`) silently resolved every band to mean 0.0 /
+  std 1.0, making `Normalize`/`MultimodalNormalize` an identity — models received raw pixel
+  values. Resolution order is now: explicit `means`/`stds` args → lowercase `means`/`stds`
+  class attrs → uppercase `MEANS`/`STDS` class attrs → default 0.0/1.0, and a loud
+  `logger.warning` is emitted when a modality resolves entirely to defaults.
+- New `GELOSDataModule` param `normalize: bool = True`: when `false` (and no custom `aug`),
+  `self.aug` is an identity — for backbones that apply their own pretraining normalization
+  internally (e.g. OlmoEarth).
+- New `GELOSDataModule`/`GELOSDataSet` param `db_scale_bands: dict[str, list[str]] | None`:
+  converts the listed bands from linear power to decibels (`10 * log10(clip(x, 1e-10))`) at
+  load time, before perturbation and transforms (e.g. `{"S1RTC": ["VV", "VH"]}`).
+- **Fix: OlmoEarth S1 scale mismatch + missing pretraining normalization.** The dataset's
+  S1RTC chips are linear-power gamma0 but OlmoEarth was pretrained on dB-scale S1, and its
+  pretraining data loader (not the encoder) normalized all inputs. New
+  `OlmoEarthBackbone`/factory arg `apply_pretraining_normalization: bool = True` replicates
+  that data-loader normalization exactly inside `forward_features`: S1 raw linear power →
+  clip `1e-10` → `10*log10` → per-band mean±2σ min-max; S2 raw DN (0–10000) → per-band
+  mean±2σ min-max. Stats are read from the installed `olmoearth_pretrain` package's
+  `norm_configs/computed.json` (hard-coded fallback included). **Breaking for OlmoEarth
+  configs**: inputs must now be RAW sensor scale — set `normalize: false` under
+  `data.init_args` (done in the shipped `configs/olmoearth_v1_*.yaml`) and do not apply
+  `db_scale_bands` to S1 for this backbone.
 - OlmoEarth `temporal_pooling` option on `OlmoEarthBackbone` (`model_args.temporal_pooling`):
   `mean` (default, unchanged behavior) averages tokens over timesteps; `keep` returns
   per-timestep tokens flattened time-major to `(B, T*H'*W', D)`, matching the Prithvi

@@ -24,7 +24,10 @@ data:
     # requires. A real smoke run therefore needs a dataset that supplies the full
     # 12-band S2L2A set (see configs/olmoearth_v1_base.yaml). The 11 bands the
     # example dataset does provide are listed here for shape; the wrapper raises a
-    # clear ValueError on the missing WATER_VAPOR band.
+    # clear ValueError on the missing WATER_VAPOR band. Bands must be RAW digital
+    # numbers — the backbone applies OlmoEarth's pretraining normalization
+    # internally, hence normalize: false below.
+    normalize: false
     bands:
       S2L2A:
         - coastal

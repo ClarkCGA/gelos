@@ -20,7 +20,10 @@ data:
     num_workers: 4
     # OlmoEarth is Sentinel-2 L2A only here. It requires the full 12-band S2L2A
     # set; the production GELOS-LC dataset must supply all of these (including
-    # WATER_VAPOR / B09, which ExampleGELOSDataSet does not define).
+    # WATER_VAPOR / B09, which ExampleGELOSDataSet does not define). Bands must
+    # be RAW digital numbers (0-10000) -- the backbone applies OlmoEarth's
+    # pretraining normalization internally, hence normalize: false below.
+    normalize: false
     bands:
       S2L2A:
         - COASTAL_AEROSOL   # B01

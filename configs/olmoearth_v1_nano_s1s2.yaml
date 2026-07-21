@@ -19,8 +19,12 @@ data:
     batch_size: 8
     num_workers: 4
     # OlmoEarth S2+S1 mode. S2 requires the full 12-band S2L2A set (including
-    # WATER_VAPOR / B09). S1 requires VV and VH in decibel scale.
-    # NOTE: S1 data must be in decibel scale (VV mean≈-11.6 dB, VH mean≈-17.7 dB).
+    # WATER_VAPOR / B09) as RAW digital numbers (0-10000). S1 requires VV and VH
+    # as RAW LINEAR POWER gamma0 (e.g. Planetary Computer sentinel-1-rtc) -- the
+    # backbone converts S1 to dB and applies OlmoEarth's pretraining
+    # normalization to both modalities internally, hence normalize: false below.
+    # Do NOT set db_scale_bands for S1 here, or values get double-transformed.
+    normalize: false
     bands:
       S2L2A:
         - COASTAL_AEROSOL   # B01
@@ -74,7 +78,8 @@ model:
         - SWIR_1
         - SWIR_2
       # S1 bands in the order the incoming tensor presents them. Must match
-      # data.bands.S1RTC above. NOTE: S1 data must be in decibel scale.
+      # data.bands.S1RTC above. S1 input must be RAW linear power; the wrapper
+      # converts to dB and normalizes internally (apply_pretraining_normalization).
       bands_s1:
         - VV
         - VH

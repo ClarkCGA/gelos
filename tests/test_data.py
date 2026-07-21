@@ -102,6 +102,7 @@ class ExampleGELOSDataSet(GELOSDataSet):
         concat_bands: bool = False,
         repeat_bands: dict[str, int] | None = None,
         perturb_bands: dict[str, dict[str, float]] | None = None,
+        db_scale_bands: dict[str, list[str]] | None = None,
     ) -> None:
         if bands is None:
             bands = self.all_band_names
@@ -113,6 +114,7 @@ class ExampleGELOSDataSet(GELOSDataSet):
             concat_bands=concat_bands,
             repeat_bands=repeat_bands,
             perturb_bands=perturb_bands,
+            db_scale_bands=db_scale_bands,
         )
 
         self.data_root = Path(data_root)
@@ -361,6 +363,238 @@ def test_datamodule_setup_and_iterate(data_root):
     assert "image" in batch
     assert "filename" in batch
     assert "file_id" in batch
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Tests: normalization stats resolution (explicit args -> means/stds ->
+# MEANS/STDS -> defaults) and the identity-normalization warning
+# ---------------------------------------------------------------------------
+
+
+class _UppercaseStatsDataSet:
+    """Minimal dataset-class stand-in defining only uppercase MEANS/STDS."""
+
+    all_band_names = {"S2L2A": ["blue", "green"]}
+    MEANS = {"S2L2A": {"blue": 10.0, "green": 20.0}}
+    STDS = {"S2L2A": {"blue": 2.0, "green": 4.0}}
+
+
+class _BothCaseStatsDataSet:
+    """Defines both cases; lowercase means/stds must win over MEANS/STDS."""
+
+    all_band_names = {"S2L2A": ["blue"]}
+    means = {"S2L2A": {"blue": 1.0}}
+    stds = {"S2L2A": {"blue": 3.0}}
+    MEANS = {"S2L2A": {"blue": 100.0}}
+    STDS = {"S2L2A": {"blue": 300.0}}
+
+
+class _NoStatsDataSet:
+    """No stats attributes at all: every band resolves to the 0.0/1.0 defaults."""
+
+    all_band_names = {"S2L2A": ["blue", "green"]}
+
+
+def _capture_loguru_warnings():
+    """Return (messages, sink_id): a list capturing loguru WARNING+ output."""
+    from loguru import logger
+
+    messages = []
+    sink_id = logger.add(lambda message: messages.append(str(message)), level="WARNING")
+    return messages, sink_id
+
+
+def test_stats_resolution_uppercase_class_attrs():
+    """Uppercase MEANS/STDS class attributes are found (the gelos-lc convention)."""
+    dm = GELOSDataModule(
+        data_root="unused",
+        batch_size=1,
+        num_workers=0,
+        dataset_class=_UppercaseStatsDataSet,
+        bands={"S2L2A": ["blue", "green"]},
+    )
+    assert dm.means["S2L2A"] == [10.0, 20.0]
+    assert dm.stds["S2L2A"] == [2.0, 4.0]
+
+
+def test_stats_resolution_lowercase_wins_over_uppercase():
+    """Lowercase means/stds class attributes take precedence over MEANS/STDS."""
+    dm = GELOSDataModule(
+        data_root="unused",
+        batch_size=1,
+        num_workers=0,
+        dataset_class=_BothCaseStatsDataSet,
+        bands={"S2L2A": ["blue"]},
+    )
+    assert dm.means["S2L2A"] == [1.0]
+    assert dm.stds["S2L2A"] == [3.0]
+
+
+def test_stats_resolution_explicit_args_win():
+    """Explicit means/stds arguments take precedence over any class attributes."""
+    dm = GELOSDataModule(
+        data_root="unused",
+        batch_size=1,
+        num_workers=0,
+        dataset_class=_BothCaseStatsDataSet,
+        bands={"S2L2A": ["blue"]},
+        means={"S2L2A": {"blue": 7.0}},
+        stds={"S2L2A": {"blue": 9.0}},
+    )
+    assert dm.means["S2L2A"] == [7.0]
+    assert dm.stds["S2L2A"] == [9.0]
+
+
+def test_stats_resolution_all_defaults_warns():
+    """A modality resolving entirely to defaults logs a loud identity warning."""
+    messages, sink_id = _capture_loguru_warnings()
+    from loguru import logger
+
+    try:
+        dm = GELOSDataModule(
+            data_root="unused",
+            batch_size=1,
+            num_workers=0,
+            dataset_class=_NoStatsDataSet,
+            bands={"S2L2A": ["blue", "green"]},
+        )
+    finally:
+        logger.remove(sink_id)
+    assert dm.means["S2L2A"] == [0.0, 0.0]
+    assert dm.stds["S2L2A"] == [1.0, 1.0]
+    assert any(
+        "identity" in message and "_NoStatsDataSet" in message and "S2L2A" in message
+        for message in messages
+    )
+
+
+def test_stats_resolution_real_stats_do_not_warn():
+    """No identity warning when real statistics are resolved."""
+    messages, sink_id = _capture_loguru_warnings()
+    from loguru import logger
+
+    try:
+        GELOSDataModule(
+            data_root="unused",
+            batch_size=1,
+            num_workers=0,
+            dataset_class=_UppercaseStatsDataSet,
+            bands={"S2L2A": ["blue", "green"]},
+        )
+    finally:
+        logger.remove(sink_id)
+    assert not any("identity" in message for message in messages)
+
+
+# ---------------------------------------------------------------------------
+# Tests: normalize=False (identity aug)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_false_aug_is_identity(data_root):
+    """With normalize=False the aug leaves a batch completely unchanged."""
+    import copy
+
+    dm = GELOSDataModule(
+        data_root=data_root,
+        batch_size=2,
+        num_workers=0,
+        dataset_class=ExampleGELOSDataSet,
+        bands={"S2L2A": ["blue", "green", "red"], "DEM": ["DEM"]},
+        means={"S2L2A": {"blue": 5.0, "green": 5.0, "red": 5.0}, "DEM": {"DEM": 5.0}},
+        stds={"S2L2A": {"blue": 2.0, "green": 2.0, "red": 2.0}, "DEM": {"DEM": 2.0}},
+        normalize=False,
+    )
+    dm.setup(stage="predict")
+    batch = next(iter(dm.predict_dataloader()))
+    original = copy.deepcopy(batch)
+    out = dm.aug(batch)
+    for sensor in ("S2L2A", "DEM"):
+        torch.testing.assert_close(out["image"][sensor], original["image"][sensor])
+    gc.collect()
+
+
+def test_normalize_true_aug_changes_batch(data_root):
+    """Control: with normalize=True and real stats, the aug does modify the batch."""
+    import copy
+
+    dm = GELOSDataModule(
+        data_root=data_root,
+        batch_size=2,
+        num_workers=0,
+        dataset_class=ExampleGELOSDataSet,
+        bands={"S2L2A": ["blue", "green", "red"], "DEM": ["DEM"]},
+        means={"S2L2A": {"blue": 5.0, "green": 5.0, "red": 5.0}, "DEM": {"DEM": 5.0}},
+        stds={"S2L2A": {"blue": 2.0, "green": 2.0, "red": 2.0}, "DEM": {"DEM": 2.0}},
+    )
+    dm.setup(stage="predict")
+    batch = next(iter(dm.predict_dataloader()))
+    original = copy.deepcopy(batch)
+    out = dm.aug(batch)
+    assert not torch.equal(out["image"]["S2L2A"], original["image"]["S2L2A"])
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Tests: db_scale_bands (linear power -> decibel conversion)
+# ---------------------------------------------------------------------------
+
+
+def test_db_scale_bands_converts_to_decibels(data_root):
+    """db_scale_bands output equals 10*log10(clip(raw, 1e-10)) of the raw output."""
+    bands = {"S1RTC": ["VV", "VH"]}
+    raw_ds = ExampleGELOSDataSet(data_root=data_root, bands=bands)
+    db_ds = ExampleGELOSDataSet(
+        data_root=data_root, bands=bands, db_scale_bands={"S1RTC": ["VV", "VH"]}
+    )
+    raw = raw_ds[0]["image"]
+    db = db_ds[0]["image"]
+    expected = 10 * torch.log10(torch.clamp(raw, min=1e-10))
+    torch.testing.assert_close(db, expected)
+    gc.collect()
+
+
+def test_db_scale_bands_converts_only_listed_bands(data_root):
+    """Bands not listed in db_scale_bands are untouched."""
+    bands = {"S1RTC": ["VV", "VH"]}
+    raw_ds = ExampleGELOSDataSet(data_root=data_root, bands=bands)
+    db_ds = ExampleGELOSDataSet(
+        data_root=data_root, bands=bands, db_scale_bands={"S1RTC": ["VV"]}
+    )
+    raw = raw_ds[0]["image"]
+    db = db_ds[0]["image"]
+    # Band layout is [C, T, H, W]: VV is channel 0, VH channel 1.
+    torch.testing.assert_close(db[0], 10 * torch.log10(torch.clamp(raw[0], min=1e-10)))
+    torch.testing.assert_close(db[1], raw[1])
+    gc.collect()
+
+
+def test_db_scale_bands_invalid_band_raises(data_root):
+    """Band names are validated against self.bands like perturb_bands."""
+    ds = ExampleGELOSDataSet(
+        data_root=data_root,
+        bands={"S1RTC": ["VV", "VH"]},
+        db_scale_bands={"S1RTC": ["nonexistent_band"]},
+    )
+    with pytest.raises(ValueError):
+        ds[0]
+    gc.collect()
+
+
+def test_datamodule_passes_db_scale_bands_to_dataset(data_root):
+    """GELOSDataModule forwards db_scale_bands to the dataset in setup()."""
+    db_scale_bands = {"S1RTC": ["VV", "VH"]}
+    dm = GELOSDataModule(
+        data_root=data_root,
+        batch_size=1,
+        num_workers=0,
+        dataset_class=ExampleGELOSDataSet,
+        bands={"S1RTC": ["VV", "VH"]},
+        db_scale_bands=db_scale_bands,
+    )
+    dm.setup(stage="predict")
+    assert dm.dataset.db_scale_bands == db_scale_bands
     gc.collect()
 
 
