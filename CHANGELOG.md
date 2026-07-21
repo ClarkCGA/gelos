@@ -14,6 +14,14 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **Analysis completion markers.** `run_analysis` now writes a `.analysis_complete` marker
+  (mirroring generation's `.embeddings_complete`) and skips fully-completed configs on
+  re-runs. Model runs (`knn`/`linear_probe`/`random_forest`) now also skip individually
+  when their results CSV and confusion-matrix figure already exist, closing the one gap in
+  the per-step caching (embeddings, transforms, metrics, and plots already skipped). New
+  `--overwrite` flag on `python -m gelos.analysis` re-enters completed runs; per-step
+  caches still apply, so only missing artifacts are recomputed — delete cached outputs for
+  a full redo.
 - **Model-matched normalization by default in `gelos.generation`.** New module
   `gelos.normalization` maps backbone names to their pretraining statistics (Prithvi EO V2,
   TerraMind v1 — imported from terratorch with hard-coded fallbacks) and required scale

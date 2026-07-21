@@ -742,3 +742,85 @@ def test_temporal_cosine_similarity_invalid_timesteps():
     with pytest.raises(ValueError, match="n_timesteps must be an int > 1"):
         temporal_cosine_similarity(*dummy_args, n_timesteps="four")
     gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Tests: run_analysis completion marker + model result skipping
+# ---------------------------------------------------------------------------
+
+
+def _marker_ctx(tmp_path, synthetic_labels):
+    """Build a minimal AnalysisContext for run_analysis marker tests."""
+    from gelos.analysis import AnalysisContext
+
+    chip_gdf = gpd.GeoDataFrame(
+        {
+            "id": list(range(N_SAMPLES)),
+            "lulc": synthetic_labels,
+            "geometry": [Point(float(i), float(i)) for i in range(N_SAMPLES)],
+        },
+        crs="EPSG:4326",
+    ).set_index("id")
+    emb_dir = tmp_path / "embeddings" / "layer_-1"
+    emb_dir.mkdir(parents=True)
+    return AnalysisContext(
+        yaml_config={},
+        config_stem="exptest",
+        experiment_name="marker test",
+        style_cfg={"category_column": "lulc", "colors": {}, "labels": {}},
+        category_column="lulc",
+        embedding_extraction_strategies={
+            "strategy": {
+                "slice_args": [{"start": 0, "stop": 1, "step": 1}],
+                "transforms": [{"type": "pca", "params": {"n_components": 2}}],
+                "models": [{"type": "knn", "transform": "pca", "params": {"n_splits": 2}}],
+            }
+        },
+        chip_gdf=chip_gdf,
+        input_dir=tmp_path / "embeddings",
+        output_dir=tmp_path / "processed",
+        figures_dir=tmp_path / "figures",
+        null_handling="drop",
+        embeddings_directories=[emb_dir],
+    )
+
+
+def test_run_analysis_marker_and_model_skip(
+    tmp_path, synthetic_embeddings, synthetic_labels, monkeypatch
+):
+    """Second run skips via .analysis_complete; overwrite re-enters but cached models skip."""
+    import gelos.analysis as analysis_mod
+
+    embeddings, chip_indices = synthetic_embeddings
+    ctx = _marker_ctx(tmp_path, synthetic_labels)
+    ctx.figures_dir.mkdir(parents=True)
+    monkeypatch.setattr(analysis_mod, "setup_analysis_run", lambda *a, **k: ctx)
+    extract_calls = []
+
+    def fake_extract(directory, slice_args):
+        extract_calls.append(directory)
+        return embeddings, chip_indices
+
+    monkeypatch.setattr(analysis_mod, "extract_embeddings", fake_extract)
+    args = (tmp_path / "cfg.yaml", tmp_path, tmp_path, tmp_path, tmp_path)
+
+    results = analysis_mod.run_analysis(*args)
+    marker = ctx.output_dir / ".analysis_complete"
+    assert marker.exists()
+    assert len(extract_calls) == 1
+    assert any(key.endswith("_knn") for key in results)
+    model_csv = ctx.output_dir / "layer_-1" / "exptest_strategy_layer_-1_knn_knn_results.csv"
+    assert model_csv.exists()
+
+    # Second run: marker short-circuits everything.
+    assert analysis_mod.run_analysis(*args) == {}
+    assert len(extract_calls) == 1
+
+    # Overwrite: re-enters, but embeddings come from cache and the cached model
+    # result (results CSV + confusion matrix) is not recomputed.
+    csv_mtime = model_csv.stat().st_mtime_ns
+    results = analysis_mod.run_analysis(*args, overwrite=True)
+    assert len(extract_calls) == 1  # .npy cache hit, no re-extraction
+    assert results == {}  # model skipped, nothing recomputed
+    assert model_csv.stat().st_mtime_ns == csv_mtime
+    gc.collect()
