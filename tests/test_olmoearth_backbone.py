@@ -521,3 +521,47 @@ def test_example_s1s2_fixture_yaml_valid():
     model_args = config["model"]["init_args"]["model_args"]
     assert "bands_s1" in model_args
     assert set(model_args["bands_s1"]) == {"VV", "VH"}
+
+
+# ---------------------------------------------------------------------------
+# OlmoEarth v1.2 factory tests (model-free: signature + registry only).
+# ---------------------------------------------------------------------------
+
+# (factory name, hidden_dim default, model_id default) for all 8 v1.2 factories.
+V1_2_FACTORIES = [
+    ("olmoearth_v1_2_nano", 128, "allenai/OlmoEarth-v1_2-Nano"),
+    ("olmoearth_v1_2_tiny", 192, "allenai/OlmoEarth-v1_2-Tiny"),
+    ("olmoearth_v1_2_small", 384, "allenai/OlmoEarth-v1_2-Small"),
+    ("olmoearth_v1_2_base", 768, "allenai/OlmoEarth-v1_2-Base"),
+    ("olmoearth_v1_2_nano_s1s2", 128, "allenai/OlmoEarth-v1_2-Nano"),
+    ("olmoearth_v1_2_tiny_s1s2", 192, "allenai/OlmoEarth-v1_2-Tiny"),
+    ("olmoearth_v1_2_small_s1s2", 384, "allenai/OlmoEarth-v1_2-Small"),
+    ("olmoearth_v1_2_base_s1s2", 768, "allenai/OlmoEarth-v1_2-Base"),
+]
+
+
+@pytest.mark.parametrize("name, hidden_dim, model_id", V1_2_FACTORIES)
+def test_v1_2_factory_defaults(name, hidden_dim, model_id):
+    import inspect
+
+    import gelos.backbones.olmoearth_backbone as oe
+
+    fn = getattr(oe, name)
+    params = inspect.signature(fn).parameters
+    assert params["hidden_dim"].default == hidden_dim
+    assert params["model_id"].default == model_id
+    # The _s1s2 variants must expose the extra bands_s1 pass-through param.
+    if name.endswith("_s1s2"):
+        assert "bands_s1" in params
+
+
+def test_v1_2_factories_registered():
+    try:
+        from terratorch.registry import TERRATORCH_BACKBONE_REGISTRY
+    except ImportError:
+        pytest.skip("terratorch registry not importable in this environment")
+    # Importing the module triggers self-registration of the factories.
+    import gelos.backbones.olmoearth_backbone  # noqa: F401
+
+    for name, _hidden_dim, _model_id in V1_2_FACTORIES:
+        assert name in TERRATORCH_BACKBONE_REGISTRY

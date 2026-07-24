@@ -836,6 +836,270 @@ def olmoearth_v1_large_s1s2(
     )
 
 
+def olmoearth_v1_2_nano(
+    pretrained: bool = True,
+    model_id: str = "allenai/OlmoEarth-v1_2-Nano",
+    bands: list[str] | None = None,
+    patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
+    hidden_dim: int | None = 128,
+    **kwargs,
+) -> OlmoEarthBackbone:
+    """Terratorch backbone factory for the OlmoEarth v1.2 Nano checkpoint (D=128).
+
+    Registered under its own name (``olmoearth_v1_2_nano``) in
+    ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_2_nano",
+    **model_args)`` returns an :class:`OlmoEarthBackbone`.
+
+    NOTE: inputs must be RAW S2 L2A digital numbers (0-10000). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper min-max
+    normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
+    loader did. Configure the datamodule with ``normalize: false``.
+    """
+    return OlmoEarthBackbone(
+        pretrained=pretrained,
+        model_id=model_id,
+        bands=bands,
+        patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
+        hidden_dim=hidden_dim,
+        **kwargs,
+    )
+
+
+def olmoearth_v1_2_tiny(
+    pretrained: bool = True,
+    model_id: str = "allenai/OlmoEarth-v1_2-Tiny",
+    bands: list[str] | None = None,
+    patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
+    hidden_dim: int | None = 192,
+    **kwargs,
+) -> OlmoEarthBackbone:
+    """Terratorch backbone factory for the OlmoEarth v1.2 Tiny checkpoint (D=192).
+
+    Registered under its own name (``olmoearth_v1_2_tiny``) in
+    ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_2_tiny",
+    **model_args)`` returns an :class:`OlmoEarthBackbone`.
+
+    NOTE: inputs must be RAW S2 L2A digital numbers (0-10000). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper min-max
+    normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
+    loader did. Configure the datamodule with ``normalize: false``.
+    """
+    return OlmoEarthBackbone(
+        pretrained=pretrained,
+        model_id=model_id,
+        bands=bands,
+        patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
+        hidden_dim=hidden_dim,
+        **kwargs,
+    )
+
+
+def olmoearth_v1_2_small(
+    pretrained: bool = True,
+    model_id: str = "allenai/OlmoEarth-v1_2-Small",
+    bands: list[str] | None = None,
+    patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
+    hidden_dim: int | None = 384,
+    **kwargs,
+) -> OlmoEarthBackbone:
+    """Terratorch backbone factory for the OlmoEarth v1.2 Small checkpoint (D=384).
+
+    Registered under its own name (``olmoearth_v1_2_small``) in
+    ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_2_small",
+    **model_args)`` returns an :class:`OlmoEarthBackbone`.
+
+    NOTE: inputs must be RAW S2 L2A digital numbers (0-10000). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper min-max
+    normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
+    loader did. Configure the datamodule with ``normalize: false``.
+    """
+    return OlmoEarthBackbone(
+        pretrained=pretrained,
+        model_id=model_id,
+        bands=bands,
+        patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
+        hidden_dim=hidden_dim,
+        **kwargs,
+    )
+
+
+def olmoearth_v1_2_base(
+    pretrained: bool = True,
+    model_id: str = "allenai/OlmoEarth-v1_2-Base",
+    bands: list[str] | None = None,
+    patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
+    hidden_dim: int | None = 768,
+    **kwargs,
+) -> OlmoEarthBackbone:
+    """Terratorch backbone factory for the OlmoEarth v1.2 Base checkpoint (D=768).
+
+    Registered under its own name (``olmoearth_v1_2_base``) in
+    ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_2_base",
+    **model_args)`` returns an :class:`OlmoEarthBackbone`.
+
+    NOTE: inputs must be RAW S2 L2A digital numbers (0-10000). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper min-max
+    normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
+    loader did. Configure the datamodule with ``normalize: false``.
+    """
+    return OlmoEarthBackbone(
+        pretrained=pretrained,
+        model_id=model_id,
+        bands=bands,
+        patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
+        hidden_dim=hidden_dim,
+        **kwargs,
+    )
+
+
+def olmoearth_v1_2_nano_s1s2(
+    pretrained: bool = True,
+    model_id: str = "allenai/OlmoEarth-v1_2-Nano",
+    bands: list[str] | None = None,
+    bands_s1: list[str] | None = None,
+    patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
+    hidden_dim: int | None = 128,
+    **kwargs,
+) -> OlmoEarthBackbone:
+    """Terratorch backbone factory for OlmoEarth v1.2 Nano with S2+S1 combined input (D=128).
+
+    Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
+    Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_2_nano``.
+
+    NOTE: inputs must be RAW sensor scale — S2 L2A digital numbers (0-10000) and
+    S1 linear-power gamma0 (e.g. Planetary Computer sentinel-1-rtc). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper converts S1 to
+    dB and min-max normalizes both modalities per band over mean±2σ, exactly as
+    OlmoEarth's pretraining data loader did. Configure the datamodule with
+    ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
+    double-transformed.
+    """
+    return OlmoEarthBackbone(
+        pretrained=pretrained,
+        model_id=model_id,
+        bands=bands,
+        bands_s1=bands_s1,
+        patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
+        hidden_dim=hidden_dim,
+        **kwargs,
+    )
+
+
+def olmoearth_v1_2_tiny_s1s2(
+    pretrained: bool = True,
+    model_id: str = "allenai/OlmoEarth-v1_2-Tiny",
+    bands: list[str] | None = None,
+    bands_s1: list[str] | None = None,
+    patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
+    hidden_dim: int | None = 192,
+    **kwargs,
+) -> OlmoEarthBackbone:
+    """Terratorch backbone factory for OlmoEarth v1.2 Tiny with S2+S1 combined input (D=192).
+
+    Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
+    Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_2_tiny``.
+
+    NOTE: inputs must be RAW sensor scale — S2 L2A digital numbers (0-10000) and
+    S1 linear-power gamma0 (e.g. Planetary Computer sentinel-1-rtc). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper converts S1 to
+    dB and min-max normalizes both modalities per band over mean±2σ, exactly as
+    OlmoEarth's pretraining data loader did. Configure the datamodule with
+    ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
+    double-transformed.
+    """
+    return OlmoEarthBackbone(
+        pretrained=pretrained,
+        model_id=model_id,
+        bands=bands,
+        bands_s1=bands_s1,
+        patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
+        hidden_dim=hidden_dim,
+        **kwargs,
+    )
+
+
+def olmoearth_v1_2_small_s1s2(
+    pretrained: bool = True,
+    model_id: str = "allenai/OlmoEarth-v1_2-Small",
+    bands: list[str] | None = None,
+    bands_s1: list[str] | None = None,
+    patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
+    hidden_dim: int | None = 384,
+    **kwargs,
+) -> OlmoEarthBackbone:
+    """Terratorch backbone factory for OlmoEarth v1.2 Small with S2+S1 combined input (D=384).
+
+    Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
+    Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_2_small``.
+
+    NOTE: inputs must be RAW sensor scale — S2 L2A digital numbers (0-10000) and
+    S1 linear-power gamma0 (e.g. Planetary Computer sentinel-1-rtc). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper converts S1 to
+    dB and min-max normalizes both modalities per band over mean±2σ, exactly as
+    OlmoEarth's pretraining data loader did. Configure the datamodule with
+    ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
+    double-transformed.
+    """
+    return OlmoEarthBackbone(
+        pretrained=pretrained,
+        model_id=model_id,
+        bands=bands,
+        bands_s1=bands_s1,
+        patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
+        hidden_dim=hidden_dim,
+        **kwargs,
+    )
+
+
+def olmoearth_v1_2_base_s1s2(
+    pretrained: bool = True,
+    model_id: str = "allenai/OlmoEarth-v1_2-Base",
+    bands: list[str] | None = None,
+    bands_s1: list[str] | None = None,
+    patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
+    hidden_dim: int | None = 768,
+    **kwargs,
+) -> OlmoEarthBackbone:
+    """Terratorch backbone factory for OlmoEarth v1.2 Base with S2+S1 combined input (D=768).
+
+    Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
+    Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_2_base``.
+
+    NOTE: inputs must be RAW sensor scale — S2 L2A digital numbers (0-10000) and
+    S1 linear-power gamma0 (e.g. Planetary Computer sentinel-1-rtc). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper converts S1 to
+    dB and min-max normalizes both modalities per band over mean±2σ, exactly as
+    OlmoEarth's pretraining data loader did. Configure the datamodule with
+    ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
+    double-transformed.
+    """
+    return OlmoEarthBackbone(
+        pretrained=pretrained,
+        model_id=model_id,
+        bands=bands,
+        bands_s1=bands_s1,
+        patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
+        hidden_dim=hidden_dim,
+        **kwargs,
+    )
+
+
 import logging as _logging
 
 _logger = _logging.getLogger("terratorch")
@@ -851,13 +1115,25 @@ try:
         olmoearth_v1_tiny_s1s2,
         olmoearth_v1_base_s1s2,
         olmoearth_v1_large_s1s2,
+        olmoearth_v1_2_nano,
+        olmoearth_v1_2_tiny,
+        olmoearth_v1_2_small,
+        olmoearth_v1_2_base,
+        olmoearth_v1_2_nano_s1s2,
+        olmoearth_v1_2_tiny_s1s2,
+        olmoearth_v1_2_small_s1s2,
+        olmoearth_v1_2_base_s1s2,
     ):
         _REG.register(_f)
     _logger.info(
         "Registered OlmoEarth backbones: 'olmoearth_v1_nano', "
         "'olmoearth_v1_tiny', 'olmoearth_v1_base', 'olmoearth_v1_large', "
         "'olmoearth_v1_nano_s1s2', 'olmoearth_v1_tiny_s1s2', "
-        "'olmoearth_v1_base_s1s2', 'olmoearth_v1_large_s1s2'."
+        "'olmoearth_v1_base_s1s2', 'olmoearth_v1_large_s1s2', "
+        "'olmoearth_v1_2_nano', 'olmoearth_v1_2_tiny', "
+        "'olmoearth_v1_2_small', 'olmoearth_v1_2_base', "
+        "'olmoearth_v1_2_nano_s1s2', 'olmoearth_v1_2_tiny_s1s2', "
+        "'olmoearth_v1_2_small_s1s2', 'olmoearth_v1_2_base_s1s2'."
     )
 except Exception as _exc:
     import traceback as _tb

@@ -14,6 +14,14 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **OlmoEarth v1.2 backbones.** New terratorch factory functions
+  `olmoearth_v1_2_{nano,tiny,small,base}` (Sentinel-2 only) and `..._s1s2` (S2+S1),
+  registered in `BACKBONE_REGISTRY`, with hidden dims 128/192/384/768. New shipped
+  configs `configs/olmoearth_v1_2_*.yaml`. v1.2 adds a `small` (D=384) size and drops
+  `large`; it reuses v1's band order and pretraining normalization statistics unchanged,
+  so `gelos/normalization.py` (prefix-matched to `olmoearth_v1`) already covers the new
+  names. Bumps `olmoearth-pretrain>=0.1.1` (the first release exposing the v1.2 `ModelID`
+  entries).
 - **Analysis completion markers.** `run_analysis` now writes a `.analysis_complete` marker
   (mirroring generation's `.embeddings_complete`) and skips fully-completed configs on
   re-runs. Model runs (`knn`/`linear_probe`/`random_forest`) now also skip individually
