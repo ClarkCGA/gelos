@@ -169,7 +169,7 @@ with `COASTAL_AEROSOL`) raises an error; override with explicit `means`/`stds` i
 
 | Field | Purpose |
 |-------|---------|
-| `model` | TerraTorch model identifier (e.g., `prithvi_eo_v2_300`, `prithvi_eo_v2_600`, `terramind_v1_base`, `olmoearth_v1_base`, `olmoearth_v1_base_s1s2`) |
+| `model` | TerraTorch model identifier (e.g., `prithvi_eo_v2_300`, `prithvi_eo_v2_600`, `terramind_v1_base`, `olmoearth_v1_base`, `olmoearth_v1_base_s1s2`, `olmoearth_v1_2_base`) |
 | `model_args.bands` | Band names as the **model** expects them (may differ from your dataset band names) |
 | `model_args.bands_s1` | S1 band names for OlmoEarth S1+S2 models (e.g., `[VV, VH]`). Omit or set to null to disable S1. |
 | `layers` | Which transformer layers to extract embeddings from. `-1` means the last layer |
@@ -182,9 +182,11 @@ Ai2's [OlmoEarth](https://pypi.org/project/olmoearth-pretrain/) is supported as 
 terratorch-compatible backbone via a wrapper in `gelos/backbones/olmoearth_backbone.py`,
 which registers itself automatically when `gelos.generation` is imported. No file
 placement is required — install the extra and use the model identifiers directly.
-Four model sizes are available:
-`nano` (D=128), `tiny` (D=192), `base` (D=768), and `large` (D=1024). Each size
-has a Sentinel-2-only variant and a combined S2+S1 variant:
+Two generations are available: **v1** with sizes
+`nano` (D=128), `tiny` (D=192), `base` (D=768), and `large` (D=1024); and **v1.2**
+with sizes `nano` (D=128), `tiny` (D=192), `small` (D=384), and `base` (D=768).
+Note v1.2 adds a `small` size and drops `large`. Each size has a Sentinel-2-only
+variant and a combined S2+S1 variant:
 
 | Model identifier | Sensors | Hidden dim |
 |---|---|---|
@@ -196,6 +198,20 @@ has a Sentinel-2-only variant and a combined S2+S1 variant:
 | `olmoearth_v1_tiny_s1s2` | S2 + S1 | 192 |
 | `olmoearth_v1_base_s1s2` | S2 + S1 | 768 |
 | `olmoearth_v1_large_s1s2` | S2 + S1 | 1024 |
+
+OlmoEarth v1.2 improves embedding quality over v1 and reuses v1's band order and
+pretraining normalization statistics unchanged:
+
+| Model identifier | Sensors | Hidden dim |
+|---|---|---|
+| `olmoearth_v1_2_nano` | S2 only | 128 |
+| `olmoearth_v1_2_tiny` | S2 only | 192 |
+| `olmoearth_v1_2_small` | S2 only | 384 |
+| `olmoearth_v1_2_base` | S2 only | 768 |
+| `olmoearth_v1_2_nano_s1s2` | S2 + S1 | 128 |
+| `olmoearth_v1_2_tiny_s1s2` | S2 + S1 | 192 |
+| `olmoearth_v1_2_small_s1s2` | S2 + S1 | 384 |
+| `olmoearth_v1_2_base_s1s2` | S2 + S1 | 768 |
 
 Notes and limitations:
 
