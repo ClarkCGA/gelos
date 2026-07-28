@@ -10,6 +10,7 @@ import typer
 import yaml
 
 from gelos.gelosdatamodule import GELOSDataModule
+import gelos.backbones.dinov3_backbone  # noqa: F401 — registers dinov3_vitb16_pretrained
 
 app = typer.Typer()
 
