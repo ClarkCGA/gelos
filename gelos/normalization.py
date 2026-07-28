@@ -69,6 +69,18 @@ _TERRAMIND_S2L2A_BANDS = [
 ]
 
 
+# DINOv3 (LVD-1689M web-image checkpoint) was pretrained on RGB in [0, 1]
+# normalized with ImageNet statistics. We reproduce that for Sentinel-2 by
+# clip-and-stretch: clip reflectance DN to [0, _DINOV3_S2_CLIP_MAX] (via
+# clip_range_bands), then fold the /_DINOV3_S2_CLIP_MAX stretch into the
+# z-score stats: (x/c - m)/s == (x - m*c)/(s*c). The 2500 DN ceiling (~0.25
+# reflectance) is the conventional S2 true-color stretch; a plain /10000 would
+# render land scenes far darker than the natural images the model saw.
+_IMAGENET_MEAN = {"RED": 0.485, "GREEN": 0.456, "BLUE": 0.406}
+_IMAGENET_STD = {"RED": 0.229, "GREEN": 0.224, "BLUE": 0.225}
+_DINOV3_S2_CLIP_MAX = 2500.0
+
+
 def _band_stats(bands: list[str], values: list[float]) -> dict[str, float]:
     if len(bands) != len(values):
         raise ValueError(f"band/stat length mismatch: {bands} vs {values}")
@@ -77,7 +89,8 @@ def _band_stats(bands: list[str], values: list[float]) -> dict[str, float]:
 
 # Backbone-name prefix -> normalization spec. A spec is either
 # {"normalize": False} (the backbone normalizes internally, e.g. OlmoEarth) or
-# per-modality pretraining stats with optional dB conversion requirements.
+# per-modality pretraining stats with optional dB conversion and value-clipping
+# requirements.
 MODEL_NORMALIZATION = {
     "prithvi_eo_v2": {
         "means": {"S2L2A": _band_stats(_PRITHVI_BANDS, PRITHVI_V2_MEAN)},
@@ -99,6 +112,17 @@ MODEL_NORMALIZATION = {
         "db_scale_bands": {"S1RTC": ["VV", "VH"]},
     },
     "olmoearth_v1": {"normalize": False},
+    "dinov3": {
+        "means": {
+            "S2L2A": {band: m * _DINOV3_S2_CLIP_MAX for band, m in _IMAGENET_MEAN.items()}
+        },
+        "stds": {
+            "S2L2A": {band: s * _DINOV3_S2_CLIP_MAX for band, s in _IMAGENET_STD.items()}
+        },
+        "clip_range_bands": {
+            "S2L2A": {band: [0.0, _DINOV3_S2_CLIP_MAX] for band in _IMAGENET_MEAN}
+        },
+    },
 }
 
 
@@ -113,8 +137,9 @@ def resolve_model_normalization(
 
     Returns:
         Dict of ``GELOSDataModule`` init kwargs (``means``/``stds`` and
-        optionally ``db_scale_bands``, or ``normalize: False`` for backbones
-        that normalize internally), or ``None`` if the model is not registered.
+        optionally ``db_scale_bands``/``clip_range_bands``, or
+        ``normalize: False`` for backbones that normalize internally), or
+        ``None`` if the model is not registered.
 
     Raises:
         ValueError: the model is registered but a configured modality or band
@@ -156,6 +181,17 @@ def resolve_model_normalization(
     db_scale = {modality: band_list for modality, band_list in db_scale.items() if band_list}
     if db_scale:
         resolved["db_scale_bands"] = db_scale
+    clip_range = {
+        modality: {
+            band: spec["clip_range_bands"][modality][band]
+            for band in band_list
+            if band in spec.get("clip_range_bands", {}).get(modality, {})
+        }
+        for modality, band_list in bands.items()
+    }
+    clip_range = {modality: ranges for modality, ranges in clip_range.items() if ranges}
+    if clip_range:
+        resolved["clip_range_bands"] = clip_range
     return resolved
 
 

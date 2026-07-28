@@ -103,6 +103,7 @@ class ExampleGELOSDataSet(GELOSDataSet):
         repeat_bands: dict[str, int] | None = None,
         perturb_bands: dict[str, dict[str, float]] | None = None,
         db_scale_bands: dict[str, list[str]] | None = None,
+        clip_range_bands: dict[str, dict[str, list[float]]] | None = None,
     ) -> None:
         if bands is None:
             bands = self.all_band_names
@@ -115,6 +116,7 @@ class ExampleGELOSDataSet(GELOSDataSet):
             repeat_bands=repeat_bands,
             perturb_bands=perturb_bands,
             db_scale_bands=db_scale_bands,
+            clip_range_bands=clip_range_bands,
         )
 
         self.data_root = Path(data_root)
@@ -595,6 +597,56 @@ def test_datamodule_passes_db_scale_bands_to_dataset(data_root):
     )
     dm.setup(stage="predict")
     assert dm.dataset.db_scale_bands == db_scale_bands
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Tests: clip_range_bands (fixed value-range clipping)
+# ---------------------------------------------------------------------------
+
+
+def test_clip_range_bands_clips_listed_bands_only(data_root):
+    """Listed bands are clamped to [min, max]; unlisted bands are untouched."""
+    bands = {"S2L2A": ["red", "green"]}
+    raw_ds = ExampleGELOSDataSet(data_root=data_root, bands=bands)
+    clip_ds = ExampleGELOSDataSet(
+        data_root=data_root,
+        bands=bands,
+        clip_range_bands={"S2L2A": {"red": [0.0, 100.0]}},
+    )
+    raw = raw_ds[0]["image"]
+    clipped = clip_ds[0]["image"]
+    # Band layout is [C, T, H, W]: red is channel 0, green channel 1.
+    torch.testing.assert_close(clipped[0], torch.clamp(raw[0], 0.0, 100.0))
+    torch.testing.assert_close(clipped[1], raw[1])
+    gc.collect()
+
+
+def test_clip_range_bands_invalid_band_raises(data_root):
+    """Band names are validated against self.bands like db_scale_bands."""
+    ds = ExampleGELOSDataSet(
+        data_root=data_root,
+        bands={"S2L2A": ["red"]},
+        clip_range_bands={"S2L2A": {"nonexistent_band": [0.0, 1.0]}},
+    )
+    with pytest.raises(ValueError):
+        ds[0]
+    gc.collect()
+
+
+def test_datamodule_passes_clip_range_bands_to_dataset(data_root):
+    """GELOSDataModule forwards clip_range_bands to the dataset in setup()."""
+    clip_range_bands = {"S2L2A": {"red": [0.0, 2500.0]}}
+    dm = GELOSDataModule(
+        data_root=data_root,
+        batch_size=1,
+        num_workers=0,
+        dataset_class=ExampleGELOSDataSet,
+        bands={"S2L2A": ["red"]},
+        clip_range_bands=clip_range_bands,
+    )
+    dm.setup(stage="predict")
+    assert dm.dataset.clip_range_bands == clip_range_bands
     gc.collect()
 
 

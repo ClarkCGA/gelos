@@ -73,6 +73,36 @@ def test_olmoearth_disables_datamodule_normalization():
     assert resolved == {"normalize": False}
 
 
+def test_dinov3_resolves_clip_and_stretch_imagenet_stats():
+    """DINOv3 gets clip-to-2500 plus ImageNet stats folded onto the DN scale."""
+    resolved = resolve_model_normalization(
+        "dinov3_vitb16_pretrained", {"S2L2A": ["RED", "GREEN", "BLUE"]}
+    )
+    assert set(resolved) == {"means", "stds", "clip_range_bands"}
+    assert resolved["means"]["S2L2A"] == {
+        "RED": 0.485 * 2500,
+        "GREEN": 0.456 * 2500,
+        "BLUE": 0.406 * 2500,
+    }
+    assert resolved["stds"]["S2L2A"] == {
+        "RED": 0.229 * 2500,
+        "GREEN": 0.224 * 2500,
+        "BLUE": 0.225 * 2500,
+    }
+    assert resolved["clip_range_bands"] == {
+        "S2L2A": {
+            "RED": [0.0, 2500.0],
+            "GREEN": [0.0, 2500.0],
+            "BLUE": [0.0, 2500.0],
+        }
+    }
+
+
+def test_dinov3_non_rgb_band_raises():
+    with pytest.raises(ValueError, match="NIR_NARROW"):
+        resolve_model_normalization("dinov3_vitb16", {"S2L2A": ["RED", "NIR_NARROW"]})
+
+
 def test_unknown_model_returns_none():
     assert resolve_model_normalization("some_future_model", {"S2L2A": ["BLUE"]}) is None
 
@@ -97,4 +127,9 @@ def test_inject_unknown_model_or_missing_bands_is_noop():
 
 
 def test_registry_covers_expected_models():
-    assert set(MODEL_NORMALIZATION) == {"prithvi_eo_v2", "terramind_v1", "olmoearth_v1"}
+    assert set(MODEL_NORMALIZATION) == {
+        "prithvi_eo_v2",
+        "terramind_v1",
+        "olmoearth_v1",
+        "dinov3",
+    }

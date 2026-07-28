@@ -13,6 +13,10 @@ first run, trying in order:
 
 Registration is triggered by ``import gelos.backbones.dinov3_backbone`` in
 ``gelos/generation.py``, which runs before any YAML config is parsed.
+
+Configs must list S2 bands in RED, GREEN, BLUE order — the pretrained patch
+embed expects RGB channel order. ``gelos.normalization`` injects the matching
+clip-and-stretch ImageNet normalization for ``dinov3_*`` model names.
 """
 
 import numpy as np

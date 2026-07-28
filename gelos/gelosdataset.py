@@ -55,6 +55,7 @@ class GELOSDataSet(NonGeoDataset):
         repeat_bands: dict[str, int] | None = None,
         perturb_bands: dict[str, dict[str, float]] | None = None,
         db_scale_bands: dict[str, list[str]] | None = None,
+        clip_range_bands: dict[str, dict[str, list[float]]] | None = None,
     ) -> None:
 
         self.bands = bands
@@ -63,6 +64,7 @@ class GELOSDataSet(NonGeoDataset):
         self.repeat_bands = repeat_bands
         self.perturb_bands = perturb_bands
         self.db_scale_bands = db_scale_bands
+        self.clip_range_bands = clip_range_bands
 
         assert set(self.bands.keys()).issubset(set(self.all_band_names.keys())), (
             f"Please choose a subset of valid sensors: {self.all_band_names.keys()}"
@@ -116,6 +118,17 @@ class GELOSDataSet(NonGeoDataset):
                 for band_index in band_indices:
                     output[sensor][..., band_index] = 10 * np.log10(
                         np.clip(output[sensor][..., band_index], 1e-10, None)
+                    )
+
+        # Clip bands to a fixed value range right after loading (after any dB
+        # conversion), before perturbation or transforms. Used to reproduce
+        # clip-and-stretch preprocessing expected by RGB-pretrained backbones.
+        if self.clip_range_bands:
+            for sensor, clip_dict in self.clip_range_bands.items():
+                for band, (clip_min, clip_max) in clip_dict.items():
+                    band_index = self.bands[sensor].index(band)
+                    output[sensor][..., band_index] = np.clip(
+                        output[sensor][..., band_index], clip_min, clip_max
                     )
 
         if self.repeat_bands:
