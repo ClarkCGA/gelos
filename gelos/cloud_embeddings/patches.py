@@ -4,22 +4,19 @@ def resolve_patch_indices(spec: dict, n_rows: int, n_cols: int) -> list[tuple[in
         prefix = "center_"
         if not patches.startswith(prefix) or "x" not in patches[len(prefix) :]:
             raise ValueError(
-                f"patches string '{patches}' must match 'center_NxN' (e.g. 'center_2x2')"
+                f"patches string '{patches}' must match 'center_RxC' (e.g. 'center_1x4')"
             )
-        n_str, _, m_str = patches[len(prefix) :].partition("x")
-        if n_str != m_str:
-            raise ValueError(
-                f"patches string '{patches}' must be square (N == M); got {n_str}x{m_str}"
-            )
+        r_str, _, c_str = patches[len(prefix) :].partition("x")
         try:
-            n = int(n_str)
+            R = int(r_str)
+            C = int(c_str)
         except ValueError as exc:
-            raise ValueError(f"could not parse N from patches='{patches}'") from exc
-        if n > min(n_rows, n_cols):
-            raise ValueError(f"patches='{patches}' requires {n}x{n} but grid is {n_rows}x{n_cols}")
-        r0 = (n_rows - n) // 2
-        c0 = (n_cols - n) // 2
-        return [(r0 + dr, c0 + dc) for dr in range(n) for dc in range(n)]
+            raise ValueError(f"could not parse RxC from patches='{patches}'") from exc
+        if R > n_rows or C > n_cols:
+            raise ValueError(f"patches='{patches}' requires {R}x{C} but grid is {n_rows}x{n_cols}")
+        r0 = (n_rows - R) // 2
+        c0 = (n_cols - C) // 2
+        return [(r0 + dr, c0 + dc) for dr in range(R) for dc in range(C)]
 
     resolved: list[tuple[int, int]] = []
     for pair in patches:

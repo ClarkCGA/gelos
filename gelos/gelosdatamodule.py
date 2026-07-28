@@ -4,6 +4,7 @@ from typing import Any, List
 
 import albumentations as A
 from kornia.augmentation import AugmentationSequential
+from loguru import logger
 from terratorch.datamodules.generic_multimodal_data_module import (
     MultimodalNormalize,
     collate_samples,
@@ -12,6 +13,17 @@ from terratorch.datamodules.generic_multimodal_data_module import (
 from terratorch.datamodules.generic_pixel_wise_data_module import Normalize
 from torch.utils.data import DataLoader
 from torchgeo.datamodules import NonGeoDataModule
+
+
+class IdentityAug:
+    """No-op batch augmentation used when ``normalize=False``.
+
+    Returns the batch unchanged (same dict structure), for backbones that apply
+    their own pretraining normalization internally (e.g. OlmoEarth).
+    """
+
+    def __call__(self, batch: dict) -> dict:
+        return batch
 
 
 class GELOSDataModule(NonGeoDataModule):
@@ -33,6 +45,8 @@ class GELOSDataModule(NonGeoDataModule):
         concat_bands: bool = False,
         repeat_bands: dict[str, int] | None = None,
         perturb_bands: dict[str, dict[str, float]] | None = None,
+        normalize: bool = True,
+        db_scale_bands: dict[str, list[str]] | None = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -51,6 +65,14 @@ class GELOSDataModule(NonGeoDataModule):
             concat_bands (bool): Whether to concat all sensors into one 'image' tensor or keep separate
             repeat_bands (dict[str, int], optional): repeat bands when loading from disc, intended to repeat single time step modalities e.g. DEM
             perturb_bands (dict[str, dict[str, float]], optional): perturb bands with additive gaussian noise. Dictionary defining modalities and bands with weights for perturbation.
+            normalize (bool): When False (and no custom ``aug`` is passed), skip z-score
+                normalization entirely — ``self.aug`` is an identity. Use for backbones that
+                apply their own pretraining normalization internally (e.g. OlmoEarth).
+            db_scale_bands (dict[str, list[str]], optional): bands to convert from linear power
+                to decibels (``10 * log10(clip(x, 1e-10))``) at load time, e.g.
+                ``{"S1RTC": ["VV", "VH"]}``. Passed through to the dataset class. Do NOT use for
+                backbones that already convert S1 to dB internally (e.g. OlmoEarth with
+                ``apply_pretraining_normalization=True``).
             **kwargs: Additional keyword arguments.
         """
         if isinstance(dataset_class, str):
@@ -69,35 +91,75 @@ class GELOSDataModule(NonGeoDataModule):
         self.concat_bands = concat_bands
         self.repeat_bands = repeat_bands
         self.perturb_bands = perturb_bands
+        self.normalize = normalize
+        self.db_scale_bands = db_scale_bands
 
-        # handle passing stats with missing values, check against dataset class
-        # if none are found, mean defaults to 0 and std defaults to 1
+        # Resolve per-modality/band stats, first match wins:
+        # explicit means/stds args -> lowercase means/stds class attrs ->
+        # uppercase MEANS/STDS class attrs -> default (mean 0.0, std 1.0).
         means = means or {}
         stds = stds or {}
-        class_means = getattr(dataset_class, "means", {})
-        class_stds = getattr(dataset_class, "stds", {})
+        means_sources = (
+            means,
+            getattr(dataset_class, "means", None) or {},
+            getattr(dataset_class, "MEANS", None) or {},
+        )
+        stds_sources = (
+            stds,
+            getattr(dataset_class, "stds", None) or {},
+            getattr(dataset_class, "STDS", None) or {},
+        )
         self.means = {}
         self.stds = {}
         for modality in self.modalities:
             self.means[modality] = [
-                means.get(modality, class_means.get(modality, {})).get(band, 0.0)
+                self._resolve_stat(modality, band, means_sources, default=0.0)
                 for band in self.bands[modality]
             ]
             self.stds[modality] = [
-                stds.get(modality, class_stds.get(modality, {})).get(band, 1.0)
+                self._resolve_stat(modality, band, stds_sources, default=1.0)
                 for band in self.bands[modality]
             ]
+            if (
+                normalize
+                and aug is None
+                and modality not in means
+                and modality not in stds
+                and all(mean == 0.0 for mean in self.means[modality])
+                and all(std == 1.0 for std in self.stds[modality])
+            ):
+                logger.warning(
+                    f"No normalization statistics found for modality '{modality}' on dataset "
+                    f"class '{dataset_class.__name__}': every band resolved to mean 0.0 / "
+                    "std 1.0, so normalization will be an identity (no-op) and the model will "
+                    "receive raw pixel values. Pass explicit means/stds to GELOSDataModule or "
+                    "define means/stds (or MEANS/STDS) on the dataset class."
+                )
 
         self.transform = wrap_in_compose_is_list(transform)
-        if len(self.bands.keys()) == 1:
-            self.aug = (
-                Normalize(self.means[self.modalities[0]], self.stds[self.modalities[0]])
-                if aug is None
-                else aug
-            )
+        if aug is not None:
+            self.aug = aug
+        elif not normalize:
+            self.aug = IdentityAug()
+        elif len(self.bands.keys()) == 1:
+            self.aug = Normalize(self.means[self.modalities[0]], self.stds[self.modalities[0]])
         else:
-            self.aug = MultimodalNormalize(self.means, self.stds) if aug is None else aug
+            self.aug = MultimodalNormalize(self.means, self.stds)
         self.collate_fn = collate_samples
+
+    @staticmethod
+    def _resolve_stat(
+        modality: str,
+        band: str,
+        sources: tuple[dict[str, dict[str, float]], ...],
+        default: float,
+    ) -> float:
+        """Return the first stat found for (modality, band) across sources, else default."""
+        for source in sources:
+            value = source.get(modality, {}).get(band)
+            if value is not None:
+                return value
+        return default
 
     def setup(self, stage: str = "predict") -> None:
         """
@@ -105,6 +167,11 @@ class GELOSDataModule(NonGeoDataModule):
         """
         if stage != "predict":
             raise ValueError("GELOS dataset is for prediction only")
+        # Only forward db_scale_bands when set, so dataset subclasses that predate
+        # the parameter keep working as long as the feature is unused.
+        extra_kwargs = {}
+        if self.db_scale_bands is not None:
+            extra_kwargs["db_scale_bands"] = self.db_scale_bands
         self.dataset = self.dataset_class(
             data_root=self.data_root,
             bands=self.bands,
@@ -112,6 +179,7 @@ class GELOSDataModule(NonGeoDataModule):
             concat_bands=self.concat_bands,
             repeat_bands=self.repeat_bands,
             perturb_bands=self.perturb_bands,
+            **extra_kwargs,
         )
 
     def _dataloader_factory(self, stage: str = "predict"):

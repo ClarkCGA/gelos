@@ -41,6 +41,17 @@ data:
     #   S2L2A:
     #     blue: 0.1
 
+    # optional: disable z-score normalization entirely (default true). Set to
+    # false for backbones that apply their own pretraining normalization
+    # internally (e.g. OlmoEarth) so the model receives raw sensor values.
+    # normalize: false
+
+    # optional: convert linear-power bands to decibels at load time
+    # (10 * log10(clip(x, 1e-10))), e.g. for models pretrained on dB-scale S1.
+    # Do NOT combine with OlmoEarth's built-in normalization (see below).
+    # db_scale_bands:
+    #   S1RTC: [VV, VH]
+
     # albumentations / terratorch transforms applied to each chip.
     # FlattenTemporalIntoChannels and UnflattenTemporalFromChannels are needed
     # to apply spatial transforms across all timesteps.
@@ -138,17 +149,120 @@ style:
 | `bands` | Dict of `{sensor: [band_names]}`. Keys must match sensors in your class's `all_band_names`, values must be subsets of those band lists |
 | `repeat_bands` | Optional. Repeat static modalities (e.g., DEM) along the temporal axis to match the number of timesteps of other sensors |
 | `perturb_bands` | Optional. Add Gaussian noise for ablation experiments. Format: `{sensor: {band: weight}}` where weight ranges from 0 (no noise) to 1 (full noise) |
+| `means` / `stds` | Optional. Per-modality/band normalization statistics: `{sensor: {band: value}}`. Resolution order per band: these explicit args → model-matched pretraining stats injected by `gelos.generation` (see below) → lowercase `means`/`stds` class attributes on the dataset class → uppercase `MEANS`/`STDS` class attributes → default (mean 0.0, std 1.0). If an entire modality resolves to the defaults, normalization is an identity and a loud warning is logged |
+| `normalize` | Optional, default `true`. Set to `false` to skip z-score normalization entirely (identity aug) — for backbones that apply their own pretraining normalization internally, e.g. OlmoEarth (injected automatically for OlmoEarth models, see below) |
+| `db_scale_bands` | Optional. Convert listed bands from linear power to decibels (`10 * log10(clip(x, 1e-10))`) at load time, e.g. `{S1RTC: [VV, VH]}`. Do not use together with OlmoEarth's built-in normalization, which already converts S1 to dB |
+
+**Model-matched normalization defaults.** For recognized backbones, `gelos.generation`
+automatically fills any of `means`/`stds`/`db_scale_bands`/`normalize` you did not set,
+using the model's own pretraining statistics (`gelos.normalization`): Prithvi EO V2 and
+TerraMind v1 get their published pretraining means/stds (TerraMind's S1 stats are in dB, so
+`db_scale_bands: {S1RTC: [VV, VH]}` is injected alongside), and OlmoEarth gets
+`normalize: false` because its backbone normalizes internally. Rationale: frozen encoders
+should see inputs distributed the way they were pretrained — dataset statistics are the
+fallback for models without registered stats, and anything you set explicitly in the config
+always wins. A registered model combined with a band it was not pretrained on (e.g. Prithvi
+with `COASTAL_AEROSOL`) raises an error; override with explicit `means`/`stds` if intended.
 | `transform` | Albumentations/TerraTorch transforms. Use `FlattenTemporalIntoChannels`/`UnflattenTemporalFromChannels` to apply spatial transforms across timesteps |
 
 ### Model
 
 | Field | Purpose |
 |-------|---------|
-| `model` | TerraTorch model identifier (e.g., `prithvi_eo_v2_300`, `prithvi_eo_v2_600`, `terramind_v1_base`) |
+| `model` | TerraTorch model identifier (e.g., `prithvi_eo_v2_300`, `prithvi_eo_v2_600`, `terramind_v1_base`, `olmoearth_v1_base`, `olmoearth_v1_base_s1s2`, `olmoearth_v1_2_base`) |
 | `model_args.bands` | Band names as the **model** expects them (may differ from your dataset band names) |
+| `model_args.bands_s1` | S1 band names for OlmoEarth S1+S2 models (e.g., `[VV, VH]`). Omit or set to null to disable S1. |
 | `layers` | Which transformer layers to extract embeddings from. `-1` means the last layer |
 | `embedding_pooling` | Set to `null` to keep the full token sequence |
 | `has_cls` | Whether the model produces a CLS token at position 0 |
+
+#### OlmoEarth (`olmoearth_v1_base`, `olmoearth_v1_base_s1s2`, and size variants)
+
+Ai2's [OlmoEarth](https://pypi.org/project/olmoearth-pretrain/) is supported as a
+terratorch-compatible backbone via a wrapper in `gelos/backbones/olmoearth_backbone.py`,
+which registers itself automatically when `gelos.generation` is imported. No file
+placement is required — install the extra and use the model identifiers directly.
+Two generations are available: **v1** with sizes
+`nano` (D=128), `tiny` (D=192), `base` (D=768), and `large` (D=1024); and **v1.2**
+with sizes `nano` (D=128), `tiny` (D=192), `small` (D=384), and `base` (D=768).
+Note v1.2 adds a `small` size and drops `large`. Each size has a Sentinel-2-only
+variant and a combined S2+S1 variant:
+
+| Model identifier | Sensors | Hidden dim |
+|---|---|---|
+| `olmoearth_v1_nano` | S2 only | 128 |
+| `olmoearth_v1_tiny` | S2 only | 192 |
+| `olmoearth_v1_base` | S2 only | 768 |
+| `olmoearth_v1_large` | S2 only | 1024 |
+| `olmoearth_v1_nano_s1s2` | S2 + S1 | 128 |
+| `olmoearth_v1_tiny_s1s2` | S2 + S1 | 192 |
+| `olmoearth_v1_base_s1s2` | S2 + S1 | 768 |
+| `olmoearth_v1_large_s1s2` | S2 + S1 | 1024 |
+
+OlmoEarth v1.2 improves embedding quality over v1 and reuses v1's band order and
+pretraining normalization statistics unchanged:
+
+| Model identifier | Sensors | Hidden dim |
+|---|---|---|
+| `olmoearth_v1_2_nano` | S2 only | 128 |
+| `olmoearth_v1_2_tiny` | S2 only | 192 |
+| `olmoearth_v1_2_small` | S2 only | 384 |
+| `olmoearth_v1_2_base` | S2 only | 768 |
+| `olmoearth_v1_2_nano_s1s2` | S2 + S1 | 128 |
+| `olmoearth_v1_2_tiny_s1s2` | S2 + S1 | 192 |
+| `olmoearth_v1_2_small_s1s2` | S2 + S1 | 384 |
+| `olmoearth_v1_2_base_s1s2` | S2 + S1 | 768 |
+
+Notes and limitations:
+
+- **Included in core install.** OlmoEarth support ships with gelos — no extra
+  install step required beyond `pip install gelos`.
+- **Sentinel-2 L2A, full 12 bands required.** The wrapper reorders the input
+  channels to OlmoEarth's expected 12-band S2L2A order
+  (`B02,B03,B04,B08,B05,B06,B07,B8A,B11,B12,B01,B09`). Your `data.bands.S2L2A` and
+  `model_args.bands` must supply all 12 (including `nir09` / B09); a missing band
+  raises a clear `ValueError`. See `configs/olmoearth_v1_base.yaml`.
+- **Sentinel-1 support (S1+S2 models).** Pass `model_args.bands_s1: [VV, VH]` and
+  add `S1RTC: [VV, VH]` to `data.bands` to enable S1. The S1 tensor is fused with
+  the S2 embedding via equal-weight averaging. Backward compatibility: omitting
+  `bands_s1` (or the S2-only model variants) requires no changes to existing configs.
+  See `configs/olmoearth_v1_base_s1s2.yaml`.
+- **Built-in pretraining normalization
+  (`model_args.apply_pretraining_normalization`, default `true`).** OlmoEarth's
+  encoder performs no normalization itself — during pretraining its data loader
+  normalized inputs. The wrapper replicates that exactly: S1 linear power is
+  clipped at `1e-10`, converted to dB (`10*log10`), then min-max scaled per band
+  over `mean±2σ`; S2 raw DN (0–10000) is min-max scaled per band over `mean±2σ`
+  (no log). Stats come from `olmoearth_pretrain`'s `computed.json`. Inputs must
+  therefore be **RAW sensor scale** (S1 linear-power gamma0, S2 L2A digital
+  numbers): set `normalize: false` under `data.init_args` and do **not** apply
+  `db_scale_bands` to S1, or values get double-transformed. Set
+  `apply_pretraining_normalization: false` only if you pre-normalize inputs to
+  OlmoEarth's pretraining scale yourself.
+- **Temporal pooling (`model_args.temporal_pooling`).** The OlmoEarth encoder
+  outputs one token per (spatial patch × timestep); the wrapper controls what
+  happens to the time axis. `mean` (default) averages over timesteps, returning
+  `(B, H'*W', D)`. `keep` preserves per-timestep tokens flattened time-major to
+  `(B, T*H'*W', D)` — token `t*H'*W' + i` is spatial patch `i` at timestep `t` —
+  so strided `slice_args` can extract single-timestep vs. all-timestep features,
+  matching the Prithvi token layout. Note that with `keep`, a single timestep's
+  tokens still come from one joint space-time attention pass over all timesteps.
+- **Spatial pooling (`model_args.spatial_pooling`).** Optional integer factor `s`
+  (default off): after encoding, the `H'×W'` token grid is average-pooled over
+  non-overlapping `s×s` neighborhoods, so each output token covers
+  `(s*patch_size)²` input pixels. Use it to match the spatial footprint of
+  larger-patch models — e.g. `patch_size: 4, spatial_pooling: 4` yields tokens
+  covering 16×16 pixels whose grid and indices line up exactly with
+  Prithvi/TerraMind's 16-pixel patches, so the same `slice_args` strategies
+  apply across models. Encoding still runs at the fine `patch_size`; only the
+  output tokens are aggregated.
+- **Timestamps.** When the batch carries per-timestep acquisition dates (a
+  `timestamps` key of shape `(B, T, 3)` as `[day, month_index, year]`), the
+  generation task threads them into the backbone so OlmoEarth's temporal
+  encoding reflects true acquisition dates. When absent, timestamps fall back
+  to a constant `[15, 0, 2020]` (day=15, month=Jan, year=2020), and
+  acquisition-date-dependent temporal encoding will not reflect true
+  seasonality.
 
 ### Embedding extraction strategies
 
@@ -227,25 +341,25 @@ comp_plots:
         - [model_B_multi, model_B_single]
 ```
 
-## Raw-pixel baseline configs
+## Spectral-band baseline configs
 
-Randomly-initialized (or mis-pretrained) foundation-model weights can still produce embedding spaces that look reasonable on downstream probes. To sanity-check how much a model is actually contributing, GELOS ships `gelos.raw_pixels.RawPixelEmbeddingTask` — a passthrough task that skips the model entirely and writes the normalized raw pixels themselves as "embeddings". The output parquets match `EmbeddingGenerationTask`'s schema, so analysis and comparison stages consume them with no special-casing.
+Randomly-initialized (or mis-pretrained) foundation-model weights can still produce embedding spaces that look reasonable on downstream probes. To sanity-check how much a model is actually contributing, GELOS ships `gelos.spectral_bands.SpectralBandsEmbeddingTask` — a passthrough task that skips the model entirely and writes the normalized spectral band values themselves as "embeddings". The output parquets match `EmbeddingGenerationTask`'s schema, so analysis and comparison stages consume them with no special-casing.
 
-Swap the `model` block for the raw task and add a top-level `raw_pixel_extraction` section:
+Swap the `model` block for the raw task and add a top-level `spectral_band_extraction` section:
 
 ```yaml
 model:
-  class_path: gelos.raw_pixels.RawPixelEmbeddingTask
-  title: "Raw Pixel Baseline"
+  class_path: gelos.spectral_bands.SpectralBandsEmbeddingTask
+  title: "Spectral Bands Baseline"
   init_args:
     patch_size: 16
     embed_file_key: filename
 
 # Each named entry becomes a per-strategy subdir under the run's output_dir
 # (playing the role of a "layer" for analysis). The product of
-# len(timesteps) * len(patches) must be <= 4 — raw pixel tokens are high-dim,
+# len(timesteps) * len(patches) must be <= 4 — spectral band tokens are high-dim,
 # so the cap keeps parquet sizes reasonable.
-raw_pixel_extraction:
+spectral_band_extraction:
   center_2x2_t0:
     title: "Center 2x2 patches, single timestep"
     patches: center_2x2      # 'center_NxN' or an explicit list of [row, col] pairs
@@ -258,9 +372,9 @@ raw_pixel_extraction:
 
 Notes:
 
-- **Normalization is reused from the datamodule.** The task trusts `GELOSDataModule.aug` (defaults to z-score via means/stds) — set real per-band statistics on your dataset class or in `data.init_args.means/stds`, or baseline pixels stay un-normalized.
+- **Normalization is reused from the datamodule.** The task trusts `GELOSDataModule.aug` (defaults to z-score via means/stds) — set real per-band statistics on your dataset class (`means`/`stds` or `MEANS`/`STDS` attributes) or in `data.init_args.means/stds`, or baseline pixels stay un-normalized (the datamodule logs a loud warning when a modality resolves entirely to default stats).
 - **Patch grid is derived from `H, W, patch_size`**, not configured. All of `H`, `W` must be divisible by `patch_size`, and for multi-sensor configs all sensors must share `T`, `H`, `W` after normalization (use `repeat_bands` to align single-timestep modalities like DEM).
 - **Multi-modal runs channel-concatenate per token.** Do NOT set `concat_bands: True` on the datamodule — the task handles concat itself. Sensor order follows `data.bands` YAML key order, which becomes the dict iteration order. Reordering that block between runs produces parquets of the same shape but different channel layouts.
-- **Comparison workflow.** Each modality combination is its own generation config (`raw_s2.yaml`, `raw_s2s1dem.yaml`, etc.) with its own `data.bands` and its own `raw_pixel_extraction`. Comparison configs reference raw-pixel runs by the same `(config, strategy, layer)` triple as any model run. S2 pixels getting written twice is bounded (~kB/chip per run at the 4-token cap).
+- **Comparison workflow.** Each modality combination is its own generation config (`spectral_s2.yaml`, `spectral_s2s1dem.yaml`, etc.) with its own `data.bands` and its own `spectral_band_extraction`. Comparison configs reference spectral-band runs by the same `(config, strategy, layer)` triple as any model run. S2 pixels getting written twice is bounded (~kB/chip per run at the 4-token cap).
 
-`embedding_extraction_strategies` still applies on top — each raw-pixel subdir becomes a "layer" for analysis, and each embedding-extraction strategy runs its slice/transforms/plots/models against it.
+`embedding_extraction_strategies` still applies on top — each spectral-band subdir becomes a "layer" for analysis, and each embedding-extraction strategy runs its slice/transforms/plots/models against it.

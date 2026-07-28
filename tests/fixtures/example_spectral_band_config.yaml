@@ -1,4 +1,4 @@
-experiment_name: "Raw Pixel Baseline - Multi-Sensor"
+experiment_name: "Spectral Bands Baseline - Multi-Sensor"
 data_version: "v0.50.1"
 chip_tracker: "gelos_chip_tracker.geojson"
 chip_id_column: "id"
@@ -46,15 +46,15 @@ data:
           n_timesteps: 4
 
 model:
-  class_path: gelos.raw_pixels.RawPixelEmbeddingTask
-  title: "Raw Pixel Baseline"
+  class_path: gelos.spectral_bands.SpectralBandsEmbeddingTask
+  title: "Spectral Bands Baseline"
   init_args:
     patch_size: 16
     embed_file_key: filename
 
 # Each named entry becomes a per-strategy subdir under output_dir.
 # The product of len(timesteps) * len(patches) must be <= 4.
-raw_pixel_extraction:
+spectral_band_extraction:
   center_2x2_t0:
     title: "Center 2x2 patches, single timestep"
     patches: center_2x2
@@ -64,11 +64,11 @@ raw_pixel_extraction:
     patches: center_1x1
     timesteps: all
 
-# Analysis picks up each raw_pixel_extraction subdir as a 'layer' and
+# Analysis picks up each spectral_band_extraction subdir as a 'layer' and
 # applies each embedding_extraction_strategies entry to it.
 embedding_extraction_strategies:
   all_tokens:
-    title: "All raw-pixel tokens"
+    title: "All spectral-band tokens"
     slice_args:
       - start: 0
         stop: null

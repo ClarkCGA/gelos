@@ -262,6 +262,7 @@ def run_analysis(
     embedding_dir: Path,
     processed_data_dir: Path,
     figures_base_dir: Path,
+    overwrite: bool = False,
 ) -> dict:
     """Run the config-driven embedding pipeline.
 
@@ -269,12 +270,20 @@ def run_analysis(
     and extraction strategy: extracts embeddings and dispatches through
     the configured transforms, plots, and models.
 
+    A ``.analysis_complete`` marker is written to the config's output
+    directory after a full pass; when it exists the run is skipped entirely
+    unless ``overwrite`` is set. ``overwrite`` bypasses only this marker —
+    the per-step caches (extracted embeddings, transform CSVs, metrics,
+    plots, model results) still skip individually, so a re-entered run only
+    computes what is missing. Delete the cached outputs for a full recompute.
+
     Args:
         yaml_path: Path to the YAML experiment config.
         raw_data_dir: Root directory for raw data.
         embedding_dir: Root directory for embeddings.
         processed_data_dir: Root directory for processed outputs.
         figures_base_dir: Root directory for generated figures.
+        overwrite: Re-enter a run marked complete (see above).
 
     Returns:
         Nested dict of results keyed by ``{layer}_{strategy}_{step_type}``.
@@ -282,6 +291,13 @@ def run_analysis(
     ctx = setup_analysis_run(
         yaml_path, raw_data_dir, embedding_dir, processed_data_dir, figures_base_dir
     )
+
+    marker_file = ctx.output_dir / ".analysis_complete"
+    if marker_file.exists() and not overwrite:
+        logger.info("analysis already complete, skipping...")
+        return {}
+    elif marker_file.exists() and overwrite:
+        logger.info("re-entering completed analysis (cached steps still skip)...")
 
     if not ctx.embeddings_directories:
         return {}
@@ -451,13 +467,20 @@ def run_analysis(
 
                 data = transform_results[source]
                 run_name = f"{prefix}_{m_type}"
+                layer_dir = ctx.output_dir / embedding_layer
+                # Every MODELS entry writes {run_name}_{registry_key}_results.csv
+                # (via _save_results_csv), so the cached result path is known
+                # before running.
+                results_csv = layer_dir / f"{run_name}_{m_type}_results.csv"
+                cm_path = ctx.figures_dir / f"{prefix}_{m_type}_confusion_matrix.png"
+                if results_csv.exists() and cm_path.exists():
+                    logger.info(f"model {m_type} results exist at {results_csv} - skipping")
+                    continue
                 logger.info(f"running model {m_type} for {strategy_key}")
                 m_fn = MODELS[m_type]
-                layer_dir = ctx.output_dir / embedding_layer
                 result = m_fn(data, labels, output_dir=layer_dir, run_name=run_name, **m_params)
 
                 if result.get("predictions") is not None:
-                    cm_path = ctx.figures_dir / f"{prefix}_{m_type}_confusion_matrix.png"
                     confusion_matrix(
                         predictions=result["predictions"],
                         labels=labels,
@@ -473,6 +496,9 @@ def run_analysis(
 
                 all_results[f"{prefix}_{m_type}"] = result
 
+    ctx.output_dir.mkdir(exist_ok=True, parents=True)
+    marker_file.touch()
+    logger.info("marking analysis as complete")
     return all_results
 
 
@@ -505,6 +531,12 @@ def main(
         "-c",
         help="Directory containing YAML configs (used when --yaml-path is not set).",
     ),
+    overwrite: Optional[bool] = typer.Option(
+        False,
+        "--overwrite",
+        help="Re-enter runs marked complete (.analysis_complete). Per-step caches still "
+        "skip, so only missing artifacts are recomputed; delete outputs for a full redo.",
+    ),
 ):
     """
     Analyze embeddings using transforms, plots, and models specified in a yaml config.
@@ -525,6 +557,7 @@ def main(
             embedding_dir=embedding_dir,
             processed_data_dir=processed_data_dir,
             figures_base_dir=figures_base_dir,
+            overwrite=overwrite,
         )
 
 
