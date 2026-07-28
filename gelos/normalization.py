@@ -80,6 +80,15 @@ _IMAGENET_MEAN = {"RED": 0.485, "GREEN": 0.456, "BLUE": 0.406}
 _IMAGENET_STD = {"RED": 0.229, "GREEN": 0.224, "BLUE": 0.225}
 _DINOV3_S2_CLIP_MAX = 2500.0
 
+# DINOv3 SAT-493M (Maxar satellite RGB) checkpoints use their own transform
+# stats instead of ImageNet's — from the facebookresearch/dinov3 README's
+# make_transform for sat493m models (RGB order). The same clip-and-stretch
+# mapping applies; only the folded-in stats differ. Note SAT-493M was trained
+# on Maxar's rendered 8-bit RGB, so the S2 true-color stretch is the closest
+# available approximation, not an exact reproduction of Maxar processing.
+_DINOV3_SAT_MEAN = {"RED": 0.430, "GREEN": 0.411, "BLUE": 0.296}
+_DINOV3_SAT_STD = {"RED": 0.213, "GREEN": 0.156, "BLUE": 0.143}
+
 
 def _band_stats(bands: list[str], values: list[float]) -> dict[str, float]:
     if len(bands) != len(values):
@@ -112,13 +121,21 @@ MODEL_NORMALIZATION = {
         "db_scale_bands": {"S1RTC": ["VV", "VH"]},
     },
     "olmoearth_v1": {"normalize": False},
-    "dinov3": {
+    # Resolution takes the FIRST prefix match in insertion order, so
+    # more-specific prefixes (dinov3_vitl16_sat) must precede shorter ones
+    # (dinov3, which serves every other dinov3_* variant).
+    "dinov3_vitl16_sat": {
         "means": {
-            "S2L2A": {band: m * _DINOV3_S2_CLIP_MAX for band, m in _IMAGENET_MEAN.items()}
+            "S2L2A": {band: m * _DINOV3_S2_CLIP_MAX for band, m in _DINOV3_SAT_MEAN.items()}
         },
-        "stds": {
-            "S2L2A": {band: s * _DINOV3_S2_CLIP_MAX for band, s in _IMAGENET_STD.items()}
+        "stds": {"S2L2A": {band: s * _DINOV3_S2_CLIP_MAX for band, s in _DINOV3_SAT_STD.items()}},
+        "clip_range_bands": {
+            "S2L2A": {band: [0.0, _DINOV3_S2_CLIP_MAX] for band in _DINOV3_SAT_MEAN}
         },
+    },
+    "dinov3": {
+        "means": {"S2L2A": {band: m * _DINOV3_S2_CLIP_MAX for band, m in _IMAGENET_MEAN.items()}},
+        "stds": {"S2L2A": {band: s * _DINOV3_S2_CLIP_MAX for band, s in _IMAGENET_STD.items()}},
         "clip_range_bands": {
             "S2L2A": {band: [0.0, _DINOV3_S2_CLIP_MAX] for band in _IMAGENET_MEAN}
         },

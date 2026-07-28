@@ -9,8 +9,8 @@ import torch
 import typer
 import yaml
 
+import gelos.backbones.dinov3_backbone  # noqa: F401 — registers dinov3_*_pretrained backbones
 from gelos.gelosdatamodule import GELOSDataModule
-import gelos.backbones.dinov3_backbone  # noqa: F401 — registers dinov3_vitb16_pretrained
 from gelos.normalization import inject_model_normalization
 
 try:
