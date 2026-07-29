@@ -6,12 +6,13 @@ heavy optional ``olmoearth-pretrain`` extra installed. Tests that need the actua
 model are gated with ``pytest.importorskip("olmoearth_pretrain")``.
 """
 
+import pytest
+import torch
+
 from gelos.backbones.olmoearth_backbone import (
     OLMOEARTH_S2_BAND_ORDER,
     build_band_reorder_index,
 )
-import pytest
-import torch
 
 # The 12 GELOS-LC band names OlmoEarth requires, in the natural dataset (non-
 # OlmoEarth) input order, to exercise the reorder logic.
@@ -347,6 +348,32 @@ def test_predict_step_noop_for_backbone_without_setter(monkeypatch):
     assert out == "ok"
 
 
+def test_write_parquet_stores_float32_and_roundtrips(tmp_path):
+    # The override must store the embedding as float32 (stock terratorch lands
+    # float64 via .tolist()) while preserving values, nesting, and metadata.
+    import numpy as np
+    import pyarrow.dataset as ds
+
+    task = _make_task()
+    emb = torch.randn(2, 3, 4)  # [timesteps, tokens, dim]
+    task.write_parquet(emb, "chip_0001.tif", {"file_id": torch.tensor(7)}, tmp_path)
+
+    dataset = ds.dataset([str(tmp_path / "chip_0001_embedding.parquet")], format="parquet")
+    table = dataset.to_table(columns=["embedding", "file_id"])
+    import pyarrow as pa
+
+    # three levels of list nesting with a float32 leaf, not the float64 the
+    # stock .tolist() path would produce
+    emb_type = table.schema.field("embedding").type
+    for _ in range(3):
+        assert pa.types.is_list(emb_type)
+        emb_type = emb_type.value_type
+    assert emb_type == pa.float32()
+    read = np.array(table.column("embedding").to_pylist()[0], dtype=np.float32)
+    np.testing.assert_array_equal(read, emb.numpy().astype(np.float32))
+    assert table.column("file_id").to_pylist() == [7]
+
+
 # ---------------------------------------------------------------------------
 # S1 band-reorder helper tests — pure logic, no model dependency.
 # ---------------------------------------------------------------------------
@@ -508,8 +535,9 @@ def test_minmax_normalize_broadcasts_over_leading_dims():
 
 
 def test_example_s1s2_fixture_yaml_valid():
-    import yaml
     from pathlib import Path
+
+    import yaml
 
     path = Path(__file__).parent / "fixtures" / "example_olmoearth_s1s2_config.yaml"
     config = yaml.safe_load(path.read_text())
