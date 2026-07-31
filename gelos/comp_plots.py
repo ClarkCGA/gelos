@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from itertools import combinations
 from pathlib import Path
 
 from loguru import logger
@@ -654,7 +653,6 @@ def per_class_similarity_distribution_plot(
     n_cols: int = 3,
     bins: int = 40,
     x_range: tuple[float, float] | None = None,
-    max_ks_annotations: int = 6,
     include_control_series: bool = False,
     **kwargs,
 ) -> None:
@@ -674,8 +672,6 @@ def per_class_similarity_distribution_plot(
         n_cols: Number of subplot columns in the facet grid.
         bins: Number of histogram bins.
         x_range: Optional fixed (min, max) x-axis range. Autoscales if None.
-        max_ks_annotations: When all-pairs KS would exceed this count, fall
-            back to ``<ablation> vs control`` pairs only.
         include_control_series: If True, render the control's self-similarity
             series (all values = 1.0). Off by default — it's uninformative.
     """
@@ -791,11 +787,7 @@ def per_class_ecdf_plot(
 
     One subplot per class; one empirical CDF step curve per ablation
     experiment. Unlike overlaid histograms, near-identical distributions
-    render as clearly separated monotone S-curves. KS-test stats for the
-    experiment pairs present in that class are annotated upper-left, and a
-    vertical double-arrow marks the x where the two-sample CDF gap is maximal
-    for the most relevant pair (this gap equals that pair's KS statistic).
-
+    render as clearly separated monotone S-curves. 
     Args:
         metric_result: Output from ``per_chip_similarity_to_control``.
         output_path: Path to save the figure. Shows interactively if None.
@@ -805,8 +797,6 @@ def per_class_ecdf_plot(
             ``include_control_series`` is True.
         n_cols: Number of subplot columns in the facet grid.
         x_range: Optional fixed (min, max) x-axis range. Autoscales if None.
-        max_ks_annotations: When all-pairs KS would exceed this count, fall
-            back to ``<ablation> vs control`` pairs only.
         include_control_series: If True, render the control's self-similarity
             series (all values = 1.0). Off by default — it's uninformative.
     """
@@ -843,20 +833,6 @@ def per_class_ecdf_plot(
         is_bottom_row = row == n_rows - 1
         is_left_col = col == 0
 
-        # Per-class data: KS pairs are computed against the *full* df so the
-        # comparison can include the control series even when it isn't drawn.
-        # ks_pairs drives the max-gap arrow annotation below.
-        ks_pool = df[df["class"] == cls]
-        ks_experiments = sorted(ks_pool["experiment"].unique().tolist())
-        all_pairs = list(combinations(ks_experiments, 2))
-        if len(all_pairs) > max_ks_annotations and control_label in ks_experiments:
-            ks_pairs = [(a, b) for a, b in all_pairs if control_label in (a, b)]
-            logger.info(
-                f"class '{cls}': truncating {len(all_pairs)} KS pairs to "
-                f"{len(ks_pairs)} control-only pairs"
-            )
-        else:
-            ks_pairs = all_pairs
 
         any_drawn = False
         for exp in experiments:
@@ -870,36 +846,6 @@ def per_class_ecdf_plot(
             y = np.arange(1, sx.size + 1) / sx.size
             ax.step(sx, y, where="post", color=colors[exp], label=short_labels[exp], linewidth=1.5)
         ax.set_ylim(0, 1.0)
-
-        # Max-gap annotation: prefer the first KS pair containing the control,
-        # else the first KS pair. The gap equals that pair's KS statistic.
-        annotation_pair = None
-        for a, b in ks_pairs:
-            if control_label in (a, b):
-                annotation_pair = (a, b)
-                break
-        if annotation_pair is None and ks_pairs:
-            annotation_pair = ks_pairs[0]
-
-        if annotation_pair is not None:
-            a, b = annotation_pair
-            va = ks_pool[ks_pool["experiment"] == a]["cosine_similarity"].to_numpy()
-            vb = ks_pool[ks_pool["experiment"] == b]["cosine_similarity"].to_numpy()
-            if va.size and vb.size:
-                grid = np.sort(np.concatenate([va, vb]))
-                sva = np.sort(va)
-                svb = np.sort(vb)
-                cdf_a = np.searchsorted(sva, grid, side="right") / va.size
-                cdf_b = np.searchsorted(svb, grid, side="right") / vb.size
-                gaps = np.abs(cdf_a - cdf_b)
-                i = int(gaps.argmax())
-                x_star = grid[i]
-                ax.annotate(
-                    "",
-                    xy=(x_star, cdf_a[i]),
-                    xytext=(x_star, cdf_b[i]),
-                    arrowprops=dict(arrowstyle="<->", color="black", lw=1.2),
-                )
 
         display = class_labels.get(str(cls), str(cls))
         ax.set_title(display)
