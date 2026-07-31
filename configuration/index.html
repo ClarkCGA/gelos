@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        
+        <meta name="author" content="Denys Godwin">
+        <link rel="canonical" href="https://ClarkCGA.github.io/gelos/configuration/">
+        <link rel="shortcut icon" href="../img/favicon.ico">
+        <title>Configuration Reference - GELOS</title>
+        <link href="../css/bootstrap.min.css" rel="stylesheet">
+        <link href="../css/fontawesome.min.css" rel="stylesheet">
+        <link href="../css/brands.min.css" rel="stylesheet">
+        <link href="../css/solid.min.css" rel="stylesheet">
+        <link href="../css/v4-font-face.min.css" rel="stylesheet">
+        <link href="../css/base.css" rel="stylesheet">
+        <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" >
+        <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css" disabled>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script>hljs.highlightAll();</script> 
+    </head>
+
+    <body>
+        <div class="navbar fixed-top navbar-expand-lg navbar-dark bg-primary">
+            <div class="container">
+                <a class="navbar-brand" href="..">GELOS</a>
+                <!-- Expander button -->
+                <button type="button" class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#navbar-collapse" aria-controls="navbar-collapse" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+
+                <!-- Expanded navigation -->
+                <div id="navbar-collapse" class="navbar-collapse collapse">
+                        <!-- Main navigation -->
+                        <ul class="nav navbar-nav">
+                            <li class="nav-item">
+                                <a href=".." class="nav-link">Home</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="../getting-started/" class="nav-link">Getting Started</a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="./" class="nav-link active" aria-current="page">Configuration Reference</a>
+                            </li>
+                        </ul>
+
+                    <ul class="nav navbar-nav ms-md-auto">
+                        <li class="nav-item">
+                            <a href="#" class="nav-link" data-bs-toggle="modal" data-bs-target="#mkdocs_search_modal">
+                                <i class="fa fa-search"></i> Search
+                            </a>
+                        </li>
+                            <li class="nav-item">
+                                <a rel="prev" href="../getting-started/" class="nav-link">
+                                    <i class="fa fa-arrow-left"></i> Previous
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a rel="next" class="nav-link disabled">
+                                    Next <i class="fa fa-arrow-right"></i>
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a href="https://github.com/ClarkCGA/gelos/edit/master/docs/configuration.md" class="nav-link"><i class="fa-brands fa-github"></i> Edit on GitHub</a>
+                            </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="container">
+            <div class="row">
+                    <div class="col-md-3"><div class="navbar-expand-md bs-sidebar hidden-print affix" role="complementary">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggler collapsed" data-bs-toggle="collapse" data-bs-target="#toc-collapse" title="Table of Contents">
+            <span class="fa fa-angle-down"></span>
+        </button>
+    </div>
+
+    
+    <div id="toc-collapse" class="navbar-collapse collapse card bg-body-tertiary">
+        <ul class="nav flex-column">
+            
+            <li class="nav-item" data-bs-level="1"><a href="#configuration-reference" class="nav-link">Configuration Reference</a>
+              <ul class="nav flex-column">
+            <li class="nav-item" data-bs-level="2"><a href="#full-annotated-config" class="nav-link">Full annotated config</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#config-sections" class="nav-link">Config sections</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+            <li class="nav-item" data-bs-level="2"><a href="#spectral-band-baseline-configs" class="nav-link">Spectral-band baseline configs</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
+              </ul>
+            </li>
+        </ul>
+    </div>
+</div></div>
+                    <div class="col-md-9" role="main">
+
+<h1 id="configuration-reference">Configuration Reference</h1>
+<p>YAML files drive both embedding generation and analysis. Each config specifies the data source, model, extraction strategies, and analysis steps. Create YAML files with unique, descriptive names (e.g., <code>configs/exp001_prithvi300.yaml</code>).</p>
+<p>See <code>tests/fixtures/example_config.yaml</code> for a minimal working example.</p>
+<h2 id="full-annotated-config">Full annotated config</h2>
+<pre><code class="language-yaml"># --- Metadata ---
+experiment_name: &quot;My Experiment&quot;       # used in plot titles
+data_version: &quot;v1.0&quot;                   # subdirectory name for inputs/outputs
+chip_tracker: &quot;gelos_chip_tracker.geojson&quot;  # metadata file, relative to data_root
+chip_id_column: &quot;id&quot;                   # column in chip tracker used to index chips
+
+# --- Data ---
+data:
+  class_path: gelos.gelosdatamodule.GELOSDataModule
+  init_args:
+    dataset_class: myproject.mydataset.MyGELOSDataSet  # import path to your subclass
+
+    batch_size: 1
+    num_workers: 0
+
+    # bands to load for each sensor — keys must match sensors defined in your
+    # dataset class's all_band_names dict, and values must be subsets of the
+    # band names defined there. You can include any combination of sensors.
+    bands:
+      S2L2A: [blue, green, red, nir08, swir16, swir22]
+      DEM: [DEM]
+
+    # optional: repeat static (single-timestep) modalities along the temporal
+    # axis so all sensors have the same number of timesteps, as required by
+    # some models (e.g., Terramind expects matching temporal dimensions)
+    repeat_bands:
+      DEM: 4
+
+    # optional: add Gaussian noise to specific bands for ablation experiments.
+    # the float value controls the noise weight (0 = no noise, 1 = full noise)
+    # perturb_bands:
+    #   S2L2A:
+    #     blue: 0.1
+
+    # optional: disable z-score normalization entirely (default true). Set to
+    # false for backbones that apply their own pretraining normalization
+    # internally (e.g. OlmoEarth) so the model receives raw sensor values.
+    # normalize: false
+
+    # optional: convert linear-power bands to decibels at load time
+    # (10 * log10(clip(x, 1e-10))), e.g. for models pretrained on dB-scale S1.
+    # Do NOT combine with OlmoEarth's built-in normalization (see below).
+    # db_scale_bands:
+    #   S1RTC: [VV, VH]
+
+    # albumentations / terratorch transforms applied to each chip.
+    # FlattenTemporalIntoChannels and UnflattenTemporalFromChannels are needed
+    # to apply spatial transforms across all timesteps.
+    transform:
+      - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
+      - class_path: terratorch.datasets.transforms.UnflattenTemporalFromChannels
+        init_args:
+          n_timesteps: 4  # must match number of timesteps in your data
+
+# --- Model ---
+# See terratorch documentation for available models and their expected band names.
+# Note: model band names may differ from your dataset band names (e.g., NIR_NARROW
+# vs nir08) — the model_args bands must match what the model expects.
+model:
+  class_path: terratorch.tasks.EmbeddingGenerationTask
+  init_args:
+    model: prithvi_eo_v2_300           # terratorch model identifier
+    model_args:
+      bands: [BLUE, GREEN, RED, NIR_NARROW, SWIR_1, SWIR_2]
+      pretrained: true
+    output_format: parquet
+    embed_file_key: filename
+    layers: [-1]                       # which transformer layers to extract; -1 = last
+    embedding_pooling: null            # null keeps full token sequence
+    has_cls: true                      # whether the model produces a CLS token at position 0
+                                       # e.g., Prithvi EO V2 does, Terramind V1 does not
+
+# --- Embedding Extraction Strategies ---
+# Each key is a user-defined name for a strategy. This name is used in output
+# file naming (e.g., &quot;cls_token&quot; → exp001_cls_token_layer-1_tsne.csv).
+# You can define as many strategies as you like — each one slices the embedding
+# differently and can run its own set of transforms, plots, and models.
+#
+# slice_args controls which tokens to extract from the embedding sequence.
+# Each dict applies pyarrow list_slice(start, stop, step) then flattens.
+# Multiple dicts are applied sequentially for nested structures.
+embedding_extraction_strategies:
+  cls_token:                           # your name for this strategy
+    title: &quot;CLS Token&quot;                 # display title for plots
+    slice_args:
+      - start: 0                      # extract only the first token (CLS)
+        stop: 1
+        step: 1
+    # Available transforms: tsne, pca, umap
+    transforms:
+      - type: tsne
+      - type: pca
+        params:
+          n_components: 2
+    # Available plots: scatter_2d
+    plots:
+      - type: scatter_2d
+        transform: umap                # which transform result to plot
+        params:
+          axis_lim: 120                # optional plot params
+    # Available models: knn, linear_probe, random_forest
+    # &quot;transform&quot; selects input data — use &quot;raw&quot; for untransformed embeddings,
+    # or the name of a transform defined above (e.g., &quot;pca&quot;)
+    models:
+      - type: knn
+        transform: raw
+        params:
+          n_neighbors: 5
+
+# --- Style ---
+# Maps category values to colors and labels for plotting.
+# category_column must match a column in your chip tracker / metadata.
+style:
+  category_column: &quot;lulc&quot;
+  colors:
+    &quot;1&quot;: &quot;#419bdf&quot;
+    &quot;2&quot;: &quot;#397d49&quot;
+  labels:
+    &quot;1&quot;: &quot;Water&quot;
+    &quot;2&quot;: &quot;Trees&quot;
+</code></pre>
+<h2 id="config-sections">Config sections</h2>
+<h3 id="metadata">Metadata</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>experiment_name</code></td>
+<td>Human-readable name, shown in plot titles</td>
+</tr>
+<tr>
+<td><code>data_version</code></td>
+<td>Used as a subdirectory name to organize inputs and outputs (e.g., <code>data/raw/v1.0/</code>)</td>
+</tr>
+<tr>
+<td><code>chip_tracker</code></td>
+<td>Path to your metadata file, relative to <code>data_root / data_version</code></td>
+</tr>
+<tr>
+<td><code>chip_id_column</code></td>
+<td>Column name in the chip tracker used to index chips and cross-reference with embeddings</td>
+</tr>
+</tbody>
+</table>
+<h3 id="data">Data</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dataset_class</code></td>
+<td>Python import path to your <code>GELOSDataSet</code> subclass</td>
+</tr>
+<tr>
+<td><code>bands</code></td>
+<td>Dict of <code>{sensor: [band_names]}</code>. Keys must match sensors in your class's <code>all_band_names</code>, values must be subsets of those band lists</td>
+</tr>
+<tr>
+<td><code>repeat_bands</code></td>
+<td>Optional. Repeat static modalities (e.g., DEM) along the temporal axis to match the number of timesteps of other sensors</td>
+</tr>
+<tr>
+<td><code>perturb_bands</code></td>
+<td>Optional. Add Gaussian noise for ablation experiments. Format: <code>{sensor: {band: weight}}</code> where weight ranges from 0 (no noise) to 1 (full noise)</td>
+</tr>
+<tr>
+<td><code>means</code> / <code>stds</code></td>
+<td>Optional. Per-modality/band normalization statistics: <code>{sensor: {band: value}}</code>. Resolution order per band: these explicit args → model-matched pretraining stats injected by <code>gelos.generation</code> (see below) → lowercase <code>means</code>/<code>stds</code> class attributes on the dataset class → uppercase <code>MEANS</code>/<code>STDS</code> class attributes → default (mean 0.0, std 1.0). If an entire modality resolves to the defaults, normalization is an identity and a loud warning is logged</td>
+</tr>
+<tr>
+<td><code>normalize</code></td>
+<td>Optional, default <code>true</code>. Set to <code>false</code> to skip z-score normalization entirely (identity aug) — for backbones that apply their own pretraining normalization internally, e.g. OlmoEarth (injected automatically for OlmoEarth models, see below)</td>
+</tr>
+<tr>
+<td><code>db_scale_bands</code></td>
+<td>Optional. Convert listed bands from linear power to decibels (<code>10 * log10(clip(x, 1e-10))</code>) at load time, e.g. <code>{S1RTC: [VV, VH]}</code>. Do not use together with OlmoEarth's built-in normalization, which already converts S1 to dB</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Model-matched normalization defaults.</strong> For recognized backbones, <code>gelos.generation</code>
+automatically fills any of <code>means</code>/<code>stds</code>/<code>db_scale_bands</code>/<code>normalize</code> you did not set,
+using the model's own pretraining statistics (<code>gelos.normalization</code>): Prithvi EO V2 and
+TerraMind v1 get their published pretraining means/stds (TerraMind's S1 stats are in dB, so
+<code>db_scale_bands: {S1RTC: [VV, VH]}</code> is injected alongside), and OlmoEarth gets
+<code>normalize: false</code> because its backbone normalizes internally. Rationale: frozen encoders
+should see inputs distributed the way they were pretrained — dataset statistics are the
+fallback for models without registered stats, and anything you set explicitly in the config
+always wins. A registered model combined with a band it was not pretrained on (e.g. Prithvi
+with <code>COASTAL_AEROSOL</code>) raises an error; override with explicit <code>means</code>/<code>stds</code> if intended.
+| <code>transform</code> | Albumentations/TerraTorch transforms. Use <code>FlattenTemporalIntoChannels</code>/<code>UnflattenTemporalFromChannels</code> to apply spatial transforms across timesteps |</p>
+<h3 id="model">Model</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>model</code></td>
+<td>TerraTorch model identifier (e.g., <code>prithvi_eo_v2_300</code>, <code>prithvi_eo_v2_600</code>, <code>terramind_v1_base</code>, <code>olmoearth_v1_base</code>, <code>olmoearth_v1_base_s1s2</code>, <code>olmoearth_v1_2_base</code>)</td>
+</tr>
+<tr>
+<td><code>model_args.bands</code></td>
+<td>Band names as the <strong>model</strong> expects them (may differ from your dataset band names)</td>
+</tr>
+<tr>
+<td><code>model_args.bands_s1</code></td>
+<td>S1 band names for OlmoEarth S1+S2 models (e.g., <code>[VV, VH]</code>). Omit or set to null to disable S1.</td>
+</tr>
+<tr>
+<td><code>layers</code></td>
+<td>Which transformer layers to extract embeddings from. <code>-1</code> means the last layer</td>
+</tr>
+<tr>
+<td><code>embedding_pooling</code></td>
+<td>Set to <code>null</code> to keep the full token sequence</td>
+</tr>
+<tr>
+<td><code>has_cls</code></td>
+<td>Whether the model produces a CLS token at position 0</td>
+</tr>
+</tbody>
+</table>
+<h4 id="olmoearth-olmoearth_v1_base-olmoearth_v1_base_s1s2-and-size-variants">OlmoEarth (<code>olmoearth_v1_base</code>, <code>olmoearth_v1_base_s1s2</code>, and size variants)</h4>
+<p>Ai2's <a href="https://pypi.org/project/olmoearth-pretrain/">OlmoEarth</a> is supported as a
+terratorch-compatible backbone via a wrapper in <code>gelos/backbones/olmoearth_backbone.py</code>,
+which registers itself automatically when <code>gelos.generation</code> is imported. No file
+placement is required — install the extra and use the model identifiers directly.
+Two generations are available: <strong>v1</strong> with sizes
+<code>nano</code> (D=128), <code>tiny</code> (D=192), <code>base</code> (D=768), and <code>large</code> (D=1024); and <strong>v1.2</strong>
+with sizes <code>nano</code> (D=128), <code>tiny</code> (D=192), <code>small</code> (D=384), and <code>base</code> (D=768).
+Note v1.2 adds a <code>small</code> size and drops <code>large</code>. Each size has a Sentinel-2-only
+variant and a combined S2+S1 variant:</p>
+<table>
+<thead>
+<tr>
+<th>Model identifier</th>
+<th>Sensors</th>
+<th>Hidden dim</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>olmoearth_v1_nano</code></td>
+<td>S2 only</td>
+<td>128</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_tiny</code></td>
+<td>S2 only</td>
+<td>192</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_base</code></td>
+<td>S2 only</td>
+<td>768</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_large</code></td>
+<td>S2 only</td>
+<td>1024</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_nano_s1s2</code></td>
+<td>S2 + S1</td>
+<td>128</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_tiny_s1s2</code></td>
+<td>S2 + S1</td>
+<td>192</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_base_s1s2</code></td>
+<td>S2 + S1</td>
+<td>768</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_large_s1s2</code></td>
+<td>S2 + S1</td>
+<td>1024</td>
+</tr>
+</tbody>
+</table>
+<p>OlmoEarth v1.2 improves embedding quality over v1 and reuses v1's band order and
+pretraining normalization statistics unchanged:</p>
+<table>
+<thead>
+<tr>
+<th>Model identifier</th>
+<th>Sensors</th>
+<th>Hidden dim</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>olmoearth_v1_2_nano</code></td>
+<td>S2 only</td>
+<td>128</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_2_tiny</code></td>
+<td>S2 only</td>
+<td>192</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_2_small</code></td>
+<td>S2 only</td>
+<td>384</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_2_base</code></td>
+<td>S2 only</td>
+<td>768</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_2_nano_s1s2</code></td>
+<td>S2 + S1</td>
+<td>128</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_2_tiny_s1s2</code></td>
+<td>S2 + S1</td>
+<td>192</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_2_small_s1s2</code></td>
+<td>S2 + S1</td>
+<td>384</td>
+</tr>
+<tr>
+<td><code>olmoearth_v1_2_base_s1s2</code></td>
+<td>S2 + S1</td>
+<td>768</td>
+</tr>
+</tbody>
+</table>
+<p>Notes and limitations:</p>
+<ul>
+<li><strong>Included in core install.</strong> OlmoEarth support ships with gelos — no extra
+  install step required beyond <code>pip install gelos</code>.</li>
+<li><strong>Sentinel-2 L2A, full 12 bands required.</strong> The wrapper reorders the input
+  channels to OlmoEarth's expected 12-band S2L2A order
+  (<code>B02,B03,B04,B08,B05,B06,B07,B8A,B11,B12,B01,B09</code>). Your <code>data.bands.S2L2A</code> and
+  <code>model_args.bands</code> must supply all 12 (including <code>nir09</code> / B09); a missing band
+  raises a clear <code>ValueError</code>. See <code>configs/olmoearth_v1_base.yaml</code>.</li>
+<li><strong>Sentinel-1 support (S1+S2 models).</strong> Pass <code>model_args.bands_s1: [VV, VH]</code> and
+  add <code>S1RTC: [VV, VH]</code> to <code>data.bands</code> to enable S1. The S1 tensor is fused with
+  the S2 embedding via equal-weight averaging. Backward compatibility: omitting
+  <code>bands_s1</code> (or the S2-only model variants) requires no changes to existing configs.
+  See <code>configs/olmoearth_v1_base_s1s2.yaml</code>.</li>
+<li><strong>Built-in pretraining normalization
+  (<code>model_args.apply_pretraining_normalization</code>, default <code>true</code>).</strong> OlmoEarth's
+  encoder performs no normalization itself — during pretraining its data loader
+  normalized inputs. The wrapper replicates that exactly: S1 linear power is
+  clipped at <code>1e-10</code>, converted to dB (<code>10*log10</code>), then min-max scaled per band
+  over <code>mean±2σ</code>; S2 raw DN (0–10000) is min-max scaled per band over <code>mean±2σ</code>
+  (no log). Stats come from <code>olmoearth_pretrain</code>'s <code>computed.json</code>. Inputs must
+  therefore be <strong>RAW sensor scale</strong> (S1 linear-power gamma0, S2 L2A digital
+  numbers): set <code>normalize: false</code> under <code>data.init_args</code> and do <strong>not</strong> apply
+  <code>db_scale_bands</code> to S1, or values get double-transformed. Set
+  <code>apply_pretraining_normalization: false</code> only if you pre-normalize inputs to
+  OlmoEarth's pretraining scale yourself.</li>
+<li><strong>Temporal pooling (<code>model_args.temporal_pooling</code>).</strong> The OlmoEarth encoder
+  outputs one token per (spatial patch × timestep); the wrapper controls what
+  happens to the time axis. <code>mean</code> (default) averages over timesteps, returning
+  <code>(B, H'*W', D)</code>. <code>keep</code> preserves per-timestep tokens flattened time-major to
+  <code>(B, T*H'*W', D)</code> — token <code>t*H'*W' + i</code> is spatial patch <code>i</code> at timestep <code>t</code> —
+  so strided <code>slice_args</code> can extract single-timestep vs. all-timestep features,
+  matching the Prithvi token layout. Note that with <code>keep</code>, a single timestep's
+  tokens still come from one joint space-time attention pass over all timesteps.</li>
+<li><strong>Spatial pooling (<code>model_args.spatial_pooling</code>).</strong> Optional integer factor <code>s</code>
+  (default off): after encoding, the <code>H'×W'</code> token grid is average-pooled over
+  non-overlapping <code>s×s</code> neighborhoods, so each output token covers
+  <code>(s*patch_size)²</code> input pixels. Use it to match the spatial footprint of
+  larger-patch models — e.g. <code>patch_size: 4, spatial_pooling: 4</code> yields tokens
+  covering 16×16 pixels whose grid and indices line up exactly with
+  Prithvi/TerraMind's 16-pixel patches, so the same <code>slice_args</code> strategies
+  apply across models. Encoding still runs at the fine <code>patch_size</code>; only the
+  output tokens are aggregated.</li>
+<li><strong>Timestamps.</strong> When the batch carries per-timestep acquisition dates (a
+  <code>timestamps</code> key of shape <code>(B, T, 3)</code> as <code>[day, month_index, year]</code>), the
+  generation task threads them into the backbone so OlmoEarth's temporal
+  encoding reflects true acquisition dates. When absent, timestamps fall back
+  to a constant <code>[15, 0, 2020]</code> (day=15, month=Jan, year=2020), and
+  acquisition-date-dependent temporal encoding will not reflect true
+  seasonality.</li>
+</ul>
+<h3 id="embedding-extraction-strategies">Embedding extraction strategies</h3>
+<p>Each key under <code>embedding_extraction_strategies</code> is a <strong>user-defined name</strong> that becomes part of output file names. Within each strategy:</p>
+<ul>
+<li><strong><code>title</code></strong>: Display name used in plot titles</li>
+<li><strong><code>slice_args</code></strong>: List of slice operations applied sequentially to extract tokens from the embedding. Each operation uses <code>start</code>, <code>stop</code>, <code>step</code> (PyArrow <code>list_slice</code> semantics). Use multiple entries for nested structures.</li>
+<li><strong><code>transforms</code></strong>: Optional list of transforms to run on extracted embeddings</li>
+<li><strong><code>plots</code></strong>: Optional list of plots to generate</li>
+<li><strong><code>models</code></strong>: Optional list of classification models to run</li>
+</ul>
+<p>Available <strong>transforms</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Description</th>
+<th>Key params</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tsne</code></td>
+<td>t-SNE dimensionality reduction</td>
+<td><code>n_components</code> (default 2), <code>perplexity</code> (default 50), <code>max_iter</code> (default 1000)</td>
+</tr>
+<tr>
+<td><code>pca</code></td>
+<td>PCA dimensionality reduction</td>
+<td><code>n_components</code> (int for fixed, float for variance threshold; default 0.95)</td>
+</tr>
+<tr>
+<td><code>pca</code></td>
+<td>UMAP dimensionality reduction</td>
+<td><code>n_components</code> (default 2)</td>
+</tr>
+</tbody>
+</table>
+<p>Available <strong>plots</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Description</th>
+<th>Key params</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scatter_2d</code></td>
+<td>Scatter plot colored by category</td>
+<td><code>axis_lim</code> (default 120), <code>legend_loc</code> (default "upper left")</td>
+</tr>
+</tbody>
+</table>
+<p>Available <strong>models</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Description</th>
+<th>Key params</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>knn</code></td>
+<td>K-nearest neighbors with stratified k-fold CV</td>
+<td><code>n_neighbors</code> (default 5), <code>n_splits</code> (default 5)</td>
+</tr>
+<tr>
+<td><code>linear_probe</code></td>
+<td>Logistic regression with stratified k-fold CV</td>
+<td><code>max_iter</code> (default 1000), <code>n_splits</code> (default 5)</td>
+</tr>
+<tr>
+<td><code>random_forest</code></td>
+<td>Random forest with repeated stratified k-fold CV</td>
+<td><code>n_estimators</code> (default 100), <code>n_splits</code> (default 5), <code>n_repeats</code> (default 3)</td>
+</tr>
+</tbody>
+</table>
+<p>For plots and models, the <code>transform</code> field selects which data to use as input: <code>"raw"</code> for the untransformed embeddings, or the name of a transform defined in the same strategy (e.g., <code>"tsne"</code>, <code>"pca"</code>).</p>
+<h3 id="style">Style</h3>
+<p>Maps category values from your metadata to colors and labels for plotting. <code>category_column</code> must match a column accessible via <code>chip_gdf[category_column].loc[chip_indices]</code> in the analysis pipeline.</p>
+<h3 id="comparison-plots">Comparison plots</h3>
+<p>Comparison configs may list <code>comp_plots</code>, each with a <code>type</code> from the comparison
+plot registry and an optional <code>params</code> block. Each plot reads the output of a
+comparison metric; by default the source metric is derived from the plot <code>type</code>
+(stripping the <code>_plot</code>/<code>_table</code> suffix), but it can be set explicitly with a
+<code>metric</code> field — required when the names don't match.</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Description</th>
+<th>Key params</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>knn_purity_distribution_plot</code></td>
+<td>Per-class box plots of per-query KNN purity vs k</td>
+<td>(none)</td>
+</tr>
+<tr>
+<td><code>knn_purity_violin_distribution_plot</code></td>
+<td>Per-class violin plots of per-query KNN purity vs k. Split violin (one half per group) when exactly two experiments are compared, otherwise side-by-side single violins. Mean shown as a diamond, median as a short line</td>
+<td><code>split</code> (bool, default auto: split iff exactly two experiments). <code>split_pairs</code> (list of 2-element experiment-name lists; each pair → one split violin per k; unpaired experiments → single violins; takes precedence over <code>split</code>). Requires <code>metric: knn_purity_per_query_comparison</code></td>
+</tr>
+</tbody>
+</table>
+<p>Example:</p>
+<pre><code class="language-yaml">comp_plots:
+  - type: knn_purity_violin_distribution_plot
+    metric: knn_purity_per_query_comparison
+    params:
+      split: true
+</code></pre>
+<p>To contrast several pairs of experiments as side-by-side split violins (for
+example multitemporal vs single-time-step variants of two models), use
+<code>split_pairs</code>. Each inner list names the two experiments of one split violin;
+any experiment not named in a valid pair is drawn as a single violin. When
+<code>split_pairs</code> is set it takes precedence over <code>split</code>:</p>
+<pre><code class="language-yaml">comp_plots:
+  - type: knn_purity_violin_distribution_plot
+    metric: knn_purity_per_query_comparison
+    params:
+      split_pairs:
+        - [model_A_multi, model_A_single]
+        - [model_B_multi, model_B_single]
+</code></pre>
+<h2 id="spectral-band-baseline-configs">Spectral-band baseline configs</h2>
+<p>Randomly-initialized (or mis-pretrained) foundation-model weights can still produce embedding spaces that look reasonable on downstream probes. To sanity-check how much a model is actually contributing, GELOS ships <code>gelos.spectral_bands.SpectralBandsEmbeddingTask</code> — a passthrough task that skips the model entirely and writes the normalized spectral band values themselves as "embeddings". The output parquets match <code>EmbeddingGenerationTask</code>'s schema, so analysis and comparison stages consume them with no special-casing.</p>
+<p>Swap the <code>model</code> block for the raw task and add a top-level <code>spectral_band_extraction</code> section:</p>
+<pre><code class="language-yaml">model:
+  class_path: gelos.spectral_bands.SpectralBandsEmbeddingTask
+  title: &quot;Spectral Bands Baseline&quot;
+  init_args:
+    patch_size: 16
+    embed_file_key: filename
+
+# Each named entry becomes a per-strategy subdir under the run's output_dir
+# (playing the role of a &quot;layer&quot; for analysis). The product of
+# len(timesteps) * len(patches) must be &lt;= 4 — spectral band tokens are high-dim,
+# so the cap keeps parquet sizes reasonable.
+spectral_band_extraction:
+  center_2x2_t0:
+    title: &quot;Center 2x2 patches, single timestep&quot;
+    patches: center_2x2      # 'center_NxN' or an explicit list of [row, col] pairs
+    timesteps: [0]           # list of ints or the string 'all'
+  all_timesteps_center_patch:
+    title: &quot;All timesteps of the center patch&quot;
+    patches: center_1x1
+    timesteps: all
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li><strong>Normalization is reused from the datamodule.</strong> The task trusts <code>GELOSDataModule.aug</code> (defaults to z-score via means/stds) — set real per-band statistics on your dataset class (<code>means</code>/<code>stds</code> or <code>MEANS</code>/<code>STDS</code> attributes) or in <code>data.init_args.means/stds</code>, or baseline pixels stay un-normalized (the datamodule logs a loud warning when a modality resolves entirely to default stats).</li>
+<li><strong>Patch grid is derived from <code>H, W, patch_size</code></strong>, not configured. All of <code>H</code>, <code>W</code> must be divisible by <code>patch_size</code>, and for multi-sensor configs all sensors must share <code>T</code>, <code>H</code>, <code>W</code> after normalization (use <code>repeat_bands</code> to align single-timestep modalities like DEM).</li>
+<li><strong>Multi-modal runs channel-concatenate per token.</strong> Do NOT set <code>concat_bands: True</code> on the datamodule — the task handles concat itself. Sensor order follows <code>data.bands</code> YAML key order, which becomes the dict iteration order. Reordering that block between runs produces parquets of the same shape but different channel layouts.</li>
+<li><strong>Comparison workflow.</strong> Each modality combination is its own generation config (<code>spectral_s2.yaml</code>, <code>spectral_s2s1dem.yaml</code>, etc.) with its own <code>data.bands</code> and its own <code>spectral_band_extraction</code>. Comparison configs reference spectral-band runs by the same <code>(config, strategy, layer)</code> triple as any model run. S2 pixels getting written twice is bounded (~kB/chip per run at the 4-token cap).</li>
+</ul>
+<p><code>embedding_extraction_strategies</code> still applies on top — each spectral-band subdir becomes a "layer" for analysis, and each embedding-extraction strategy runs its slice/transforms/plots/models against it.</p></div>
+            </div>
+        </div>
+
+        <footer class="col-md-12">
+            <hr>
+            <p>Documentation built with <a href="https://www.mkdocs.org/">MkDocs</a>.</p>
+        </footer>
+        <script src="../js/bootstrap.bundle.min.js"></script>
+        <script>
+            var base_url = "..",
+                shortcuts = {"help": 191, "next": 78, "previous": 80, "search": 83};
+        </script>
+        <script src="../js/base.js"></script>
+        <script src="../search/main.js"></script>
+
+        <div class="modal" id="mkdocs_search_modal" tabindex="-1" role="dialog" aria-labelledby="searchModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title" id="searchModalLabel">Search</h4>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>From here you can search these documents. Enter your search terms below.</p>
+                <form>
+                    <div class="form-group">
+                        <input type="search" class="form-control" placeholder="Search..." id="mkdocs-search-query" title="Type search term here">
+                    </div>
+                </form>
+                <div id="mkdocs-search-results" data-no-results-text="No results found"></div>
+            </div>
+            <div class="modal-footer">
+            </div>
+        </div>
+    </div>
+</div><div class="modal" id="mkdocs_keyboard_modal" tabindex="-1" role="dialog" aria-labelledby="keyboardModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title" id="keyboardModalLabel">Keyboard Shortcuts</h4>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th style="width: 20%;">Keys</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="help shortcut"><kbd>?</kbd></td>
+                    <td>Open this help</td>
+                  </tr>
+                  <tr>
+                    <td class="next shortcut"><kbd>n</kbd></td>
+                    <td>Next page</td>
+                  </tr>
+                  <tr>
+                    <td class="prev shortcut"><kbd>p</kbd></td>
+                    <td>Previous page</td>
+                  </tr>
+                  <tr>
+                    <td class="search shortcut"><kbd>s</kbd></td>
+                    <td>Search</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="modal-footer">
+            </div>
+        </div>
+    </div>
+</div>
+
+    </body>
+</html>
