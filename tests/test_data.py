@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import rioxarray as rxr
 import torch
-from gelos.gelosdatamodule import GELOSDataModule
+from gelos.gelosdatamodule import GELOSDataModule, IdentityAug, NoDataRemap
 from gelos.generation import instantiate_recursive
 from gelos.gelosdataset import GELOSDataSet
 from tests.utils import create_test_geojson
@@ -595,6 +595,183 @@ def test_datamodule_passes_db_scale_bands_to_dataset(data_root):
     )
     dm.setup(stage="predict")
     assert dm.dataset.db_scale_bands == db_scale_bands
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Tests: nodata_value / set_nodata (post-normalization remap)
+# ---------------------------------------------------------------------------
+
+
+def _nodata_dm(**overrides):
+    """GELOSDataModule with nontrivial stats (mean 5, std 2) and nodata remap on."""
+    kwargs = dict(
+        data_root="unused",
+        batch_size=2,
+        num_workers=0,
+        dataset_class=ExampleGELOSDataSet,
+        bands={"S2L2A": ["blue", "green"], "DEM": ["DEM"]},
+        means={"S2L2A": {"blue": 5.0, "green": 5.0}, "DEM": {"DEM": 5.0}},
+        stds={"S2L2A": {"blue": 2.0, "green": 2.0}, "DEM": {"DEM": 2.0}},
+        nodata_value=-999,
+        set_nodata=0,
+    )
+    kwargs.update(overrides)
+    return GELOSDataModule(**kwargs)
+
+
+def test_nodata_remap_after_normalization():
+    """Sentinel pixels become exactly set_nodata, NOT (set_nodata - mean) / std."""
+    dm = _nodata_dm()
+    s2 = torch.full((2, 2, 4, 8, 8), 3.0)
+    dem = torch.full((2, 1, 4, 8, 8), 3.0)
+    s2[0, 0, 0, :2, :2] = -999.0
+    dem[1, 0, 2, 4, 4] = -999.0
+    s2_mask = s2 == -999.0
+    dem_mask = dem == -999.0
+    out = dm.aug({"image": {"S2L2A": s2, "DEM": dem}})
+    # Masked pixels are exactly 0.0 — not (0 - 5) / 2 = -2.5, proving the write
+    # lands after normalization; unmasked pixels are (3 - 5) / 2 = -1.0.
+    assert torch.all(out["image"]["S2L2A"][s2_mask] == 0.0)
+    assert torch.all(out["image"]["DEM"][dem_mask] == 0.0)
+    assert torch.all(out["image"]["S2L2A"][~s2_mask] == -1.0)
+    assert torch.all(out["image"]["DEM"][~dem_mask] == -1.0)
+    gc.collect()
+
+
+def test_nodata_remap_single_modality_tensor_batch():
+    """Single modality -> Normalize branch with a plain tensor batch."""
+    dm = _nodata_dm(
+        bands={"S2L2A": ["blue", "green"]},
+        means={"S2L2A": {"blue": 5.0, "green": 5.0}},
+        stds={"S2L2A": {"blue": 2.0, "green": 2.0}},
+    )
+    image = torch.full((2, 2, 4, 8, 8), 3.0)
+    image[0, 1, 2, 3, 4] = -999.0
+    mask = image == -999.0
+    out = dm.aug({"image": image})
+    assert torch.all(out["image"][mask] == 0.0)
+    assert torch.all(out["image"][~mask] == -1.0)
+    gc.collect()
+
+
+def test_nodata_remap_with_normalize_false():
+    """With normalize=False the wrapped IdentityAug still remaps the sentinel."""
+    dm = _nodata_dm(normalize=False)
+    s2 = torch.full((2, 2, 4, 8, 8), 3.0)
+    dem = torch.full((2, 1, 4, 8, 8), 3.0)
+    s2[1, 0, 0, 0, 0] = -999.0
+    s2_mask = s2 == -999.0
+    out = dm.aug({"image": {"S2L2A": s2, "DEM": dem}})
+    assert torch.all(out["image"]["S2L2A"][s2_mask] == 0.0)
+    assert torch.all(out["image"]["S2L2A"][~s2_mask] == 3.0)
+    assert torch.all(out["image"]["DEM"] == 3.0)
+    gc.collect()
+
+
+def test_nodata_remap_per_modality_dicts():
+    """A per-modality dict masks only its listed modalities; others pass through."""
+    dm = _nodata_dm(nodata_value={"S2L2A": -999}, set_nodata={"S2L2A": 0})
+    s2 = torch.full((2, 2, 4, 8, 8), 3.0)
+    dem = torch.full((2, 1, 4, 8, 8), 3.0)
+    s2[0, 0, 0, 0, 0] = -999.0
+    dem[0, 0, 0, 0, 0] = -999.0
+    s2_mask = s2 == -999.0
+    out = dm.aug({"image": {"S2L2A": s2, "DEM": dem}})
+    assert torch.all(out["image"]["S2L2A"][s2_mask] == 0.0)
+    # DEM is unlisted: its sentinel is normalized like any other value.
+    assert out["image"]["DEM"][0, 0, 0, 0, 0] == (-999.0 - 5.0) / 2.0
+    assert torch.all(out["image"]["DEM"][0, 0, 0, 0, 1:] == -1.0)
+    gc.collect()
+
+
+def test_nodata_value_without_set_nodata_raises():
+    """nodata_value and set_nodata must be provided together (both directions)."""
+    with pytest.raises(ValueError, match="together"):
+        _nodata_dm(set_nodata=None)
+    with pytest.raises(ValueError, match="together"):
+        _nodata_dm(nodata_value=None)
+    gc.collect()
+
+
+def test_nodata_dict_unknown_modality_raises():
+    """Dict keys not in the datamodule's modalities fail fast at construction."""
+    with pytest.raises(ValueError, match="unknown modalities"):
+        _nodata_dm(nodata_value={"S1RTC": -999}, set_nodata=0)
+    with pytest.raises(ValueError, match="unknown modalities"):
+        _nodata_dm(nodata_value=-999, set_nodata={"S1RTC": 0})
+    gc.collect()
+
+
+def test_nodata_set_nodata_dict_missing_masked_modality_raises():
+    """A scalar nodata_value masks all modalities; set_nodata dict must cover them."""
+    with pytest.raises(ValueError, match="missing target values"):
+        _nodata_dm(nodata_value=-999, set_nodata={"S2L2A": 0})
+    gc.collect()
+
+
+def test_nodata_dict_with_concat_bands_raises():
+    """Per-modality dicts cannot be applied to a concatenated image tensor."""
+    dm = _nodata_dm(
+        concat_bands=True,
+        nodata_value={"S2L2A": -999, "DEM": -999},
+        set_nodata={"S2L2A": 0, "DEM": 0},
+    )
+    batch = {"image": torch.full((2, 3, 4, 8, 8), 3.0)}
+    with pytest.raises(ValueError, match="concat_bands"):
+        dm.aug(batch)
+    gc.collect()
+
+
+def test_nodata_with_db_scale_overlap_warns():
+    """Masked modalities overlapping db_scale_bands/perturb_bands log a warning."""
+    from loguru import logger
+
+    messages, sink_id = _capture_loguru_warnings()
+    try:
+        _nodata_dm(
+            bands={"S1RTC": ["VV", "VH"], "DEM": ["DEM"]},
+            means={"S1RTC": {"VV": 5.0, "VH": 5.0}, "DEM": {"DEM": 5.0}},
+            stds={"S1RTC": {"VV": 2.0, "VH": 2.0}, "DEM": {"DEM": 2.0}},
+            db_scale_bands={"S1RTC": ["VV"]},
+        )
+    finally:
+        logger.remove(sink_id)
+    assert any("S1RTC" in message and "db_scale_bands" in message for message in messages)
+
+    messages, sink_id = _capture_loguru_warnings()
+    try:
+        _nodata_dm(perturb_bands={"S2L2A": {"blue": 0.1}})
+    finally:
+        logger.remove(sink_id)
+    assert any("S2L2A" in message and "perturb_bands" in message for message in messages)
+    gc.collect()
+
+
+def test_datamodule_wraps_aug_in_nodata_remap():
+    """dm.aug is wrapped only when nodata params are set, around the expected inner aug."""
+    from terratorch.datamodules.generic_multimodal_data_module import MultimodalNormalize
+    from terratorch.datamodules.generic_pixel_wise_data_module import Normalize
+
+    dm = _nodata_dm()
+    assert isinstance(dm.aug, NoDataRemap)
+    assert isinstance(dm.aug.aug, MultimodalNormalize)
+
+    dm = _nodata_dm(
+        bands={"S2L2A": ["blue", "green"]},
+        means={"S2L2A": {"blue": 5.0, "green": 5.0}},
+        stds={"S2L2A": {"blue": 2.0, "green": 2.0}},
+    )
+    assert isinstance(dm.aug, NoDataRemap)
+    assert isinstance(dm.aug.aug, Normalize)
+
+    dm = _nodata_dm(normalize=False)
+    assert isinstance(dm.aug, NoDataRemap)
+    assert isinstance(dm.aug.aug, IdentityAug)
+
+    dm = _nodata_dm(nodata_value=None, set_nodata=None)
+    assert not isinstance(dm.aug, NoDataRemap)
+    assert isinstance(dm.aug, MultimodalNormalize)
     gc.collect()
 
 
