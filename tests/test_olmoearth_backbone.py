@@ -9,6 +9,7 @@ model are gated with ``pytest.importorskip("olmoearth_pretrain")``.
 from gelos.backbones.olmoearth_backbone import (
     OLMOEARTH_S2_BAND_ORDER,
     build_band_reorder_index,
+    calendar_to_olmoearth_timestamps,
 )
 import pytest
 import torch
@@ -68,6 +69,53 @@ def test_band_reorder_index_reports_all_missing_bands():
     msg = str(exc.value)
     # Several required bands should be named in the error.
     assert "COASTAL_AEROSOL" in msg and "WATER_VAPOR" in msg
+
+
+# ---------------------------------------------------------------------------
+# Canonical -> OlmoEarth timestamp conversion tests (pure logic, no model
+# dependency) — run unconditionally.
+# ---------------------------------------------------------------------------
+
+
+def test_calendar_conversion_basic():
+    # Canonical [year, month, day] -> OlmoEarth [day, month_index, year].
+    ts = torch.tensor([[2021, 6, 15]], dtype=torch.long)
+    out = calendar_to_olmoearth_timestamps(ts)
+    assert torch.equal(out, torch.tensor([[15, 5, 2021]], dtype=torch.long))
+
+
+def test_calendar_conversion_preserves_batched_shape():
+    ts = torch.stack(
+        [
+            torch.tensor([[2020, 1, 1], [2020, 12, 31], [2021, 7, 4]]),
+            torch.tensor([[2019, 3, 10], [2019, 6, 20], [2019, 9, 30]]),
+        ]
+    )  # (B=2, T=3, 3)
+    out = calendar_to_olmoearth_timestamps(ts)
+    assert out.shape == (2, 3, 3)
+    # Spot-check one entry: [2019, 6, 20] -> [20, 5, 2019].
+    assert out[1, 1].tolist() == [20, 5, 2019]
+
+
+def test_calendar_conversion_month_boundaries():
+    ts = torch.tensor([[2022, 1, 5], [2022, 12, 25]], dtype=torch.long)
+    out = calendar_to_olmoearth_timestamps(ts)
+    assert out[0].tolist() == [5, 0, 2022]  # January -> month_index 0
+    assert out[1].tolist() == [25, 11, 2022]  # December -> month_index 11
+
+
+@pytest.mark.parametrize("month", [0, 13])
+def test_calendar_conversion_warns_on_out_of_range_month(month):
+    ts = torch.tensor([[2021, month, 15]], dtype=torch.long)
+    with pytest.warns(UserWarning, match="year, month, day"):
+        calendar_to_olmoearth_timestamps(ts)
+
+
+def test_calendar_conversion_warns_on_implausible_year_column():
+    # Legacy [day, month_index, year] packing: column 0 is a 1-31 day (< 1900).
+    ts = torch.tensor([[15, 5, 2021]], dtype=torch.long)
+    with pytest.warns(UserWarning, match="year, month, day"):
+        calendar_to_olmoearth_timestamps(ts)
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +313,24 @@ class _DummyBackbone:
         self._batch_timestamps = None
 
 
+class _DummyLocationBackbone(_DummyBackbone):
+    """Backbone exposing BOTH the timestamps and location setter/clearer."""
+
+    def __init__(self):
+        super().__init__()
+        self.loc_set_calls = []
+        self.loc_clear_calls = 0
+        self._batch_location = None
+
+    def set_batch_location(self, loc):
+        self.loc_set_calls.append(loc)
+        self._batch_location = loc
+
+    def clear_batch_location(self):
+        self.loc_clear_calls += 1
+        self._batch_location = None
+
+
 def _make_task():
     from gelos.generation import LenientEmbeddingGenerationTask
 
@@ -345,6 +411,141 @@ def test_predict_step_noop_for_backbone_without_setter(monkeypatch):
     # Must not raise even though the backbone lacks the setter.
     out = task.predict_step({"image": "stub", "timestamps": torch.zeros(1, 1, 3)})
     assert out == "ok"
+
+
+def test_predict_step_sets_then_clears_location(monkeypatch):
+    from gelos.generation import LenientEmbeddingGenerationTask
+
+    task = _make_task()
+    backbone = _DummyLocationBackbone()
+    task.model = backbone
+
+    captured = {}
+
+    def fake_super_predict_step(self, batch):
+        # super() should see neither popped key.
+        captured["batch_keys"] = set(batch.keys())
+        captured["stashed_loc"] = backbone._batch_location
+        captured["stashed_ts"] = backbone._batch_timestamps
+        return "result"
+
+    monkeypatch.setattr(
+        LenientEmbeddingGenerationTask.__mro__[1],
+        "predict_step",
+        fake_super_predict_step,
+        raising=False,
+    )
+
+    ts = torch.tensor([[[2023, 2, 18]]], dtype=torch.int64)
+    loc = torch.tensor([[42.25, -71.82]])
+    out = task.predict_step({"image": "stub", "timestamps": ts, "location": loc})
+
+    assert out == "result"
+    assert "location" not in captured["batch_keys"]
+    assert "timestamps" not in captured["batch_keys"]
+    assert captured["stashed_loc"] is loc  # set before super ran
+    assert captured["stashed_ts"] is ts
+    assert backbone.loc_set_calls == [loc]
+    assert backbone.set_calls == [ts]
+    assert backbone.loc_clear_calls == 1  # cleared in finally
+    assert backbone.clear_calls == 1
+
+
+def test_predict_step_clears_location_on_exception(monkeypatch):
+    from gelos.generation import LenientEmbeddingGenerationTask
+
+    task = _make_task()
+    backbone = _DummyLocationBackbone()
+    task.model = backbone
+
+    def boom(self, batch):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(
+        LenientEmbeddingGenerationTask.__mro__[1],
+        "predict_step",
+        boom,
+        raising=False,
+    )
+
+    loc = torch.tensor([[42.25, -71.82]])
+    with pytest.raises(RuntimeError, match="kaboom"):
+        task.predict_step({"image": "stub", "location": loc})
+    assert backbone.loc_clear_calls == 1  # finally still ran
+
+
+def test_predict_step_location_noop_when_backbone_has_only_timestamps_setter(monkeypatch):
+    # Independence of the two probes: a backbone with set_batch_timestamps but
+    # NOT set_batch_location must not raise, and timestamps still dispatch.
+    from gelos.generation import LenientEmbeddingGenerationTask
+
+    task = _make_task()
+    backbone = _DummyBackbone()  # timestamps setter only
+    task.model = backbone
+
+    def fake_super_predict_step(self, batch):
+        return "ok"
+
+    monkeypatch.setattr(
+        LenientEmbeddingGenerationTask.__mro__[1],
+        "predict_step",
+        fake_super_predict_step,
+        raising=False,
+    )
+
+    ts = torch.tensor([[[2023, 2, 18]]], dtype=torch.int64)
+    loc = torch.tensor([[42.25, -71.82]])
+    out = task.predict_step({"image": "stub", "timestamps": ts, "location": loc})
+    assert out == "ok"
+    assert backbone.set_calls == [ts]  # timestamps still dispatched
+    assert backbone.clear_calls == 1
+
+
+def test_predict_step_location_noop_for_backbone_without_any_setter(monkeypatch):
+    from gelos.generation import LenientEmbeddingGenerationTask
+
+    task = _make_task()
+    task.model = object()  # neither setter, no encoder
+
+    def fake_super_predict_step(self, batch):
+        return "ok"
+
+    monkeypatch.setattr(
+        LenientEmbeddingGenerationTask.__mro__[1],
+        "predict_step",
+        fake_super_predict_step,
+        raising=False,
+    )
+
+    out = task.predict_step({"image": "stub", "location": torch.zeros(1, 2)})
+    assert out == "ok"
+
+
+def test_predict_step_location_only_batch_skips_timestamps_machinery(monkeypatch):
+    # A batch carrying only "location" dispatches it and never calls the
+    # timestamps setter (clear still runs — it is resolved independently).
+    from gelos.generation import LenientEmbeddingGenerationTask
+
+    task = _make_task()
+    backbone = _DummyLocationBackbone()
+    task.model = backbone
+
+    def fake_super_predict_step(self, batch):
+        return "ok"
+
+    monkeypatch.setattr(
+        LenientEmbeddingGenerationTask.__mro__[1],
+        "predict_step",
+        fake_super_predict_step,
+        raising=False,
+    )
+
+    loc = torch.tensor([[42.25, -71.82]])
+    out = task.predict_step({"image": "stub", "location": loc})
+    assert out == "ok"
+    assert backbone.loc_set_calls == [loc]
+    assert backbone.set_calls == []  # timestamps setter never invoked
+    assert backbone.loc_clear_calls == 1
 
 
 # ---------------------------------------------------------------------------
