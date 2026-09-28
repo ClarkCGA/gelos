@@ -52,6 +52,12 @@ data:
     # db_scale_bands:
     #   S1RTC: [VV, VH]
 
+    # optional: remap on-disk nodata pixels AFTER normalization, so the model
+    # receives set_nodata (not a normalized sentinel). Scalars apply to all
+    # modalities; dicts ({S2L2A: -999}) apply per modality. Must be set together.
+    # nodata_value: -999
+    # set_nodata: 0
+
     # albumentations / terratorch transforms applied to each chip.
     # FlattenTemporalIntoChannels and UnflattenTemporalFromChannels are needed
     # to apply spatial transforms across all timesteps.
@@ -152,6 +158,8 @@ style:
 | `means` / `stds` | Optional. Per-modality/band normalization statistics: `{sensor: {band: value}}`. Resolution order per band: these explicit args → model-matched pretraining stats injected by `gelos.generation` (see below) → lowercase `means`/`stds` class attributes on the dataset class → uppercase `MEANS`/`STDS` class attributes → default (mean 0.0, std 1.0). If an entire modality resolves to the defaults, normalization is an identity and a loud warning is logged |
 | `normalize` | Optional, default `true`. Set to `false` to skip z-score normalization entirely (identity aug) — for backbones that apply their own pretraining normalization internally, e.g. OlmoEarth (injected automatically for OlmoEarth models, see below) |
 | `db_scale_bands` | Optional. Convert listed bands from linear power to decibels (`10 * log10(clip(x, 1e-10))`) at load time, e.g. `{S1RTC: [VV, VH]}`. Do not use together with OlmoEarth's built-in normalization, which already converts S1 to dB |
+| `nodata_value` | Optional. On-disk nodata sentinel to detect, e.g. `-999`. A scalar applies to every modality; a `{modality: value}` dict (e.g. `{S2L2A: -999}`) masks only its listed modalities. Must be set together with `set_nodata`. Detection happens on the raw batch, before normalization; combining a masked modality with `db_scale_bands` or `perturb_bands` on the same bands corrupts the sentinel before detection and logs a warning |
+| `set_nodata` | Optional. Value the model receives at nodata positions, e.g. `0`. Written AFTER normalization, so the model sees exactly this value (not a normalized sentinel). A scalar, or a `{modality: value}` dict covering every masked modality. Must be set together with `nodata_value`. Per-model target values are not yet registered in `gelos.normalization` (pending upstream confirmation), so both fields must currently be set explicitly per config |
 
 **Model-matched normalization defaults.** For recognized backbones, `gelos.generation`
 automatically fills any of `means`/`stds`/`db_scale_bands`/`normalize` you did not set,

@@ -30,6 +30,22 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
   `[day, month_index, year]` — no in-repo producers of the key existed, but anyone who
   hand-crafted the old packing must switch (a plausibility `UserWarning` fires on
   old-format-looking tensors).
+- **Nodata pixel remapping in `GELOSDataModule`.** New `nodata_value` / `set_nodata` init
+  args (must be set together) remap on-disk nodata sentinels so the model receives a chosen
+  value instead of a normalized sentinel. Detection runs on the raw batch (the sentinel,
+  e.g. `-999`, is only exactly matchable before z-scoring); the write runs AFTER the
+  normalization aug, so with `nodata_value: -999, set_nodata: 0` the model sees exactly `0`
+  at nodata positions, not `(0 - mean) / std`. Implemented as a `NoDataRemap` wrapper
+  around whichever aug is active (`Normalize`, `MultimodalNormalize`, or `IdentityAug`
+  for `normalize: false`). Scalars apply to every modality; `{modality: value}` dicts mask
+  only their listed modalities (dicts are rejected for single-tensor batches, i.e.
+  `concat_bands: true`, where modality boundaries are unknown). Construction fails fast
+  on unknown modality keys or a `set_nodata` dict missing a masked modality, and logs a
+  warning when a masked modality also appears in `db_scale_bands` or `perturb_bands`
+  (those per-sample steps run first and corrupt the sentinel). Per-model target values
+  are not yet registered in `gelos.normalization`, so both keys must currently be set
+  explicitly per config. Documented in the configuration reference (#81).
+
 - **OlmoEarth v1.2 backbones.** New terratorch factory functions
   `olmoearth_v1_2_{nano,tiny,small,base}` (Sentinel-2 only) and `..._s1s2` (S2+S1),
   registered in `BACKBONE_REGISTRY`, with hidden dims 128/192/384/768. New shipped
