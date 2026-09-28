@@ -598,6 +598,183 @@ def test_datamodule_passes_db_scale_bands_to_dataset(data_root):
     gc.collect()
 
 
+# ---------------------------------------------------------------------------
+# Tests: optional _get_timestamps / _get_location hooks
+# ---------------------------------------------------------------------------
+
+
+class TimestampedExampleGELOSDataSet(ExampleGELOSDataSet):
+    """Overrides both optional hooks with deterministic per-index metadata.
+
+    A combined subclass also proves the two keys coexist in one sample.
+    """
+
+    def _get_timestamps(self, index: int) -> np.ndarray:
+        # Canonical [year, month, day], month 1-12, one row per S2 timestep.
+        return np.array(
+            [[2021, m, 15 + index] for m in range(1, N_TIMESTEPS_S2 + 1)],
+            dtype=np.int64,
+        )
+
+    def _get_location(self, index: int) -> np.ndarray:
+        return np.array([42.25 + index, -71.82], dtype=np.float64)
+
+
+class BadTimestampsDataSet(ExampleGELOSDataSet):
+    """Returns a wrong-shaped (T, 2) timestamps array."""
+
+    def _get_timestamps(self, index: int) -> np.ndarray:
+        return np.zeros((N_TIMESTEPS_S2, 2), dtype=np.int64)
+
+
+class BadTimestamps1DDataSet(ExampleGELOSDataSet):
+    """Returns a wrong-shaped 1-D (T,) timestamps array."""
+
+    def _get_timestamps(self, index: int) -> np.ndarray:
+        return np.zeros(N_TIMESTEPS_S2, dtype=np.int64)
+
+
+class BadLocationDataSet(ExampleGELOSDataSet):
+    """Returns a wrong-shaped (3,) location array."""
+
+    def _get_location(self, index: int) -> np.ndarray:
+        return np.array([42.25, -71.82, 100.0])
+
+
+class BadLocation2DDataSet(ExampleGELOSDataSet):
+    """Returns a wrong-shaped (1, 2) location array."""
+
+    def _get_location(self, index: int) -> np.ndarray:
+        return np.array([[42.25, -71.82]])
+
+
+class BadLocationScalarDataSet(ExampleGELOSDataSet):
+    """Returns a scalar instead of a (2,) array."""
+
+    def _get_location(self, index: int):
+        return np.float64(42.25)
+
+
+_HOOK_BANDS = {"S2L2A": ["blue", "green", "red"]}
+
+
+def test_timestamps_hook_adds_key_with_expected_values(data_root):
+    """Overriding _get_timestamps adds a long tensor of exact expected dates."""
+    ds = TimestampedExampleGELOSDataSet(data_root=data_root, bands=_HOOK_BANDS)
+    sample = ds[1]
+    assert "timestamps" in sample
+    ts = sample["timestamps"]
+    assert isinstance(ts, torch.Tensor)
+    assert ts.dtype == torch.long
+    assert ts.shape == (N_TIMESTEPS_S2, 3)
+    expected = torch.tensor([[2021, m, 16] for m in range(1, N_TIMESTEPS_S2 + 1)])
+    assert torch.equal(ts, expected)
+    gc.collect()
+
+
+def test_location_hook_adds_key_with_expected_values(data_root):
+    """Overriding _get_location adds a float32 (2,) tensor with exact values."""
+    ds = TimestampedExampleGELOSDataSet(data_root=data_root, bands=_HOOK_BANDS)
+    sample = ds[1]
+    assert "location" in sample
+    loc = sample["location"]
+    assert isinstance(loc, torch.Tensor)
+    assert loc.dtype == torch.float32
+    assert loc.shape == (2,)
+    torch.testing.assert_close(loc, torch.tensor([43.25, -71.82]))
+    gc.collect()
+
+
+def test_hooks_coexist_in_one_sample(data_root):
+    """Both keys are present together alongside the standard contract keys."""
+    ds = TimestampedExampleGELOSDataSet(data_root=data_root, bands=_HOOK_BANDS)
+    sample = ds[0]
+    assert {"image", "filename", "file_id", "timestamps", "location"} <= set(sample)
+    gc.collect()
+
+
+def test_no_override_omits_timestamps_and_location(single_sensor_dataset):
+    """Non-overriding subclasses produce neither key (current behavior preserved)."""
+    sample = single_sensor_dataset[0]
+    assert "timestamps" not in sample
+    assert "location" not in sample
+
+
+@pytest.mark.parametrize("bad_class", [BadTimestampsDataSet, BadTimestamps1DDataSet])
+def test_bad_timestamps_shape_raises(data_root, bad_class):
+    """A hook returning a non-(T, 3) timestamps array raises ValueError."""
+    ds = bad_class(data_root=data_root, bands=_HOOK_BANDS)
+    with pytest.raises(ValueError, match="_get_timestamps"):
+        ds[0]
+    gc.collect()
+
+
+@pytest.mark.parametrize(
+    "bad_class", [BadLocationDataSet, BadLocation2DDataSet, BadLocationScalarDataSet]
+)
+def test_bad_location_shape_raises(data_root, bad_class):
+    """A hook returning a non-(2,) location array raises ValueError."""
+    ds = bad_class(data_root=data_root, bands=_HOOK_BANDS)
+    with pytest.raises(ValueError, match="_get_location"):
+        ds[0]
+    gc.collect()
+
+
+def test_collate_samples_batches_timestamps_and_location(data_root):
+    """collate_samples stacks (T, 3) -> (B, T, 3) and (2,) -> (B, 2)."""
+    from terratorch.datamodules.generic_multimodal_data_module import collate_samples
+
+    ds = TimestampedExampleGELOSDataSet(data_root=data_root, bands=_HOOK_BANDS)
+    batch = collate_samples([ds[0], ds[1]])
+    assert batch["timestamps"].shape == (2, N_TIMESTEPS_S2, 3)
+    assert batch["location"].shape == (2, 2)
+    gc.collect()
+
+
+def _make_hook_dm(data_root, **kwargs):
+    return GELOSDataModule(
+        data_root=data_root,
+        batch_size=2,
+        num_workers=0,
+        dataset_class=TimestampedExampleGELOSDataSet,
+        bands=_HOOK_BANDS,
+        **kwargs,
+    )
+
+
+def test_datamodule_batches_carry_timestamps_and_location(data_root):
+    """A GELOSDataModule dataloader batch carries (B, T, 3) and (B, 2) keys."""
+    dm = _make_hook_dm(data_root)
+    dm.setup(stage="predict")
+    batch = next(iter(dm.predict_dataloader()))
+    assert batch["timestamps"].shape == (2, N_TIMESTEPS_S2, 3)
+    assert batch["timestamps"].dtype == torch.long
+    assert batch["location"].shape == (2, 2)
+    assert batch["location"].dtype == torch.float32
+    gc.collect()
+
+
+@pytest.mark.parametrize("normalize", [True, False])
+def test_aug_leaves_timestamps_and_location_unchanged(data_root, normalize):
+    """dm.aug (normalize on or off) never touches timestamps or location."""
+    import copy
+
+    stats_kwargs = {}
+    if normalize:
+        stats_kwargs = {
+            "means": {"S2L2A": {"blue": 5.0, "green": 5.0, "red": 5.0}},
+            "stds": {"S2L2A": {"blue": 2.0, "green": 2.0, "red": 2.0}},
+        }
+    dm = _make_hook_dm(data_root, normalize=normalize, **stats_kwargs)
+    dm.setup(stage="predict")
+    batch = next(iter(dm.predict_dataloader()))
+    original = copy.deepcopy(batch)
+    out = dm.aug(batch)
+    assert torch.equal(out["timestamps"], original["timestamps"])
+    torch.testing.assert_close(out["location"], original["location"])
+    gc.collect()
+
+
 def test_example_config_instantiates(data_root):
     """tests/fixtures/example_config.yaml can instantiate GELOSDataModule and produce batches.
 

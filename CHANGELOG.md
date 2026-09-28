@@ -14,6 +14,22 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **Dataset-side acquisition timestamps and chip location (issue #79).** Two new
+  optional, non-abstract hooks on `GELOSDataSet`: `_get_timestamps(index)` returns a
+  canonical `(T, 3)` integer `[year, month, day]` array (month 1–12, one row per
+  timestep of the primary temporal sensor) that flows into `batch["timestamps"]`
+  `(B, T, 3)` and into any backbone exposing `set_batch_timestamps`; and
+  `_get_location(index)` returns a `(2,)` float `[lat, lon]` array that flows into
+  `batch["location"]` `(B, 2)`, dispatched generically to any backbone exposing
+  `set_batch_location`. OlmoEarth converts the canonical dates to its own
+  `[day, month_index, year]` packing internally (new pure helper
+  `calendar_to_olmoearth_timestamps`); no current backbone consumes `location` — it is
+  groundwork for a future Prithvi TL wrapper. Both hooks default to `None`, so
+  existing subclasses are unaffected. **Breaking format note:** `batch["timestamps"]`
+  is now canonical calendar `[year, month, day]`, no longer OlmoEarth's
+  `[day, month_index, year]` — no in-repo producers of the key existed, but anyone who
+  hand-crafted the old packing must switch (a plausibility `UserWarning` fires on
+  old-format-looking tensors).
 - **OlmoEarth v1.2 backbones.** New terratorch factory functions
   `olmoearth_v1_2_{nano,tiny,small,base}` (Sentinel-2 only) and `..._s1s2` (S2+S1),
   registered in `BACKBONE_REGISTRY`, with hidden dims 128/192/384/768. New shipped

@@ -24,37 +24,57 @@ class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
     def check_file_ids(self, file_ids, x):
         return
 
+    @staticmethod
+    def _resolve_setter(backbone: Any, name: str) -> Any:
+        """Return the object exposing ``name`` — the backbone itself or its
+        ``.encoder`` (when wrapped, e.g. by ``TemporalWrapper``) — else None."""
+        if hasattr(backbone, name):
+            return backbone
+        target = getattr(backbone, "encoder", None)
+        if hasattr(target, name):
+            return target
+        return None
+
     @torch.no_grad()
     def predict_step(self, batch: dict) -> Any:
-        """Thread per-batch acquisition dates into a date-aware backbone.
+        """Thread per-batch metadata into a metadata-aware backbone.
 
         Stock terratorch ``predict_step``/``get_embeddings`` only forward
-        ``batch["image"]`` to the backbone, so the outer ``"timestamps"`` key
-        cannot reach it through the normal call path. We pop it here and stash it
-        on the backbone (or its ``.encoder`` when wrapped by ``TemporalWrapper``)
-        via ``set_batch_timestamps``, then clear it in ``finally`` so the stash
-        never outlives one batch. The override is a no-op for backbones lacking
-        the setter (e.g. Prithvi, TerraMind), keeping the task generic.
+        ``batch["image"]`` to the backbone, so the outer ``"timestamps"`` and
+        ``"location"`` keys cannot reach it through the normal call path. We
+        pop both here so stock terratorch code never sees them, and stash each
+        on the backbone (or its ``.encoder`` when wrapped by
+        ``TemporalWrapper``) via ``set_batch_timestamps`` /
+        ``set_batch_location``, then clear in ``finally`` so a stash never
+        outlives one batch. The two setters are resolved independently — a
+        backbone may expose either, both, or neither; the dispatch is a no-op
+        for backbones lacking a setter (e.g. Prithvi, TerraMind), keeping the
+        task generic.
+
+        ``timestamps`` is ``(B, T, 3)`` canonical ``[year, month, day]``;
+        ``location`` is ``(B, 2)`` ``[lat, lon]``. No current backbone exposes
+        ``set_batch_location`` — the location dispatch is groundwork for a
+        future location-aware wrapper (e.g. Prithvi TL).
 
         ``@torch.no_grad()`` mirrors the parent ``predict_step``.
         """
         timestamps = batch.pop("timestamps", None)
+        location = batch.pop("location", None)
         backbone = getattr(self, "model", None)
         # OlmoEarth backbone is either self.model or self.model.encoder if wrapped.
-        target = getattr(backbone, "encoder", None)
-        if hasattr(backbone, "set_batch_timestamps"):
-            setter_obj = backbone
-        elif hasattr(target, "set_batch_timestamps"):
-            setter_obj = target
-        else:
-            setter_obj = None
+        setter_obj = self._resolve_setter(backbone, "set_batch_timestamps")
+        loc_setter_obj = self._resolve_setter(backbone, "set_batch_location")
         if timestamps is not None and setter_obj is not None:
             setter_obj.set_batch_timestamps(timestamps)
+        if location is not None and loc_setter_obj is not None:
+            loc_setter_obj.set_batch_location(location)
         try:
             return super().predict_step(batch)
         finally:
             if setter_obj is not None:
                 setter_obj.clear_batch_timestamps()
+            if loc_setter_obj is not None:
+                loc_setter_obj.clear_batch_location()
 
 
 def instantiate_recursive(node: Any) -> Any:

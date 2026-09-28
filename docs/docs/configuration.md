@@ -256,13 +256,28 @@ Notes and limitations:
   Prithvi/TerraMind's 16-pixel patches, so the same `slice_args` strategies
   apply across models. Encoding still runs at the fine `patch_size`; only the
   output tokens are aggregated.
-- **Timestamps.** When the batch carries per-timestep acquisition dates (a
-  `timestamps` key of shape `(B, T, 3)` as `[day, month_index, year]`), the
-  generation task threads them into the backbone so OlmoEarth's temporal
-  encoding reflects true acquisition dates. When absent, timestamps fall back
-  to a constant `[15, 0, 2020]` (day=15, month=Jan, year=2020), and
-  acquisition-date-dependent temporal encoding will not reflect true
-  seasonality.
+- **Timestamps.** Datasets opt in to real acquisition dates by overriding
+  `GELOSDataSet._get_timestamps(index)`, returning a `(T, 3)` integer array of
+  canonical calendar dates `[year, month, day]` (month 1–12) — one row per
+  timestep of the primary temporal sensor (S2 for OlmoEarth). The value flows
+  automatically into `batch["timestamps"]` `(B, T, 3)` and from there into any
+  backbone exposing `set_batch_timestamps`. Each backbone converts internally
+  to its own layout — OlmoEarth reindexes to its `[day, month_index, year]`
+  packing at consumption time — so datasets never encode a backbone-specific
+  format. When the hook is not overridden (the default), OlmoEarth falls back
+  to the constant dummy date `[15, 0, 2020]` (day=15, month=Jan, year=2020;
+  unchanged behavior), and acquisition-date-dependent temporal encoding will
+  not reflect true seasonality. Timestamps whose shape does not match the
+  input's `(B, T, 3)` emit a warning and fall back to the constant date.
+- **Location.** Datasets opt in to chip location by overriding
+  `GELOSDataSet._get_location(index)`, returning a `(2,)` float array
+  `[lat, lon]` in decimal degrees (one footprint per chip). The value flows
+  into `batch["location"]` `(B, 2)` and is dispatched generically to any
+  backbone exposing `set_batch_location`. **No current backbone consumes it** —
+  the plumbing exists so a future location-aware backbone wrapper (e.g.
+  Prithvi TL, whose encoder accepts `location_coords (B, 2)`) plugs in with no
+  dataset or task changes. When the hook is not overridden the key is absent
+  and behavior is unchanged everywhere.
 
 ### Embedding extraction strategies
 
