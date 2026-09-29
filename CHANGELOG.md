@@ -14,6 +14,27 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **OlmoEarth nodata input mask + masked pooling.** Follow-up to the `nodata_value` /
+  `set_nodata` remap below (#81): the datamodule's `NoDataRemap` now also attaches the
+  raw-batch detection mask to the batch as `batch["nodata_mask"]`
+  (`gelos.gelosdatamodule.NODATA_MASK_KEY`; `{modality: BoolTensor}` for dict batches, a
+  single tensor otherwise), and `LenientEmbeddingGenerationTask.predict_step` pops it and
+  stashes it on the backbone via `set_batch_nodata_mask` / `clear_batch_nodata_mask`,
+  mirroring the `timestamps` side-channel (a no-op for Prithvi/TerraMind). `OlmoEarthBackbone`
+  gains `mask_nodata` (default `true`) and `nodata_patch_threshold` (default `0`): a patch
+  containing any nodata pixel (any band, per timestep; a value in `(0, 1]` instead requires
+  that fraction) is flagged
+  `MaskValue.MISSING`, so the encoder removes it before attention (the encoder is then run
+  with `fast_pass=False` and its attention mask enabled, so zero-padded batch-mates cannot
+  leak into attention), and every pooling step (band-set, S1/S2 fusion, spatial, temporal)
+  becomes a masked mean over valid tokens. `spatial_pooling` additionally accepts `"mean"`
+  (masked mean over the whole token grid per timestep: `(B, T, D)` with `temporal_pooling:
+  keep`, `(B, 1, D)` with `mean`) so every sample yields a same-size vector. Masked grid
+  positions are zero vectors; fully-masked samples are encoded unmasked with a warning.
+  `gelos.normalization` now registers `set_nodata: 0` for Prithvi, TerraMind and OlmoEarth
+  and injects it only when the config sets `nodata_value` (superseding the "not yet
+  registered" note in the entry below), so downstream configs only need the dataset's
+  nodata value. Documented in the configuration reference.
 - **Dataset-side acquisition timestamps and chip location (issue #79).** Two new
   optional, non-abstract hooks on `GELOSDataSet`: `_get_timestamps(index)` returns a
   canonical `(T, 3)` integer `[year, month, day]` array (month 1–12, one row per
