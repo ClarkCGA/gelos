@@ -50,6 +50,7 @@ Pretraining normalization (``apply_pretraining_normalization=True``, the default
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import contextmanager
 import json
 import warnings
 
@@ -270,6 +271,145 @@ def build_band_reorder_index(bands: list[str]) -> list[int]:
     return [band_to_pos[b] for b in OLMOEARTH_S2_BAND_ORDER]
 
 
+# olmoearth_pretrain.datatypes.MaskValue integer codes, duplicated here so the
+# pure mask helpers stay usable (and testable) without the package installed.
+# ``patch_mask_to_olmoearth_mask`` prefers the package's values when importable.
+_MASK_ONLINE_ENCODER = 0
+_MASK_MISSING = 3
+
+
+def build_patch_nodata_mask(
+    nodata: torch.Tensor, patch_size: int, threshold: float
+) -> torch.Tensor:
+    """Reduce a pixel-level nodata mask to a per-patch MISSING decision.
+
+    Pure tensor logic (no model dependency). OlmoEarth's patch embedding reads
+    only the top-left pixel of each ``patch_size x patch_size`` patch from the
+    mask and requires masks to be patch-constant, so GELOS must decide per
+    patch. With ``threshold=0`` a patch is MISSING when ANY of its pixels is
+    nodata in ANY band at that timestep; with ``threshold>0`` it is MISSING
+    when at least that fraction of its pixels is nodata.
+
+    Args:
+        nodata: Bool tensor ``(B, C, T, H, W)`` in GELOS layout, ``True`` = nodata.
+        patch_size: Encoder patch size in pixels.
+        threshold: Fraction in ``[0, 1]``; ``0`` masks any patch touching
+            nodata, ``1.0`` masks only fully-nodata patches.
+
+    Returns:
+        Bool tensor ``(B, H//patch_size, W//patch_size, T)``, ``True`` = MISSING.
+
+    Raises:
+        ValueError: if ``nodata`` is not 5-D or H/W are not divisible by
+            ``patch_size``.
+    """
+    if nodata.dim() != 5:
+        raise ValueError(f"nodata mask must be (B, C, T, H, W), got shape {tuple(nodata.shape)}.")
+    b, _c, t, h, w = nodata.shape
+    if h % patch_size != 0 or w % patch_size != 0:
+        raise ValueError(
+            f"Spatial dims (H={h}, W={w}) must be divisible by patch_size={patch_size}."
+        )
+    any_band = nodata.any(dim=1)  # (B, T, H, W)
+    fraction = (
+        any_band.reshape(b, t, h // patch_size, patch_size, w // patch_size, patch_size)
+        .to(torch.float32)
+        .mean(dim=(3, 5))
+    )  # (B, T, H', W')
+    missing = fraction > 0 if threshold == 0 else fraction >= threshold
+    return missing.permute(0, 2, 3, 1).contiguous()  # (B, H', W', T)
+
+
+def patch_mask_to_olmoearth_mask(
+    patch_missing: torch.Tensor,
+    patch_size: int,
+    num_band_sets: int,
+    missing_value: int | None = None,
+    online_value: int | None = None,
+) -> torch.Tensor:
+    """Broadcast a per-patch MISSING decision to OlmoEarth's pixel-level mask.
+
+    Args:
+        patch_missing: Bool tensor ``(B, H', W', T)``, ``True`` = MISSING.
+        patch_size: Encoder patch size; each patch decision is repeated over a
+            ``patch_size x patch_size`` pixel block (so the mask is patch-constant
+            and the top-left pixel the encoder reads carries the patch value).
+        num_band_sets: ``S`` in the returned ``(B, H, W, T, S)`` mask (3 for S2,
+            1 for S1); every band set shares the patch decision.
+        missing_value / online_value: Integer codes. Default to
+            ``MaskValue.MISSING`` / ``MaskValue.ONLINE_ENCODER`` from
+            ``olmoearth_pretrain`` when importable, else the hard-coded copies.
+
+    Returns:
+        Int32 tensor ``(B, H'*patch_size, W'*patch_size, T, num_band_sets)``.
+    """
+    if missing_value is None or online_value is None:
+        try:
+            from olmoearth_pretrain.datatypes import MaskValue  # type: ignore[import-not-found]
+
+            pkg_missing, pkg_online = MaskValue.MISSING.value, MaskValue.ONLINE_ENCODER.value
+        except ImportError:
+            pkg_missing, pkg_online = _MASK_MISSING, _MASK_ONLINE_ENCODER
+        missing_value = pkg_missing if missing_value is None else missing_value
+        online_value = pkg_online if online_value is None else online_value
+    pixel_missing = patch_missing.repeat_interleave(patch_size, dim=1).repeat_interleave(
+        patch_size, dim=2
+    )  # (B, H, W, T)
+    pixel_missing = pixel_missing.unsqueeze(-1).expand(*pixel_missing.shape, num_band_sets)
+    return torch.where(
+        pixel_missing,
+        torch.tensor(missing_value, dtype=torch.int32, device=patch_missing.device),
+        torch.tensor(online_value, dtype=torch.int32, device=patch_missing.device),
+    )
+
+
+def masked_mean(
+    x: torch.Tensor, valid: torch.Tensor, dims: tuple[int, ...]
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mean of ``x`` over ``dims`` counting only positions where ``valid`` is True.
+
+    Args:
+        x: Float tensor ``(..., D)``.
+        valid: Bool tensor broadcastable to ``x.shape[:-1]`` (no trailing ``D``).
+        dims: Non-negative axes of ``x`` to reduce (must not include the last).
+
+    Returns:
+        ``(mean, still_valid)``: ``mean`` has ``x``'s shape with ``dims``
+        removed; positions with zero valid contributors are zero vectors.
+        ``still_valid`` (bool, ``mean.shape[:-1]``) is ``True`` where at least
+        one valid contributor existed, so callers can chain validity through
+        successive pooling stages.
+    """
+    weight = valid.to(x.dtype)
+    count = weight.expand(x.shape[:-1]).sum(dim=dims)
+    total = (x * weight.unsqueeze(-1)).sum(dim=dims)
+    return total / count.clamp(min=1).unsqueeze(-1), count > 0
+
+
+@contextmanager
+def _attention_mask_enabled(encoder: nn.Module):
+    """Make an eval-mode OlmoEarth ``Encoder`` honor its token mask under attention.
+
+    With ``fast_pass=False`` the encoder removes MISSING tokens, sorts the rest
+    valid-first and zero-pads every sample to the batch's longest sequence
+    (``flexi_vit.py: remove_masked_tokens``). The attention mask that would hide
+    those pads is only built when ``self.training`` is True
+    (``_maybe_get_attn_mask`` returns ``None`` otherwise), so in eval mode the
+    zero pads still act as attention keys and a sample's output depends on its
+    batch-mates' mask counts (measured: 0.11 abs diff vs. a B=1 run; 2.5e-6 with
+    the flag set). We therefore flip the ``training`` attribute on the
+    ``Encoder`` object ONLY — not ``.train()``, which would recurse into
+    submodules and re-enable DropPath/dropout/band-dropout. ``Encoder`` reads
+    ``self.training`` nowhere else (olmoearth_pretrain 0.1.1).
+    """
+    previous = encoder.training
+    encoder.training = True
+    try:
+        yield
+    finally:
+        encoder.training = previous
+
+
 class OlmoEarthBackbone(nn.Module):
     """Adapts an OlmoEarth encoder to terratorch's backbone ``forward_features``.
 
@@ -302,14 +442,33 @@ class OlmoEarthBackbone(nn.Module):
       one joint space-time attention pass, so a single timestep's tokens still
       carry cross-time context (unlike running the encoder with T=1).
 
-    ``spatial_pooling`` (int factor ``s``, default ``None`` = off) average-pools
-    the ``H'xW'`` token grid over non-overlapping ``sxs`` neighborhoods after
-    encoding, so each output token covers ``(s*patch_size)^2`` input pixels. Use
-    it to match the spatial footprint of larger-patch models: with
-    ``patch_size=4, spatial_pooling=4`` each token covers 16x16 pixels and the
-    grid (and token indices) line up exactly with Prithvi/TerraMind's 16-pixel
-    patches. Encoding still happens at the fine ``patch_size``; only the output
-    tokens are aggregated.
+    ``spatial_pooling`` (default ``None`` = off) aggregates the ``H'xW'`` token
+    grid after encoding:
+
+    - int factor ``s``: average-pools non-overlapping ``sxs`` neighborhoods, so
+      each output token covers ``(s*patch_size)^2`` input pixels. Use it to
+      match the spatial footprint of larger-patch models: with ``patch_size=4,
+      spatial_pooling=4`` each token covers 16x16 pixels and the grid (and token
+      indices) line up exactly with Prithvi/TerraMind's 16-pixel patches.
+    - ``"mean"``: masked mean over the whole valid token grid per timestep, so
+      every sample yields the same-size vector whatever its nodata footprint:
+      ``(B, T, D)`` with ``temporal_pooling="keep"``, ``(B, 1, D)`` with
+      ``"mean"``.
+
+    Encoding always happens at the fine ``patch_size``; only outputs are pooled.
+
+    Nodata masking (``mask_nodata=True``, default): when the task stashed a
+    ``nodata_mask`` for the batch (``GELOSDataModule`` with ``nodata_value``
+    set), each ``patch_size x patch_size`` patch whose nodata fraction (any
+    band, per timestep) is nodata (default ``nodata_patch_threshold=0``; a value
+    in ``(0, 1]`` instead requires at least that fraction) is flagged
+    ``MaskValue.MISSING``. Missing tokens are removed before attention (so they
+    neither attend nor are attended to) and excluded from every pooling mean
+    (band-set, S1/S2 fusion, spatial, temporal). In un-pooled grids masked
+    positions come back as zero vectors (the encoder's convention); a pooled
+    position with zero valid contributors is also a zero vector and triggers a
+    warning. A sample with no valid patch at all is encoded unmasked (with a
+    warning) because the encoder cannot process an empty token sequence.
     """
 
     def __init__(
@@ -322,8 +481,10 @@ class OlmoEarthBackbone(nn.Module):
         bands_s1: list[str] | None = None,
         warn_missing_s1: bool = True,
         temporal_pooling: str = "mean",
-        spatial_pooling: int | None = None,
+        spatial_pooling: int | str | None = None,
         apply_pretraining_normalization: bool = True,
+        mask_nodata: bool = True,
+        nodata_patch_threshold: float = 0.0,
         **kwargs,  # tolerate terratorch-injected args
     ) -> None:
         super().__init__()
@@ -331,11 +492,19 @@ class OlmoEarthBackbone(nn.Module):
             raise ValueError(
                 f"temporal_pooling must be 'mean' or 'keep', got {temporal_pooling!r}."
             )
-        if spatial_pooling is not None and (
-            not isinstance(spatial_pooling, int) or spatial_pooling < 1
+        if (
+            spatial_pooling is not None
+            and spatial_pooling != "mean"
+            and (not isinstance(spatial_pooling, int) or spatial_pooling < 1)
         ):
             raise ValueError(
-                f"spatial_pooling must be a positive int or None, got {spatial_pooling!r}."
+                "spatial_pooling must be None, a positive int, or 'mean', "
+                f"got {spatial_pooling!r}."
+            )
+        if not (0 <= nodata_patch_threshold <= 1):
+            raise ValueError(
+                "nodata_patch_threshold must be in [0, 1] (fraction of nodata pixels "
+                f"that marks a patch MISSING), got {nodata_patch_threshold!r}."
             )
         self.model_id = model_id
         self.pretrained = pretrained
@@ -343,6 +512,8 @@ class OlmoEarthBackbone(nn.Module):
         self.hidden_dim = hidden_dim
         self.temporal_pooling = temporal_pooling
         self.spatial_pooling = spatial_pooling
+        self.mask_nodata = mask_nodata
+        self.nodata_patch_threshold = nodata_patch_threshold
         self.bands = list(bands) if bands else list(OLMOEARTH_S2_BAND_ORDER)
 
         # Transient per-batch acquisition dates, stashed by the task's
@@ -350,6 +521,10 @@ class OlmoEarthBackbone(nn.Module):
         # Plain attribute on purpose: NOT a buffer/parameter, so it is never saved
         # in the state_dict nor moved by ``.to()`` — it is cleared after each batch.
         self._batch_timestamps: torch.Tensor | None = None
+        # Transient per-batch pixel nodata mask from GELOSDataModule's NoDataRemap
+        # ({modality: BoolTensor(B, C, T, H, W)} or a single BoolTensor), stashed
+        # the same way. Plain attribute for the same reason: never in state_dict.
+        self._batch_nodata_mask: dict[str, torch.Tensor] | torch.Tensor | None = None
 
         # Precompute and validate the band-reorder map eagerly so misconfigured
         # bands fail at construction time, not mid-forward.
@@ -415,6 +590,55 @@ class OlmoEarthBackbone(nn.Module):
         """Clear the stashed timestamps (called in the task's ``finally``)."""
         self._batch_timestamps = None
 
+    def set_batch_nodata_mask(self, mask: dict[str, torch.Tensor] | torch.Tensor | None) -> None:
+        """Stash the current batch's pixel nodata mask for ``forward_features``.
+
+        Same side-channel as :meth:`set_batch_timestamps`: terratorch forwards
+        only ``batch["image"]`` to the backbone, so the task pops
+        ``batch["nodata_mask"]`` and parks it here for one batch. Accepts the
+        ``{modality: BoolTensor(B, C, T, H, W)}`` dict produced for dict batches
+        or the single ``BoolTensor`` of the tensor path (treated as the S2 mask).
+        """
+        self._batch_nodata_mask = mask
+
+    def clear_batch_nodata_mask(self) -> None:
+        """Clear the stashed nodata mask (called in the task's ``finally``)."""
+        self._batch_nodata_mask = None
+
+    def _resolve_patch_missing(
+        self,
+        nodata: torch.Tensor | None,
+        expected: tuple[int, int, int, int],
+        device: torch.device,
+        modality: str,
+    ) -> torch.Tensor | None:
+        """Turn a stashed pixel nodata mask into a ``(B, H', W', T)`` MISSING mask.
+
+        Returns ``None`` (= nothing masked) when no mask was stashed or its
+        ``(B, T, H, W)`` disagrees with the input (warns, mirroring the
+        timestamp shape fallback).
+        """
+        if nodata is None:
+            return None
+        got = (
+            (nodata.shape[0], nodata.shape[2], nodata.shape[3], nodata.shape[4])
+            if nodata.dim() == 5
+            else tuple(nodata.shape)
+        )
+        if got != expected:
+            warnings.warn(
+                f"OlmoEarthBackbone: stashed {modality} nodata mask has (B, T, H, W) "
+                f"{got}, expected {expected}; ignoring the mask for this batch.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return None
+        return build_patch_nodata_mask(
+            nodata.to(device=device, dtype=torch.bool),
+            self.patch_size,
+            self.nodata_patch_threshold,
+        )
+
     def forward_features(self, x, **kwargs) -> list[torch.Tensor]:
         """Run the OlmoEarth encoder and return ``[tokens]``.
 
@@ -427,7 +651,11 @@ class OlmoEarthBackbone(nn.Module):
             A single-element list whose tensor has shape ``(B, H'*W', D)`` when
             ``temporal_pooling="mean"``, or ``(B, T*H'*W', D)`` (time-major) when
             ``temporal_pooling="keep"``. With ``spatial_pooling=s``, ``H'`` and
-            ``W'`` above are the pooled grid dims (``H/patch_size/s``).
+            ``W'`` above are the pooled grid dims (``H/patch_size/s``). With
+            ``spatial_pooling="mean"`` the grid collapses entirely: ``(B, T, D)``
+            for ``"keep"``, ``(B, 1, D)`` for ``"mean"``. When a nodata mask is
+            stashed, masked patches are excluded from attention and from every
+            mean; un-pooled masked grid positions are zero vectors.
         """
         from olmoearth_pretrain.datatypes import (  # type: ignore[import-not-found]
             MaskedOlmoEarthSample,
@@ -494,15 +722,25 @@ class OlmoEarthBackbone(nn.Module):
                 .contiguous()
             )
 
-        # 4. S2 mask: (B, H, W, T, 3) — 3 band sets (10m/20m/60m).
-        sentinel2_mask = (
-            torch.ones(b, h, w, t, 3, dtype=torch.int32, device=x_s2.device)
-            * MaskValue.ONLINE_ENCODER.value
-        )
+        # 4. S2 patch-level MISSING decision from the stashed pixel nodata mask
+        # (dict batch: per-modality entry; tensor batch: the tensor is the S2
+        # mask). None / mask_nodata=False -> nothing masked.
+        stash = self._batch_nodata_mask if self.mask_nodata else None
+        nodata_s2 = nodata_s1 = None
+        if isinstance(stash, dict):
+            nodata_s2, nodata_s1 = stash.get("S2L2A"), stash.get("S1RTC")
+        elif stash is not None:
+            nodata_s2 = stash
+        p = self.patch_size
+        hp, wp = h // p, w // p
+        missing_s2 = self._resolve_patch_missing(nodata_s2, (b, t, h, w), x_s2.device, "S2L2A")
+        if missing_s2 is None:
+            missing_s2 = torch.zeros(b, hp, wp, t, dtype=torch.bool, device=x_s2.device)
 
         # 5. S1 path (optional).
         sentinel1_tensor = None
         sentinel1_mask = None
+        missing_s1 = None
         if x_s1 is not None:
             if x_s1.dim() != 5:
                 raise ValueError(
@@ -518,10 +756,45 @@ class OlmoEarthBackbone(nn.Module):
                     convert_to_db(x_s1), self._s1_norm_means, self._s1_norm_stds
                 )
             sentinel1_tensor = x_s1
-            # S1 has 1 band set -> mask shape (B, H, W, T, 1)
-            sentinel1_mask = (
-                torch.ones(b, h, w, t, 1, dtype=torch.int32, device=x_s1.device)
-                * MaskValue.ONLINE_ENCODER.value
+            missing_s1 = self._resolve_patch_missing(
+                nodata_s1, tuple(x_s1.shape[i] for i in (0, 3, 1, 2)), x_s1.device, "S1RTC"
+            )
+            if missing_s1 is None:
+                missing_s1 = torch.zeros(
+                    b,
+                    x_s1.shape[1] // p,
+                    x_s1.shape[2] // p,
+                    t,
+                    dtype=torch.bool,
+                    device=x_s1.device,
+                )
+
+        # 5b. Fully-masked guard: the encoder asserts on an empty token sequence
+        # (add_removed_tokens) and its mean pooling raises on zero valid tokens,
+        # so a sample with no valid patch in any modality is encoded unmasked.
+        valid_any = ~missing_s2
+        if missing_s1 is not None:
+            valid_any = valid_any | ~missing_s1
+        no_valid = ~valid_any.flatten(1).any(dim=1)  # (B,)
+        if bool(no_valid.any()):
+            warnings.warn(
+                "OlmoEarthBackbone: batch samples "
+                f"{no_valid.nonzero().flatten().tolist()} have no valid patch after nodata "
+                "masking; encoding them unmasked (their embeddings are nodata-dominated).",
+                UserWarning,
+                stacklevel=2,
+            )
+            missing_s2[no_valid] = False
+            if missing_s1 is not None:
+                missing_s1[no_valid] = False
+
+        # 5c. Broadcast patch decisions to OlmoEarth's pixel-level int masks:
+        # S2 (B, H, W, T, 3) — 3 band sets (10m/20m/60m); S1 (B, H, W, T, 1).
+        missing_code, online_code = MaskValue.MISSING.value, MaskValue.ONLINE_ENCODER.value
+        sentinel2_mask = patch_mask_to_olmoearth_mask(missing_s2, p, 3, missing_code, online_code)
+        if sentinel1_tensor is not None:
+            sentinel1_mask = patch_mask_to_olmoearth_mask(
+                missing_s1, p, 1, missing_code, online_code
             )
 
         # 6. Build OlmoEarth sample.
@@ -534,37 +807,85 @@ class OlmoEarthBackbone(nn.Module):
         )
 
         # 7. Encode — call the inner encoder directly to skip the decoder.
-        output_dict = self.encoder.encoder(sample, fast_pass=True, patch_size=self.patch_size)
+        # fast_pass=True ignores the mask entirely (masked tokens are neither
+        # removed nor hidden from attention), so it is only used when nothing is
+        # masked, keeping that path bit-identical to the unmasked behaviour.
+        any_masked = bool(missing_s2.any()) or (missing_s1 is not None and bool(missing_s1.any()))
+        inner_encoder = self.encoder.encoder
+        if not any_masked:
+            output_dict = inner_encoder(sample, fast_pass=True, patch_size=p)
+        else:
+            # fast_pass=False removes MISSING tokens before attention; see
+            # _attention_mask_enabled for why the training flag must be set so
+            # zero-padded batch-mates cannot leak into attention. The extra
+            # "project_aggregated" output key is ignored.
+            with _attention_mask_enabled(inner_encoder):
+                output_dict = inner_encoder(sample, fast_pass=False, patch_size=p)
         tokens_and_masks = output_dict["tokens_and_masks"]
 
-        # 8. Pool S2 tokens over band-sets: (B, H', W', T, 3, D) -> (B, H', W', T, D)
+        # 8. Pool S2 tokens over band-sets: (B, H', W', T, 3, D) -> (B, H', W', T, D).
+        # All band sets share the patch decision, so a plain mean is exact.
         s2_tokens = tokens_and_masks.sentinel2_l2a  # (B, H', W', T, 3, D)
         pooled = s2_tokens.mean(dim=4)  # (B, H', W', T, D)
+        valid = ~missing_s2  # (B, H', W', T)
 
-        # 9. Fuse S1 tokens when present (equal-weight average, per timestep).
+        # 9. Fuse S1 tokens when present: average over the modalities valid at
+        # each patch (equal-weight /2 when both are valid).
         if sentinel1_tensor is not None:
             s1_tokens = tokens_and_masks.sentinel1  # (B, H', W', T, 1, D)
-            pooled = (pooled + s1_tokens.mean(dim=4)) / 2.0
+            s1_pooled = s1_tokens.mean(dim=4)
+            valid_s1 = ~missing_s1
+            w_s2 = valid.to(pooled.dtype).unsqueeze(-1)
+            w_s1 = valid_s1.to(pooled.dtype).unsqueeze(-1)
+            pooled = (pooled * w_s2 + s1_pooled * w_s1) / (w_s2 + w_s1).clamp(min=1)
+            valid = valid | valid_s1
 
-        # 9b. Optional spatial pooling: average sxs token neighborhoods so each
-        # output token covers (s*patch_size)^2 pixels.
-        if self.spatial_pooling is not None and self.spatial_pooling > 1:
+        # 9b. Optional spatial pooling (masked means; validity chained through).
+        pooled_any = False
+        if isinstance(self.spatial_pooling, int) and self.spatial_pooling > 1:
+            # Average sxs token neighborhoods so each output token covers
+            # (s*patch_size)^2 pixels.
             s = self.spatial_pooling
             bb, hp, wp, tt, d = pooled.shape
             if hp % s != 0 or wp % s != 0:
                 raise ValueError(
                     f"Token grid ({hp}x{wp}) must be divisible by spatial_pooling={s}."
                 )
-            pooled = pooled.reshape(bb, hp // s, s, wp // s, s, tt, d).mean(dim=(2, 4))
+            pooled, valid = masked_mean(
+                pooled.reshape(bb, hp // s, s, wp // s, s, tt, d),
+                valid.reshape(bb, hp // s, s, wp // s, s, tt),
+                dims=(2, 4),
+            )  # (B, H'/s, W'/s, T, D), (B, H'/s, W'/s, T)
+            pooled_any = True
+        elif self.spatial_pooling == "mean":
+            # Whole-grid masked mean per timestep: same-size vector per sample.
+            pooled, valid = masked_mean(pooled, valid, dims=(1, 2))  # (B, T, D), (B, T)
+            pooled_any = True
 
         # 10. Handle time, flatten to a token sequence.
-        if self.temporal_pooling == "mean":
-            pooled = pooled.mean(dim=3)  # (B, H', W', D)
+        if self.spatial_pooling == "mean":
+            if self.temporal_pooling == "mean":
+                pooled, valid = masked_mean(pooled, valid, dims=(1,))  # (B, D), (B,)
+                tokens = pooled.unsqueeze(1)  # (B, 1, D)
+            else:  # "keep"
+                tokens = pooled  # (B, T, D)
+        elif self.temporal_pooling == "mean":
+            pooled, valid = masked_mean(pooled, valid, dims=(3,))  # (B, H', W', D)
+            pooled_any = True
             bb, hp, wp, d = pooled.shape
             tokens = pooled.reshape(bb, hp * wp, d)
         else:  # "keep": time-major (B, T*H'*W', D)
             bb, hp, wp, tt, d = pooled.shape
             tokens = pooled.permute(0, 3, 1, 2, 4).reshape(bb, tt * hp * wp, d)
+
+        if pooled_any and any_masked and not bool(valid.all()):
+            warnings.warn(
+                "OlmoEarthBackbone: some pooled output positions had zero valid (non-"
+                f"nodata) tokens ({int((~valid).sum())} of {valid.numel()}); they are "
+                "zero vectors.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         return [tokens]
 

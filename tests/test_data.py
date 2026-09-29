@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import rioxarray as rxr
 import torch
-from gelos.gelosdatamodule import GELOSDataModule, IdentityAug, NoDataRemap
+from gelos.gelosdatamodule import NODATA_MASK_KEY, GELOSDataModule, IdentityAug, NoDataRemap
 from gelos.generation import instantiate_recursive
 from gelos.gelosdataset import GELOSDataSet
 from tests.utils import create_test_geojson
@@ -636,6 +636,12 @@ def test_nodata_remap_after_normalization():
     assert torch.all(out["image"]["DEM"][dem_mask] == 0.0)
     assert torch.all(out["image"]["S2L2A"][~s2_mask] == -1.0)
     assert torch.all(out["image"]["DEM"][~dem_mask] == -1.0)
+    # The raw-batch detection mask is exposed for mask-aware backbones.
+    assert set(out[NODATA_MASK_KEY]) == {"S2L2A", "DEM"}
+    assert out[NODATA_MASK_KEY]["S2L2A"].dtype == torch.bool
+    assert out[NODATA_MASK_KEY]["DEM"].dtype == torch.bool
+    assert torch.equal(out[NODATA_MASK_KEY]["S2L2A"], s2_mask)
+    assert torch.equal(out[NODATA_MASK_KEY]["DEM"], dem_mask)
     gc.collect()
 
 
@@ -652,6 +658,10 @@ def test_nodata_remap_single_modality_tensor_batch():
     out = dm.aug({"image": image})
     assert torch.all(out["image"][mask] == 0.0)
     assert torch.all(out["image"][~mask] == -1.0)
+    # Tensor path: the mask key holds a single bool tensor, not a dict.
+    assert isinstance(out[NODATA_MASK_KEY], torch.Tensor)
+    assert out[NODATA_MASK_KEY].dtype == torch.bool
+    assert torch.equal(out[NODATA_MASK_KEY], mask)
     gc.collect()
 
 
@@ -682,6 +692,9 @@ def test_nodata_remap_per_modality_dicts():
     # DEM is unlisted: its sentinel is normalized like any other value.
     assert out["image"]["DEM"][0, 0, 0, 0, 0] == (-999.0 - 5.0) / 2.0
     assert torch.all(out["image"]["DEM"][0, 0, 0, 0, 1:] == -1.0)
+    # Only the listed modality carries a mask.
+    assert set(out[NODATA_MASK_KEY]) == {"S2L2A"}
+    assert torch.equal(out[NODATA_MASK_KEY]["S2L2A"], s2_mask)
     gc.collect()
 
 
@@ -772,6 +785,11 @@ def test_datamodule_wraps_aug_in_nodata_remap():
     dm = _nodata_dm(nodata_value=None, set_nodata=None)
     assert not isinstance(dm.aug, NoDataRemap)
     assert isinstance(dm.aug, MultimodalNormalize)
+    # Without nodata params the batch never grows a mask key.
+    out = dm.aug(
+        {"image": {"S2L2A": torch.full((2, 2, 4, 8, 8), 3.0), "DEM": torch.full((2, 1, 4, 8, 8), 3.0)}}
+    )
+    assert NODATA_MASK_KEY not in out
     gc.collect()
 
 

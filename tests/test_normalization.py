@@ -25,7 +25,8 @@ TERRAMIND_S2_BANDS = [
 
 def test_prithvi_resolves_v2_stats():
     resolved = resolve_model_normalization("prithvi_eo_v2_300", {"S2L2A": PRITHVI_BANDS})
-    assert set(resolved) == {"means", "stds"}
+    assert set(resolved) == {"means", "stds", "set_nodata"}
+    assert resolved["set_nodata"] == 0
     assert resolved["means"]["S2L2A"]["BLUE"] == 1087.0
     assert resolved["means"]["S2L2A"]["NIR_NARROW"] == 2734.0
     assert resolved["stds"]["S2L2A"]["SWIR_2"] == 1049.0
@@ -61,6 +62,7 @@ def test_terramind_resolves_multimodal_stats_and_db_scale():
     assert resolved["means"]["DEM"] == {"DEM": 670.665}
     # dB conversion applies to S1 only
     assert resolved["db_scale_bands"] == {"S1RTC": ["VV", "VH"]}
+    assert resolved["set_nodata"] == 0
 
 
 def test_terramind_s2_only_has_no_db_scale():
@@ -70,7 +72,9 @@ def test_terramind_s2_only_has_no_db_scale():
 
 def test_olmoearth_disables_datamodule_normalization():
     resolved = resolve_model_normalization("olmoearth_v1_base_s1s2", {"S2L2A": ["BLUE"]})
-    assert resolved == {"normalize": False}
+    assert resolved == {"normalize": False, "set_nodata": 0}
+    resolved = resolve_model_normalization("olmoearth_v1_2_base", {"S2L2A": ["BLUE"]})
+    assert resolved == {"normalize": False, "set_nodata": 0}
 
 
 def test_unknown_model_returns_none():
@@ -98,3 +102,62 @@ def test_inject_unknown_model_or_missing_bands_is_noop():
 
 def test_registry_covers_expected_models():
     assert set(MODEL_NORMALIZATION) == {"prithvi_eo_v2", "terramind_v1", "olmoearth_v1"}
+    assert all(spec["set_nodata"] == 0 for spec in MODEL_NORMALIZATION.values())
+
+
+# ---------------------------------------------------------------------------
+# set_nodata injection: only alongside an explicit nodata_value.
+# ---------------------------------------------------------------------------
+
+
+def _example_dataset():
+    from tests.test_data import ExampleGELOSDataSet
+
+    return ExampleGELOSDataSet
+
+
+@pytest.mark.parametrize("model_name", ["olmoearth_v1_2_base", "prithvi_eo_v2_300"])
+def test_inject_set_nodata_when_nodata_value_present(model_name):
+    from gelos.gelosdatamodule import GELOSDataModule
+
+    bands = {"S2L2A": ["BLUE"]}
+    data_init = {"bands": bands, "nodata_value": -999}
+    injected = inject_model_normalization(data_init, model_name)
+    assert "set_nodata" in injected
+    assert data_init["set_nodata"] == 0
+    assert data_init["nodata_value"] == -999
+    # The injected pair constructs a datamodule (nodata_value/set_nodata together).
+    dm = GELOSDataModule(
+        data_root="unused",
+        batch_size=1,
+        num_workers=0,
+        dataset_class=_example_dataset(),
+        **data_init,
+    )
+    assert dm.set_nodata == 0
+
+
+@pytest.mark.parametrize("model_name", ["olmoearth_v1_2_base", "prithvi_eo_v2_300"])
+def test_inject_skips_set_nodata_without_nodata_value(model_name):
+    from gelos.gelosdatamodule import GELOSDataModule
+
+    data_init = {"bands": {"S2L2A": ["BLUE"]}}
+    injected = inject_model_normalization(data_init, model_name)
+    assert "set_nodata" not in injected
+    assert "set_nodata" not in data_init
+    assert "nodata_value" not in data_init
+    # No "must be provided together" ValueError from the datamodule.
+    GELOSDataModule(
+        data_root="unused",
+        batch_size=1,
+        num_workers=0,
+        dataset_class=_example_dataset(),
+        **data_init,
+    )
+
+
+def test_inject_explicit_set_nodata_wins():
+    data_init = {"bands": {"S2L2A": ["BLUE"]}, "nodata_value": -999, "set_nodata": -1}
+    injected = inject_model_normalization(data_init, "olmoearth_v1_2_base")
+    assert injected == ["normalize"]
+    assert data_init["set_nodata"] == -1

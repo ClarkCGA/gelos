@@ -12,6 +12,7 @@ from gelos.backbones.olmoearth_backbone import (
 )
 import pytest
 import torch
+import warnings
 
 # The 12 GELOS-LC band names OlmoEarth requires, in the natural dataset (non-
 # OlmoEarth) input order, to exercise the reorder logic.
@@ -248,8 +249,8 @@ def test_set_and_clear_batch_timestamps():
 # ---------------------------------------------------------------------------
 
 
-class _DummyBackbone:
-    """Minimal backbone exposing the timestamp setter/clearer."""
+class _TimestampsOnlyBackbone:
+    """Minimal backbone exposing only the timestamp setter/clearer."""
 
     def __init__(self):
         self.set_calls = []
@@ -263,6 +264,24 @@ class _DummyBackbone:
     def clear_batch_timestamps(self):
         self.clear_calls += 1
         self._batch_timestamps = None
+
+
+class _DummyBackbone(_TimestampsOnlyBackbone):
+    """Backbone exposing both the timestamp and the nodata-mask side-channels."""
+
+    def __init__(self):
+        super().__init__()
+        self.mask_set_calls = []
+        self.mask_clear_calls = 0
+        self._batch_nodata_mask = None
+
+    def set_batch_nodata_mask(self, mask):
+        self.mask_set_calls.append(mask)
+        self._batch_nodata_mask = mask
+
+    def clear_batch_nodata_mask(self):
+        self.mask_clear_calls += 1
+        self._batch_nodata_mask = None
 
 
 def _make_task():
@@ -281,9 +300,10 @@ def test_predict_step_sets_then_clears_timestamps(monkeypatch):
     captured = {}
 
     def fake_super_predict_step(self, batch):
-        # super() should not see the popped timestamps key.
+        # super() should see neither popped side-channel key.
         captured["batch_keys"] = set(batch.keys())
         captured["stashed"] = backbone._batch_timestamps
+        captured["stashed_mask"] = backbone._batch_nodata_mask
         return "result"
 
     monkeypatch.setattr(
@@ -294,13 +314,18 @@ def test_predict_step_sets_then_clears_timestamps(monkeypatch):
     )
 
     ts = torch.tensor([[[18, 1, 2023]]], dtype=torch.int64)
-    out = task.predict_step({"image": "stub", "timestamps": ts})
+    mask = {"S2L2A": torch.zeros(1, 12, 1, 8, 8, dtype=torch.bool)}
+    out = task.predict_step({"image": "stub", "timestamps": ts, "nodata_mask": mask})
 
     assert out == "result"
-    assert "timestamps" not in captured["batch_keys"]
+    assert captured["batch_keys"] == {"image"}
     assert captured["stashed"] is ts  # set before super ran
+    assert captured["stashed_mask"] is mask
     assert backbone.set_calls == [ts]
     assert backbone.clear_calls == 1  # cleared in finally
+    assert backbone.mask_set_calls == [mask]
+    assert backbone.mask_clear_calls == 1
+    assert backbone._batch_nodata_mask is None
 
 
 def test_predict_step_clears_on_exception(monkeypatch):
@@ -321,9 +346,68 @@ def test_predict_step_clears_on_exception(monkeypatch):
     )
 
     ts = torch.tensor([[[18, 1, 2023]]], dtype=torch.int64)
+    mask = torch.zeros(1, 12, 1, 8, 8, dtype=torch.bool)
     with pytest.raises(RuntimeError, match="kaboom"):
-        task.predict_step({"image": "stub", "timestamps": ts})
+        task.predict_step({"image": "stub", "timestamps": ts, "nodata_mask": mask})
     assert backbone.clear_calls == 1  # finally still ran
+    assert backbone.mask_clear_calls == 1
+    assert backbone._batch_nodata_mask is None
+
+
+def test_predict_step_mask_is_noop_for_timestamps_only_backbone(monkeypatch):
+    from gelos.generation import LenientEmbeddingGenerationTask
+
+    task = _make_task()
+    backbone = _TimestampsOnlyBackbone()
+    task.model = backbone
+
+    captured = {}
+
+    def fake_super_predict_step(self, batch):
+        captured["batch_keys"] = set(batch.keys())
+        return "ok"
+
+    monkeypatch.setattr(
+        LenientEmbeddingGenerationTask.__mro__[1],
+        "predict_step",
+        fake_super_predict_step,
+        raising=False,
+    )
+
+    ts = torch.tensor([[[18, 1, 2023]]], dtype=torch.int64)
+    mask = torch.zeros(1, 12, 1, 8, 8, dtype=torch.bool)
+    out = task.predict_step({"image": "stub", "timestamps": ts, "nodata_mask": mask})
+    assert out == "ok"
+    # The mask key is still popped (terratorch never sees it); timestamps still flow.
+    assert captured["batch_keys"] == {"image"}
+    assert backbone.set_calls == [ts]
+    assert backbone.clear_calls == 1
+    assert not hasattr(backbone, "_batch_nodata_mask")
+
+
+def test_predict_step_finds_setters_on_wrapped_encoder(monkeypatch):
+    from gelos.generation import LenientEmbeddingGenerationTask
+
+    class _Wrapper:
+        def __init__(self, encoder):
+            self.encoder = encoder
+
+    task = _make_task()
+    backbone = _DummyBackbone()
+    task.model = _Wrapper(backbone)  # e.g. terratorch TemporalWrapper
+
+    monkeypatch.setattr(
+        LenientEmbeddingGenerationTask.__mro__[1],
+        "predict_step",
+        lambda self, batch: "ok",
+        raising=False,
+    )
+
+    ts = torch.tensor([[[18, 1, 2023]]], dtype=torch.int64)
+    mask = torch.zeros(1, 12, 1, 8, 8, dtype=torch.bool)
+    assert task.predict_step({"image": "stub", "timestamps": ts, "nodata_mask": mask}) == "ok"
+    assert backbone.set_calls == [ts] and backbone.clear_calls == 1
+    assert backbone.mask_set_calls == [mask] and backbone.mask_clear_calls == 1
 
 
 def test_predict_step_noop_for_backbone_without_setter(monkeypatch):
@@ -342,8 +426,14 @@ def test_predict_step_noop_for_backbone_without_setter(monkeypatch):
         raising=False,
     )
 
-    # Must not raise even though the backbone lacks the setter.
-    out = task.predict_step({"image": "stub", "timestamps": torch.zeros(1, 1, 3)})
+    # Must not raise even though the backbone lacks both setters.
+    out = task.predict_step(
+        {
+            "image": "stub",
+            "timestamps": torch.zeros(1, 1, 3),
+            "nodata_mask": torch.zeros(1, 1, 1, 4, 4, dtype=torch.bool),
+        }
+    )
     assert out == "ok"
 
 
@@ -565,3 +655,343 @@ def test_v1_2_factories_registered():
 
     for name, _hidden_dim, _model_id in V1_2_FACTORIES:
         assert name in TERRATORCH_BACKBONE_REGISTRY
+
+
+# ---------------------------------------------------------------------------
+# Nodata patch-mask helper tests — pure tensor logic, no model dependency.
+# ---------------------------------------------------------------------------
+
+
+def _pixel_mask(b=1, c=12, t=2, h=32, w=32):
+    return torch.zeros(b, c, t, h, w, dtype=torch.bool)
+
+
+def test_build_patch_nodata_mask_any_band_reduction():
+    from gelos.backbones.olmoearth_backbone import build_patch_nodata_mask
+
+    mask = _pixel_mask()
+    # One band only, one patch (rows 0-3, cols 4-7), timestep 1 only.
+    mask[0, 7, 1, 0:4, 4:8] = True
+    out = build_patch_nodata_mask(mask, patch_size=4, threshold=0.5)
+    assert out.shape == (1, 8, 8, 2)
+    assert out.dtype == torch.bool
+    assert out[0, 0, 1, 1].item() is True
+    assert out[0, 0, 1, 0].item() is False  # other timestep untouched
+    assert out.sum().item() == 1
+
+
+def test_build_patch_nodata_mask_threshold_is_inclusive():
+    from gelos.backbones.olmoearth_backbone import build_patch_nodata_mask
+
+    mask = _pixel_mask()
+    mask[0, :, :, 0:2, 0:4] = True  # exactly half of patch (0, 0)
+    assert build_patch_nodata_mask(mask, 4, 0.5)[0, 0, 0].all()
+    assert not build_patch_nodata_mask(mask, 4, 0.51)[0, 0, 0].any()
+
+
+def test_build_patch_nodata_mask_threshold_one_keeps_partial_patches():
+    from gelos.backbones.olmoearth_backbone import build_patch_nodata_mask
+
+    mask = _pixel_mask()
+    mask[0, :, :, 0:2, 0:4] = True  # half-nodata patch (0, 0)
+    mask[0, :, :, 4:8, 4:8] = True  # fully-nodata patch (1, 1)
+    out = build_patch_nodata_mask(mask, 4, 1.0)
+    assert not out[0, 0, 0].any()
+    assert out[0, 1, 1].all()
+    assert out.sum().item() == 2  # (1, 1) at both timesteps
+
+
+def test_build_patch_nodata_mask_zero_threshold_masks_any_touched_patch():
+    from gelos.backbones.olmoearth_backbone import build_patch_nodata_mask
+
+    mask = _pixel_mask()
+    mask[0, 0, 0, 5, 5] = True  # a single pixel inside patch (1, 1)
+    out = build_patch_nodata_mask(mask, 4, 0.0)
+    assert out[0, 1, 1, 0].item() is True
+    assert out.sum().item() == 1
+
+
+def test_build_patch_nodata_mask_rejects_non_divisible():
+    from gelos.backbones.olmoearth_backbone import build_patch_nodata_mask
+
+    with pytest.raises(ValueError, match="divisible"):
+        build_patch_nodata_mask(_pixel_mask(h=30, w=32), 4, 0.5)
+
+
+def test_patch_mask_to_olmoearth_mask_is_patch_constant():
+    from gelos.backbones.olmoearth_backbone import patch_mask_to_olmoearth_mask
+
+    patch_missing = torch.zeros(1, 2, 3, 2, dtype=torch.bool)  # (B, H', W', T)
+    patch_missing[0, 1, 2, 0] = True
+    out = patch_mask_to_olmoearth_mask(patch_missing, patch_size=4, num_band_sets=3)
+    assert out.shape == (1, 8, 12, 2, 3)
+    assert out.dtype == torch.int32
+    assert set(out.unique().tolist()) == {0, 3}
+    # The whole 4x4 block of patch (1, 2) at t=0 is MISSING for every band set;
+    # the top-left pixel (what the encoder reads) carries the patch value.
+    block = out[0, 4:8, 8:12, 0, :]
+    assert (block == 3).all()
+    assert (out[0, 4, 8, 0, :] == 3).all()
+    # Everything else is ONLINE_ENCODER.
+    assert (out == 3).sum().item() == 4 * 4 * 3
+    assert (out[0, :, :, 1, :] == 0).all()
+
+
+def test_patch_mask_to_olmoearth_mask_explicit_codes():
+    from gelos.backbones.olmoearth_backbone import patch_mask_to_olmoearth_mask
+
+    patch_missing = torch.tensor([[[[True]]]])  # (1, 1, 1, 1)
+    out = patch_mask_to_olmoearth_mask(
+        patch_missing, patch_size=2, num_band_sets=1, missing_value=7, online_value=1
+    )
+    assert out.shape == (1, 2, 2, 1, 1)
+    assert (out == 7).all()
+
+
+def test_masked_mean_zero_count_yields_zeros_and_false():
+    from gelos.backbones.olmoearth_backbone import masked_mean
+
+    x = torch.arange(2 * 3 * 2, dtype=torch.float32).reshape(2, 3, 2) + 1.0
+    valid = torch.tensor([[True, False, True], [False, False, False]])
+    mean, still_valid = masked_mean(x, valid, dims=(1,))
+    assert mean.shape == (2, 2) and still_valid.shape == (2,)
+    torch.testing.assert_close(mean[0], (x[0, 0] + x[0, 2]) / 2)
+    assert torch.equal(mean[1], torch.zeros(2))
+    assert still_valid.tolist() == [True, False]
+
+
+def test_masked_mean_all_valid_matches_plain_mean():
+    from gelos.backbones.olmoearth_backbone import masked_mean
+
+    x = torch.randn(2, 4, 5, 3)
+    mean, still_valid = masked_mean(x, torch.ones(2, 4, 5, dtype=torch.bool), dims=(1, 2))
+    torch.testing.assert_close(mean, x.mean(dim=(1, 2)))
+    assert still_valid.all()
+
+
+def test_constructor_rejects_invalid_nodata_patch_threshold():
+    # Validated before the lazy olmoearth_pretrain import.
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    for bad in (1.5, -0.1):
+        with pytest.raises(ValueError, match="nodata_patch_threshold"):
+            OlmoEarthBackbone(pretrained=False, bands=ALL_12_BANDS, nodata_patch_threshold=bad)
+
+
+def test_constructor_rejects_unknown_spatial_pooling_string():
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    with pytest.raises(ValueError, match="spatial_pooling"):
+        OlmoEarthBackbone(pretrained=False, bands=ALL_12_BANDS, spatial_pooling="max")
+
+
+def test_set_and_clear_batch_nodata_mask():
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    backbone = OlmoEarthBackbone.__new__(OlmoEarthBackbone)
+    backbone._batch_nodata_mask = None
+
+    mask = {"S2L2A": torch.zeros(1, 12, 1, 8, 8, dtype=torch.bool)}
+    backbone.set_batch_nodata_mask(mask)
+    assert backbone._batch_nodata_mask is mask
+
+    backbone.clear_batch_nodata_mask()
+    assert backbone._batch_nodata_mask is None
+
+
+# ---------------------------------------------------------------------------
+# Nodata masking with the real encoder — random weights, eval mode.
+# ---------------------------------------------------------------------------
+
+# Grid for a (32, 32) chip at patch_size=4 is 8x8 = 64 tokens per timestep.
+_GRID = 8
+_MASKED_PATCHES = [(0, 0), (3, 5)]  # (row, col) of nodata patches
+_VALID_PATCH = (4, 4)
+
+
+def _masked_backbone(reference=None, **kwargs):
+    """Eval-mode backbone (random weights); shares weights with ``reference`` if given."""
+    pytest.importorskip("olmoearth_pretrain")
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    torch.manual_seed(42)
+    backbone = OlmoEarthBackbone(pretrained=False, bands=ALL_12_BANDS, patch_size=4, **kwargs)
+    if reference is not None:
+        backbone.load_state_dict(reference.state_dict())
+    return backbone.eval()
+
+
+def _s2_input(b=1, t=2):
+    torch.manual_seed(0)
+    return 1500 + 500 * torch.randn(b, 12, t, 32, 32)
+
+
+def _s2_nodata_mask(b=1, t=2, sample_indices=None):
+    """Pixel mask with ``_MASKED_PATCHES`` fully nodata (all bands, all timesteps)."""
+    mask = torch.zeros(b, 12, t, 32, 32, dtype=torch.bool)
+    for i in range(b) if sample_indices is None else sample_indices:
+        for row, col in _MASKED_PATCHES:
+            mask[i, :, :, row * 4 : (row + 1) * 4, col * 4 : (col + 1) * 4] = True
+    return mask
+
+
+def _token_index(t, row, col):
+    """Time-major token index for temporal_pooling='keep' on the 8x8 grid."""
+    return t * _GRID * _GRID + row * _GRID + col
+
+
+def _run(backbone, x, mask=None):
+    backbone.set_batch_nodata_mask(mask)
+    try:
+        with torch.no_grad():
+            return backbone.forward_features(x)[0]
+    finally:
+        backbone.clear_batch_nodata_mask()
+
+
+def test_nodata_mask_zeroes_masked_tokens_and_changes_valid_ones():
+    backbone = _masked_backbone(temporal_pooling="keep")
+    x = _s2_input()
+    unmasked = _run(backbone, x)
+    masked = _run(backbone, x, _s2_nodata_mask())
+    assert masked.shape == unmasked.shape == (1, 2 * 64, backbone.out_channels)
+
+    for t in range(2):
+        for row, col in _MASKED_PATCHES:
+            assert torch.equal(
+                masked[0, _token_index(t, row, col)], torch.zeros(backbone.out_channels)
+            )
+        assert not torch.equal(unmasked[0, _token_index(t, 0, 0)], torch.zeros_like(unmasked[0, 0]))
+        # Valid tokens see a different attention context once nodata tokens are removed.
+        assert not torch.allclose(
+            masked[0, _token_index(t, *_VALID_PATCH)], unmasked[0, _token_index(t, *_VALID_PATCH)]
+        )
+
+
+def test_nodata_mask_dict_stash_matches_tensor_stash():
+    backbone = _masked_backbone(temporal_pooling="keep")
+    x = _s2_input()
+    mask = _s2_nodata_mask()
+    from_tensor = _run(backbone, x, mask)
+    from_dict = _run(backbone, {"S2L2A": x}, {"S2L2A": mask})
+    assert torch.equal(from_tensor, from_dict)
+
+
+def test_all_false_nodata_mask_is_bit_identical_to_no_mask():
+    backbone = _masked_backbone(temporal_pooling="keep")
+    x = _s2_input()
+    unmasked = _run(backbone, x)
+    all_false = _run(backbone, x, torch.zeros(1, 12, 2, 32, 32, dtype=torch.bool))
+    assert torch.equal(unmasked, all_false)
+
+
+def test_nodata_mask_no_batch_leakage():
+    # Guards the encoder.training toggle: in eval mode OlmoEarth builds no
+    # attention mask, so the zero pads of a batch-mate with fewer valid tokens
+    # would leak into attention and the B=2 result would differ from B=1.
+    backbone = _masked_backbone(temporal_pooling="keep")
+    x = _s2_input(b=2)
+    mask = _s2_nodata_mask(b=2, sample_indices=[1])  # sample 0 unmasked
+    batched = _run(backbone, x, mask)
+    solo_masked = _run(backbone, x[1:2], mask[1:2])
+    solo_unmasked = _run(backbone, x[0:1])
+    torch.testing.assert_close(batched[1:2], solo_masked, rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(batched[0:1], solo_unmasked, rtol=1e-4, atol=1e-4)
+    # The toggle must be undone after the forward.
+    assert backbone.encoder.encoder.training is False
+
+
+def test_spatial_pooling_mean_matches_masked_mean_of_grid():
+    grid_bb = _masked_backbone(temporal_pooling="keep")
+    mean_bb = _masked_backbone(reference=grid_bb, temporal_pooling="keep", spatial_pooling="mean")
+    from gelos.backbones.olmoearth_backbone import build_patch_nodata_mask
+
+    x = _s2_input()
+    mask = _s2_nodata_mask()
+    grid = _run(grid_bb, x, mask).reshape(1, 2, 64, -1)  # (B, T, H'*W', D)
+    pooled = _run(mean_bb, x, mask)
+    assert pooled.shape == (1, 2, grid_bb.out_channels)
+
+    valid = ~build_patch_nodata_mask(mask, 4, 0.5)  # (B, H', W', T)
+    valid = valid.permute(0, 3, 1, 2).reshape(1, 2, 64)
+    expected = torch.stack(
+        [grid[0, t][valid[0, t]].mean(dim=0) for t in range(2)]
+    ).unsqueeze(0)
+    torch.testing.assert_close(pooled, expected, rtol=1e-4, atol=1e-5)
+
+    both_bb = _masked_backbone(reference=grid_bb, temporal_pooling="mean", spatial_pooling="mean")
+    both = _run(both_bb, x, mask)
+    assert both.shape == (1, 1, grid_bb.out_channels)
+    torch.testing.assert_close(both[:, 0], expected.mean(dim=1), rtol=1e-4, atol=1e-5)
+
+
+def test_spatial_pooling_mean_unmasked_shapes():
+    backbone = _masked_backbone(temporal_pooling="keep", spatial_pooling="mean")
+    assert _run(backbone, _s2_input(b=2, t=3)).shape == (2, 3, backbone.out_channels)
+    backbone = _masked_backbone(temporal_pooling="mean", spatial_pooling="mean")
+    assert _run(backbone, _s2_input(b=2, t=3)).shape == (2, 1, backbone.out_channels)
+
+
+def test_fully_masked_sample_warns_and_encodes_unmasked():
+    backbone = _masked_backbone(temporal_pooling="keep")
+    x = _s2_input()
+    unmasked = _run(backbone, x)
+    with pytest.warns(UserWarning, match="no valid patch"):
+        out = _run(backbone, x, torch.ones(1, 12, 2, 32, 32, dtype=torch.bool))
+    assert torch.equal(out, unmasked)
+
+
+def test_nodata_mask_shape_mismatch_warns_and_falls_back():
+    backbone = _masked_backbone(temporal_pooling="keep")
+    x = _s2_input()
+    unmasked = _run(backbone, x)
+    with pytest.warns(UserWarning, match="nodata mask"):
+        out = _run(backbone, x, torch.ones(1, 12, 2, 16, 16, dtype=torch.bool))
+    assert torch.equal(out, unmasked)
+
+
+def test_mask_nodata_false_ignores_stash():
+    backbone = _masked_backbone(temporal_pooling="keep", mask_nodata=False)
+    x = _s2_input()
+    unmasked = _run(backbone, x)
+    assert torch.equal(_run(backbone, x, _s2_nodata_mask()), unmasked)
+
+
+def test_spatial_pooling_int_warns_when_pooled_window_has_no_valid_token():
+    # 8x8 grid pooled by 8 -> a single output token per timestep; masking the
+    # whole grid at t=0 only (t=1 stays valid so the sample is not fully masked)
+    # leaves that pooled position with zero contributors -> zero vector + warning.
+    backbone = _masked_backbone(temporal_pooling="keep", spatial_pooling=8)
+    x = _s2_input()
+    mask = torch.zeros(1, 12, 2, 32, 32, dtype=torch.bool)
+    mask[:, :, 0] = True
+    with pytest.warns(UserWarning, match="zero valid"):
+        out = _run(backbone, x, mask)
+    assert out.shape == (1, 2, backbone.out_channels)
+    assert torch.equal(out[0, 0], torch.zeros(backbone.out_channels))
+    assert not torch.equal(out[0, 1], torch.zeros(backbone.out_channels))
+
+
+def test_s1_only_nodata_keeps_s2_token_at_that_patch():
+    # Nodata only in S1RTC: the S2 mask stays all-ONLINE, so the fused token at
+    # the S1-masked patch is the S2 token alone (non-zero), while attention
+    # context (and hence every token) differs from the unmasked run.
+    backbone = _masked_backbone(temporal_pooling="keep", bands_s1=["VV", "VH"])
+    x_s2 = _s2_input()
+    torch.manual_seed(1)
+    x_s1 = 0.05 + 0.02 * torch.rand(1, 2, 2, 32, 32)
+    batch = {"S2L2A": x_s2, "S1RTC": x_s1}
+    unmasked = _run(backbone, batch)
+    s1_mask = torch.zeros(1, 2, 2, 32, 32, dtype=torch.bool)
+    s1_mask[:, :, :, 0:4, 0:4] = True  # patch (0, 0), all timesteps
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # no fully-masked / zero-valid warnings
+        masked = _run(backbone, batch, {"S1RTC": s1_mask})
+    zero = torch.zeros(backbone.out_channels)
+    for t in range(2):
+        assert not torch.equal(masked[0, _token_index(t, 0, 0)], zero)
+        assert not torch.allclose(masked[0, _token_index(t, 0, 0)], unmasked[0, _token_index(t, 0, 0)])
+        assert not torch.allclose(
+            masked[0, _token_index(t, *_VALID_PATCH)], unmasked[0, _token_index(t, *_VALID_PATCH)]
+        )
+
