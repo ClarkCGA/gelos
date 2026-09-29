@@ -20,21 +20,20 @@ except ImportError:
 app = typer.Typer()
 
 
-def _find_setter_target(backbone: Any, method_name: str) -> Any | None:
-    """Return the object exposing ``method_name``: the backbone itself, or its
-    ``.encoder`` when wrapped (e.g. by terratorch's ``TemporalWrapper``), else None.
-    """
-    if hasattr(backbone, method_name):
-        return backbone
-    inner = getattr(backbone, "encoder", None)
-    if hasattr(inner, method_name):
-        return inner
-    return None
-
-
 class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
     def check_file_ids(self, file_ids, x):
         return
+
+    @staticmethod
+    def _resolve_setter(backbone: Any, name: str) -> Any:
+        """Return the object exposing ``name`` — the backbone itself or its
+        ``.encoder`` (when wrapped, e.g. by ``TemporalWrapper``) — else None."""
+        if hasattr(backbone, name):
+            return backbone
+        target = getattr(backbone, "encoder", None)
+        if hasattr(target, name):
+            return target
+        return None
 
     @torch.no_grad()
     def predict_step(self, batch: dict) -> Any:
@@ -42,39 +41,50 @@ class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
 
         Stock terratorch ``predict_step``/``get_embeddings`` only forward
         ``batch["image"]`` to the backbone, so outer batch keys cannot reach it
-        through the normal call path. Two keys are popped here and stashed on
-        the backbone (or its ``.encoder`` when wrapped by ``TemporalWrapper``),
-        then cleared in ``finally`` so a stash never outlives one batch:
+        through the normal call path. Three keys are popped here so stock
+        terratorch code never sees them, and stashed on the backbone (or its
+        ``.encoder`` when wrapped by ``TemporalWrapper``), then cleared in
+        ``finally`` so a stash never outlives one batch:
 
         - ``"timestamps"`` -> ``set_batch_timestamps`` (date-aware temporal
-          encoding, OlmoEarth).
+          encoding, OlmoEarth); ``(B, T, 3)`` canonical ``[year, month, day]``.
+        - ``"location"`` -> ``set_batch_location``; ``(B, 2)`` ``[lat, lon]``.
+          No current backbone exposes it — groundwork for a future
+          location-aware wrapper (e.g. Prithvi TL).
         - ``"nodata_mask"`` (``gelos.gelosdatamodule.NODATA_MASK_KEY``, attached
           by ``NoDataRemap`` when ``nodata_value`` is configured) ->
           ``set_batch_nodata_mask`` (OlmoEarth drops nodata patches from
           attention and pooling).
 
-        Both keys are popped unconditionally so terratorch never sees them; each
-        setter is a no-op for backbones lacking it (e.g. Prithvi, TerraMind),
-        keeping the task generic.
+        Each setter is resolved independently — a backbone may expose any
+        subset; dispatch is a no-op for backbones lacking a setter (e.g.
+        Prithvi, TerraMind), keeping the task generic.
 
         ``@torch.no_grad()`` mirrors the parent ``predict_step``.
         """
         timestamps = batch.pop("timestamps", None)
+        location = batch.pop("location", None)
         nodata_mask = batch.pop(NODATA_MASK_KEY, None)
         backbone = getattr(self, "model", None)
-        timestamps_target = _find_setter_target(backbone, "set_batch_timestamps")
-        mask_target = _find_setter_target(backbone, "set_batch_nodata_mask")
-        if timestamps is not None and timestamps_target is not None:
-            timestamps_target.set_batch_timestamps(timestamps)
-        if nodata_mask is not None and mask_target is not None:
-            mask_target.set_batch_nodata_mask(nodata_mask)
+        # OlmoEarth backbone is either self.model or self.model.encoder if wrapped.
+        setter_obj = self._resolve_setter(backbone, "set_batch_timestamps")
+        loc_setter_obj = self._resolve_setter(backbone, "set_batch_location")
+        mask_setter_obj = self._resolve_setter(backbone, "set_batch_nodata_mask")
+        if timestamps is not None and setter_obj is not None:
+            setter_obj.set_batch_timestamps(timestamps)
+        if location is not None and loc_setter_obj is not None:
+            loc_setter_obj.set_batch_location(location)
+        if nodata_mask is not None and mask_setter_obj is not None:
+            mask_setter_obj.set_batch_nodata_mask(nodata_mask)
         try:
             return super().predict_step(batch)
         finally:
-            if timestamps_target is not None:
-                timestamps_target.clear_batch_timestamps()
-            if mask_target is not None:
-                mask_target.clear_batch_nodata_mask()
+            if setter_obj is not None:
+                setter_obj.clear_batch_timestamps()
+            if loc_setter_obj is not None:
+                loc_setter_obj.clear_batch_location()
+            if mask_setter_obj is not None:
+                mask_setter_obj.clear_batch_nodata_mask()
 
 
 def instantiate_recursive(node: Any) -> Any:

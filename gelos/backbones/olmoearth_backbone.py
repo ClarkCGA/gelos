@@ -237,6 +237,41 @@ def build_s1_band_reorder_index(bands_s1: list[str]) -> list[int]:
 _DEFAULT_HIDDEN_DIM = 768
 
 
+def calendar_to_olmoearth_timestamps(timestamps: torch.Tensor) -> torch.Tensor:
+    """Convert canonical calendar dates to OlmoEarth's timestamp packing.
+
+    Pure reindex logic (no model dependency). Maps a ``(..., 3)`` tensor of
+    canonical ``[year, month, day]`` dates (month 1-12) to OlmoEarth's
+    ``[day, month_index, year]`` packing (month zero-indexed): a column
+    permutation plus ``month - 1``.
+
+    Emits a ``UserWarning`` when the input looks implausible as canonical
+    dates — any month outside 1-12 or any value in column 0 (year) below
+    1900 — which catches callers still producing the legacy
+    ``[day, month_index, year]`` packing (whose column 0 is a 1-31 day and
+    whose month can be 0).
+
+    Args:
+        timestamps: ``(..., 3)`` integer tensor of ``[year, month, day]``.
+
+    Returns:
+        Tensor of the same shape packed as ``[day, month - 1, year]``.
+    """
+    year = timestamps[..., 0]
+    month = timestamps[..., 1]
+    day = timestamps[..., 2]
+    if ((month < 1) | (month > 12)).any() or (year < 1900).any():
+        warnings.warn(
+            "calendar_to_olmoearth_timestamps: input has month outside 1-12 "
+            "or year < 1900; expected canonical [year, month, day] dates "
+            "(month 1-12). Legacy [day, month_index, year] packing must be "
+            "converted to the canonical format.",
+            UserWarning,
+            stacklevel=2,
+        )
+    return torch.stack([day, month - 1, year], dim=-1)
+
+
 def build_band_reorder_index(bands: list[str]) -> list[int]:
     """Build the channel-index permutation mapping ``bands`` -> OlmoEarth order.
 
@@ -580,6 +615,11 @@ class OlmoEarthBackbone(nn.Module):
     def set_batch_timestamps(self, timestamps: torch.Tensor | None) -> None:
         """Stash the current batch's per-timestep timestamps for ``forward_features``.
 
+        The stash is canonical calendar dates ``(B, T, 3)`` ``[year, month, day]``
+        (month 1-12); conversion to OlmoEarth's ``[day, month_index, year]``
+        packing happens at consumption time in ``forward_features`` via
+        :func:`calendar_to_olmoearth_timestamps`.
+
         Called by the task's ``predict_step`` because terratorch's
         ``get_embeddings``/``self.model(input)`` call site forwards only ``input``
         to the backbone — there is no kwargs channel for extra batch keys.
@@ -642,6 +682,13 @@ class OlmoEarthBackbone(nn.Module):
     def forward_features(self, x, **kwargs) -> list[torch.Tensor]:
         """Run the OlmoEarth encoder and return ``[tokens]``.
 
+        When ``set_batch_timestamps`` stashed a canonical ``(B, T, 3)``
+        ``[year, month, day]`` tensor matching the input's batch/timestep
+        dims, it is converted here to OlmoEarth's ``[day, month_index, year]``
+        packing via :func:`calendar_to_olmoearth_timestamps`; otherwise the
+        constant dummy date ``[15, 0, 2020]`` is used (with a warning on
+        shape mismatch).
+
         Args:
             x: Either the S2L2A tensor ``(B, C, T, H, W)`` or a dict of modalities
                 keyed by sensor name. When a dict, ``"S2L2A"`` is required;
@@ -702,12 +749,14 @@ class OlmoEarthBackbone(nn.Module):
         if self.apply_pretraining_normalization:
             x_s2 = minmax_normalize(x_s2, self._s2_norm_means, self._s2_norm_stds)
 
-        # 3. Per-timestep timestamps (real or dummy fallback).
+        # 3. Per-timestep timestamps (real or dummy fallback). The stash is
+        # canonical [year, month, day]; convert to OlmoEarth's
+        # [day, month_index, year] packing at consumption.
         timestamps = None
         if self._batch_timestamps is not None:
             candidate = self._batch_timestamps.to(device=x_s2.device, dtype=torch.long)
             if tuple(candidate.shape) == (b, t, 3):
-                timestamps = candidate
+                timestamps = calendar_to_olmoearth_timestamps(candidate)
             else:
                 warnings.warn(
                     "OlmoEarthBackbone: stashed timestamps have shape "

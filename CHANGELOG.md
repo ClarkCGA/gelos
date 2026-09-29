@@ -35,7 +35,22 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
   and injects it only when the config sets `nodata_value` (superseding the "not yet
   registered" note in the entry below), so downstream configs only need the dataset's
   nodata value. Documented in the configuration reference.
-
+- **Dataset-side acquisition timestamps and chip location (issue #79).** Two new
+  optional, non-abstract hooks on `GELOSDataSet`: `_get_timestamps(index)` returns a
+  canonical `(T, 3)` integer `[year, month, day]` array (month 1–12, one row per
+  timestep of the primary temporal sensor) that flows into `batch["timestamps"]`
+  `(B, T, 3)` and into any backbone exposing `set_batch_timestamps`; and
+  `_get_location(index)` returns a `(2,)` float `[lat, lon]` array that flows into
+  `batch["location"]` `(B, 2)`, dispatched generically to any backbone exposing
+  `set_batch_location`. OlmoEarth converts the canonical dates to its own
+  `[day, month_index, year]` packing internally (new pure helper
+  `calendar_to_olmoearth_timestamps`); no current backbone consumes `location` — it is
+  groundwork for a future Prithvi TL wrapper. Both hooks default to `None`, so
+  existing subclasses are unaffected. **Breaking format note:** `batch["timestamps"]`
+  is now canonical calendar `[year, month, day]`, no longer OlmoEarth's
+  `[day, month_index, year]` — no in-repo producers of the key existed, but anyone who
+  hand-crafted the old packing must switch (a plausibility `UserWarning` fires on
+  old-format-looking tensors).
 - **Nodata pixel remapping in `GELOSDataModule`.** New `nodata_value` / `set_nodata` init
   args (must be set together) remap on-disk nodata sentinels so the model receives a chosen
   value instead of a normalized sentinel. Detection runs on the raw batch (the sentinel,
