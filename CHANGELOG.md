@@ -14,6 +14,59 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **OlmoEarth nodata input mask + masked pooling.** Follow-up to the `nodata_value` /
+  `set_nodata` remap below (#81): the datamodule's `NoDataRemap` now also attaches the
+  raw-batch detection mask to the batch as `batch["nodata_mask"]`
+  (`gelos.gelosdatamodule.NODATA_MASK_KEY`; `{modality: BoolTensor}` for dict batches, a
+  single tensor otherwise), and `LenientEmbeddingGenerationTask.predict_step` pops it and
+  stashes it on the backbone via `set_batch_nodata_mask` / `clear_batch_nodata_mask`,
+  mirroring the `timestamps` side-channel (a no-op for Prithvi/TerraMind). `OlmoEarthBackbone`
+  gains `mask_nodata` (default `true`) and `nodata_patch_threshold` (default `0`): a patch
+  containing any nodata pixel (any band, per timestep; a value in `(0, 1]` instead requires
+  that fraction) is flagged
+  `MaskValue.MISSING`, so the encoder removes it before attention (the encoder is then run
+  with `fast_pass=False` and its attention mask enabled, so zero-padded batch-mates cannot
+  leak into attention), and every pooling step (band-set, S1/S2 fusion, spatial, temporal)
+  becomes a masked mean over valid tokens. `spatial_pooling` additionally accepts `"mean"`
+  (masked mean over the whole token grid per timestep: `(B, T, D)` with `temporal_pooling:
+  keep`, `(B, 1, D)` with `mean`) so every sample yields a same-size vector. Masked grid
+  positions are zero vectors; fully-masked samples are encoded unmasked with a warning.
+  `gelos.normalization` now registers `set_nodata: 0` for Prithvi, TerraMind and OlmoEarth
+  and injects it only when the config sets `nodata_value` (superseding the "not yet
+  registered" note in the entry below), so downstream configs only need the dataset's
+  nodata value. Documented in the configuration reference.
+- **Dataset-side acquisition timestamps and chip location (issue #79).** Two new
+  optional, non-abstract hooks on `GELOSDataSet`: `_get_timestamps(index)` returns a
+  canonical `(T, 3)` integer `[year, month, day]` array (month 1–12, one row per
+  timestep of the primary temporal sensor) that flows into `batch["timestamps"]`
+  `(B, T, 3)` and into any backbone exposing `set_batch_timestamps`; and
+  `_get_location(index)` returns a `(2,)` float `[lat, lon]` array that flows into
+  `batch["location"]` `(B, 2)`, dispatched generically to any backbone exposing
+  `set_batch_location`. OlmoEarth converts the canonical dates to its own
+  `[day, month_index, year]` packing internally (new pure helper
+  `calendar_to_olmoearth_timestamps`); no current backbone consumes `location` — it is
+  groundwork for a future Prithvi TL wrapper. Both hooks default to `None`, so
+  existing subclasses are unaffected. **Breaking format note:** `batch["timestamps"]`
+  is now canonical calendar `[year, month, day]`, no longer OlmoEarth's
+  `[day, month_index, year]` — no in-repo producers of the key existed, but anyone who
+  hand-crafted the old packing must switch (a plausibility `UserWarning` fires on
+  old-format-looking tensors).
+- **Nodata pixel remapping in `GELOSDataModule`.** New `nodata_value` / `set_nodata` init
+  args (must be set together) remap on-disk nodata sentinels so the model receives a chosen
+  value instead of a normalized sentinel. Detection runs on the raw batch (the sentinel,
+  e.g. `-999`, is only exactly matchable before z-scoring); the write runs AFTER the
+  normalization aug, so with `nodata_value: -999, set_nodata: 0` the model sees exactly `0`
+  at nodata positions, not `(0 - mean) / std`. Implemented as a `NoDataRemap` wrapper
+  around whichever aug is active (`Normalize`, `MultimodalNormalize`, or `IdentityAug`
+  for `normalize: false`). Scalars apply to every modality; `{modality: value}` dicts mask
+  only their listed modalities (dicts are rejected for single-tensor batches, i.e.
+  `concat_bands: true`, where modality boundaries are unknown). Construction fails fast
+  on unknown modality keys or a `set_nodata` dict missing a masked modality, and logs a
+  warning when a masked modality also appears in `db_scale_bands` or `perturb_bands`
+  (those per-sample steps run first and corrupt the sentinel). Per-model target values
+  are not yet registered in `gelos.normalization`, so both keys must currently be set
+  explicitly per config. Documented in the configuration reference (#81).
+
 - **OlmoEarth v1.2 backbones.** New terratorch factory functions
   `olmoearth_v1_2_{nano,tiny,small,base}` (Sentinel-2 only) and `..._s1s2` (S2+S1),
   registered in `BACKBONE_REGISTRY`, with hidden dims 128/192/384/768. New shipped

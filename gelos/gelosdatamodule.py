@@ -14,6 +14,10 @@ from terratorch.datamodules.generic_pixel_wise_data_module import Normalize
 from torch.utils.data import DataLoader
 from torchgeo.datamodules import NonGeoDataModule
 
+# Batch key under which ``NoDataRemap`` exposes the raw-batch nodata mask for
+# mask-aware backbones (see ``gelos.generation.LenientEmbeddingGenerationTask``).
+NODATA_MASK_KEY = "nodata_mask"
+
 
 class IdentityAug:
     """No-op batch augmentation used when ``normalize=False``.
@@ -23,6 +27,85 @@ class IdentityAug:
     """
 
     def __call__(self, batch: dict) -> dict:
+        return batch
+
+
+class NoDataRemap:
+    """Wrap a batch aug so on-disk nodata pixels reach the model as a chosen value.
+
+    Detection happens BEFORE the wrapped aug runs: the on-disk sentinel (e.g.
+    ``-999``) is only exactly detectable in the raw batch — after z-score
+    normalization it would become an arbitrary extreme float
+    (``(-999 - mean) / std``) that cannot be reliably matched. The write happens
+    AFTER the wrapped aug runs: ``set_nodata`` is written into the returned
+    (normalized) tensors, so the model receives exactly ``set_nodata`` at nodata
+    positions, untouched by the normalization math.
+
+    Works identically whichever aug is wrapped (``Normalize``,
+    ``MultimodalNormalize``, ``IdentityAug``, or a user-supplied aug).
+
+    The detected raw-batch mask is also attached to the returned batch under
+    ``batch[NODATA_MASK_KEY]`` (``"nodata_mask"``) so mask-aware backbones
+    (OlmoEarth) can exclude nodata patches from attention and pooling: a
+    ``{modality: BoolTensor(B, C, T, H, W)}`` dict for dict batches (only the
+    masked modalities are listed), or a single ``BoolTensor`` for the tensor
+    path. ``True`` marks a nodata pixel. The generation task pops the key before
+    the batch reaches terratorch.
+
+    Args:
+        aug: The batch augmentation to wrap (called between mask computation and
+            the nodata write).
+        nodata_value: On-disk nodata sentinel. A scalar applies to every
+            modality; a ``{modality: value}`` dict applies only to its listed
+            modalities (others pass through unmasked).
+        set_nodata: Value the model should receive at nodata positions. A scalar
+            or a ``{modality: value}`` dict covering every masked modality.
+    """
+
+    def __init__(
+        self,
+        aug,
+        nodata_value: float | dict[str, float],
+        set_nodata: float | dict[str, float],
+    ) -> None:
+        self.aug = aug
+        self.nodata_value = nodata_value
+        self.set_nodata = set_nodata
+
+    def __call__(self, batch: dict) -> dict:
+        image = batch["image"]
+        if isinstance(image, dict):
+            masks = {}
+            for modality, tensor in image.items():
+                if isinstance(self.nodata_value, dict):
+                    if modality not in self.nodata_value:
+                        continue
+                    nodata = self.nodata_value[modality]
+                else:
+                    nodata = self.nodata_value
+                masks[modality] = tensor == nodata
+            batch = self.aug(batch)
+            for modality, mask in masks.items():
+                target = (
+                    self.set_nodata[modality]
+                    if isinstance(self.set_nodata, dict)
+                    else self.set_nodata
+                )
+                batch["image"][modality][mask] = target
+            batch[NODATA_MASK_KEY] = masks
+        else:
+            if isinstance(self.nodata_value, dict) or isinstance(self.set_nodata, dict):
+                # ValueError (not TypeError): dicts are valid config, just not for
+                # this batch layout.
+                raise ValueError(
+                    "Per-modality nodata_value/set_nodata dicts cannot be applied to a "
+                    "single image tensor (single modality or concat_bands=True): modality "
+                    "boundaries are unknown in the tensor. Use scalar values instead."
+                )
+            mask = image == self.nodata_value
+            batch = self.aug(batch)
+            batch["image"][mask] = self.set_nodata
+            batch[NODATA_MASK_KEY] = mask
         return batch
 
 
@@ -48,6 +131,8 @@ class GELOSDataModule(NonGeoDataModule):
         normalize: bool = True,
         db_scale_bands: dict[str, list[str]] | None = None,
         clip_range_bands: dict[str, dict[str, list[float]]] | None = None,
+        nodata_value: float | dict[str, float] | None = None,
+        set_nodata: float | dict[str, float] | None = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -79,6 +164,20 @@ class GELOSDataModule(NonGeoDataModule):
                 ``{"S2L2A": {"RED": [0.0, 2500.0]}}``. Passed through to the dataset class.
                 Combined with matching ``means``/``stds`` this reproduces clip-and-stretch
                 preprocessing for RGB-pretrained backbones (e.g. DINOv3).
+            nodata_value (float | dict[str, float], optional): on-disk nodata sentinel to
+                detect in the raw batch, e.g. ``-999``. A scalar applies to every modality;
+                a ``{modality: value}`` dict (e.g. ``{"S2L2A": -999}``) masks only its listed
+                modalities. Must be provided together with ``set_nodata``. Detected pixels
+                are remapped to ``set_nodata`` AFTER normalization, so with
+                ``nodata_value=-999, set_nodata=0`` the model receives exactly ``0`` at
+                nodata positions (not a normalized sentinel). The raw-batch detection
+                mask is also exposed under ``batch["nodata_mask"]`` (bool, ``True`` =
+                nodata) for mask-aware backbones such as OlmoEarth, which drop nodata
+                patches from attention and pooling.
+            set_nodata (float | dict[str, float], optional): value the model should receive
+                at nodata positions, e.g. ``0``. A scalar, or a ``{modality: value}`` dict
+                covering every modality masked by ``nodata_value``. Must be provided
+                together with ``nodata_value``.
             **kwargs: Additional keyword arguments.
         """
         if isinstance(dataset_class, str):
@@ -100,6 +199,48 @@ class GELOSDataModule(NonGeoDataModule):
         self.normalize = normalize
         self.db_scale_bands = db_scale_bands
         self.clip_range_bands = clip_range_bands
+        self.nodata_value = nodata_value
+        self.set_nodata = set_nodata
+
+        if (nodata_value is None) != (set_nodata is None):
+            raise ValueError(
+                "nodata_value and set_nodata must be provided together: the on-disk "
+                "sentinel (nodata_value) and the value fed to the model (set_nodata) "
+                "are only meaningful as a pair."
+            )
+        if nodata_value is not None:
+            for param_name, param in (("nodata_value", nodata_value), ("set_nodata", set_nodata)):
+                if isinstance(param, dict):
+                    unknown = sorted(set(param) - set(self.modalities))
+                    if unknown:
+                        raise ValueError(
+                            f"{param_name} references unknown modalities {unknown}; "
+                            f"known modalities: {self.modalities}"
+                        )
+            masked_modalities = (
+                list(nodata_value) if isinstance(nodata_value, dict) else list(self.modalities)
+            )
+            if isinstance(set_nodata, dict):
+                missing = sorted(set(masked_modalities) - set(set_nodata))
+                if missing:
+                    raise ValueError(
+                        f"set_nodata is missing target values for masked modalities "
+                        f"{missing}: a scalar nodata_value masks every modality, a dict "
+                        "masks its keys, and set_nodata must cover all of them."
+                    )
+            overlapping = sorted(
+                modality
+                for modality in masked_modalities
+                if modality in (db_scale_bands or {}) or modality in (perturb_bands or {})
+            )
+            if overlapping:
+                logger.warning(
+                    f"Modalities {overlapping} are masked by nodata_value but also listed in "
+                    "db_scale_bands or perturb_bands. Those per-sample steps run BEFORE "
+                    "batch-wise nodata detection and corrupt the sentinel (dB conversion "
+                    "clips it, perturbation adds noise), so nodata pixels may be silently "
+                    "missed in those modalities."
+                )
 
         # Resolve per-modality/band stats, first match wins:
         # explicit means/stds args -> lowercase means/stds class attrs ->
@@ -152,6 +293,8 @@ class GELOSDataModule(NonGeoDataModule):
             self.aug = Normalize(self.means[self.modalities[0]], self.stds[self.modalities[0]])
         else:
             self.aug = MultimodalNormalize(self.means, self.stds)
+        if self.nodata_value is not None:
+            self.aug = NoDataRemap(self.aug, self.nodata_value, self.set_nodata)
         self.collate_fn = collate_samples
 
     @staticmethod

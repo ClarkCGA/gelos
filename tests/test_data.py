@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import rioxarray as rxr
 import torch
-from gelos.gelosdatamodule import GELOSDataModule
+from gelos.gelosdatamodule import NODATA_MASK_KEY, GELOSDataModule, IdentityAug, NoDataRemap
 from gelos.generation import instantiate_recursive
 from gelos.gelosdataset import GELOSDataSet
 from tests.utils import create_test_geojson
@@ -634,6 +634,117 @@ def test_clip_range_bands_invalid_band_raises(data_root):
     gc.collect()
 
 
+# ---------------------------------------------------------------------------
+# Tests: optional _get_timestamps / _get_location hooks
+# ---------------------------------------------------------------------------
+
+
+class TimestampedExampleGELOSDataSet(ExampleGELOSDataSet):
+    """Overrides both optional hooks with deterministic per-index metadata.
+
+    A combined subclass also proves the two keys coexist in one sample.
+    """
+
+    def _get_timestamps(self, index: int) -> np.ndarray:
+        # Canonical [year, month, day], month 1-12, one row per S2 timestep.
+        return np.array(
+            [[2021, m, 15 + index] for m in range(1, N_TIMESTEPS_S2 + 1)],
+            dtype=np.int64,
+        )
+
+    def _get_location(self, index: int) -> np.ndarray:
+        return np.array([42.25 + index, -71.82], dtype=np.float64)
+
+
+class BadTimestampsDataSet(ExampleGELOSDataSet):
+    """Returns a wrong-shaped (T, 2) timestamps array."""
+
+    def _get_timestamps(self, index: int) -> np.ndarray:
+        return np.zeros((N_TIMESTEPS_S2, 2), dtype=np.int64)
+
+
+class BadTimestamps1DDataSet(ExampleGELOSDataSet):
+    """Returns a wrong-shaped 1-D (T,) timestamps array."""
+
+    def _get_timestamps(self, index: int) -> np.ndarray:
+        return np.zeros(N_TIMESTEPS_S2, dtype=np.int64)
+
+
+class BadLocationDataSet(ExampleGELOSDataSet):
+    """Returns a wrong-shaped (3,) location array."""
+
+    def _get_location(self, index: int) -> np.ndarray:
+        return np.array([42.25, -71.82, 100.0])
+
+
+class BadLocation2DDataSet(ExampleGELOSDataSet):
+    """Returns a wrong-shaped (1, 2) location array."""
+
+    def _get_location(self, index: int) -> np.ndarray:
+        return np.array([[42.25, -71.82]])
+
+
+class BadLocationScalarDataSet(ExampleGELOSDataSet):
+    """Returns a scalar instead of a (2,) array."""
+
+    def _get_location(self, index: int):
+        return np.float64(42.25)
+
+
+_HOOK_BANDS = {"S2L2A": ["blue", "green", "red"]}
+
+
+def test_timestamps_hook_adds_key_with_expected_values(data_root):
+    """Overriding _get_timestamps adds a long tensor of exact expected dates."""
+    ds = TimestampedExampleGELOSDataSet(data_root=data_root, bands=_HOOK_BANDS)
+    sample = ds[1]
+    assert "timestamps" in sample
+    ts = sample["timestamps"]
+    assert isinstance(ts, torch.Tensor)
+    assert ts.dtype == torch.long
+    assert ts.shape == (N_TIMESTEPS_S2, 3)
+    expected = torch.tensor([[2021, m, 16] for m in range(1, N_TIMESTEPS_S2 + 1)])
+    assert torch.equal(ts, expected)
+    gc.collect()
+
+
+def test_location_hook_adds_key_with_expected_values(data_root):
+    """Overriding _get_location adds a float32 (2,) tensor with exact values."""
+    ds = TimestampedExampleGELOSDataSet(data_root=data_root, bands=_HOOK_BANDS)
+    sample = ds[1]
+    assert "location" in sample
+    loc = sample["location"]
+    assert isinstance(loc, torch.Tensor)
+    assert loc.dtype == torch.float32
+    assert loc.shape == (2,)
+    torch.testing.assert_close(loc, torch.tensor([43.25, -71.82]))
+    gc.collect()
+
+
+def test_hooks_coexist_in_one_sample(data_root):
+    """Both keys are present together alongside the standard contract keys."""
+    ds = TimestampedExampleGELOSDataSet(data_root=data_root, bands=_HOOK_BANDS)
+    sample = ds[0]
+    assert {"image", "filename", "file_id", "timestamps", "location"} <= set(sample)
+    gc.collect()
+
+
+def test_no_override_omits_timestamps_and_location(single_sensor_dataset):
+    """Non-overriding subclasses produce neither key (current behavior preserved)."""
+    sample = single_sensor_dataset[0]
+    assert "timestamps" not in sample
+    assert "location" not in sample
+
+
+@pytest.mark.parametrize("bad_class", [BadTimestampsDataSet, BadTimestamps1DDataSet])
+def test_bad_timestamps_shape_raises(data_root, bad_class):
+    """A hook returning a non-(T, 3) timestamps array raises ValueError."""
+    ds = bad_class(data_root=data_root, bands=_HOOK_BANDS)
+    with pytest.raises(ValueError, match="_get_timestamps"):
+        ds[0]
+    gc.collect()
+
+
 def test_datamodule_passes_clip_range_bands_to_dataset(data_root):
     """GELOSDataModule forwards clip_range_bands to the dataset in setup()."""
     clip_range_bands = {"S2L2A": {"red": [0.0, 2500.0]}}
@@ -647,6 +758,267 @@ def test_datamodule_passes_clip_range_bands_to_dataset(data_root):
     )
     dm.setup(stage="predict")
     assert dm.dataset.clip_range_bands == clip_range_bands
+    gc.collect()
+
+
+@pytest.mark.parametrize(
+    "bad_class", [BadLocationDataSet, BadLocation2DDataSet, BadLocationScalarDataSet]
+)
+def test_bad_location_shape_raises(data_root, bad_class):
+    """A hook returning a non-(2,) location array raises ValueError."""
+    ds = bad_class(data_root=data_root, bands=_HOOK_BANDS)
+    with pytest.raises(ValueError, match="_get_location"):
+        ds[0]
+    gc.collect()
+
+
+def test_collate_samples_batches_timestamps_and_location(data_root):
+    """collate_samples stacks (T, 3) -> (B, T, 3) and (2,) -> (B, 2)."""
+    from terratorch.datamodules.generic_multimodal_data_module import collate_samples
+
+    ds = TimestampedExampleGELOSDataSet(data_root=data_root, bands=_HOOK_BANDS)
+    batch = collate_samples([ds[0], ds[1]])
+    assert batch["timestamps"].shape == (2, N_TIMESTEPS_S2, 3)
+    assert batch["location"].shape == (2, 2)
+    gc.collect()
+
+
+def _make_hook_dm(data_root, **kwargs):
+    return GELOSDataModule(
+        data_root=data_root,
+        batch_size=2,
+        num_workers=0,
+        dataset_class=TimestampedExampleGELOSDataSet,
+        bands=_HOOK_BANDS,
+        **kwargs,
+    )
+
+
+def test_datamodule_batches_carry_timestamps_and_location(data_root):
+    """A GELOSDataModule dataloader batch carries (B, T, 3) and (B, 2) keys."""
+    dm = _make_hook_dm(data_root)
+    dm.setup(stage="predict")
+    batch = next(iter(dm.predict_dataloader()))
+    assert batch["timestamps"].shape == (2, N_TIMESTEPS_S2, 3)
+    assert batch["timestamps"].dtype == torch.long
+    assert batch["location"].shape == (2, 2)
+    assert batch["location"].dtype == torch.float32
+    gc.collect()
+
+
+@pytest.mark.parametrize("normalize", [True, False])
+def test_aug_leaves_timestamps_and_location_unchanged(data_root, normalize):
+    """dm.aug (normalize on or off) never touches timestamps or location."""
+    import copy
+
+    stats_kwargs = {}
+    if normalize:
+        stats_kwargs = {
+            "means": {"S2L2A": {"blue": 5.0, "green": 5.0, "red": 5.0}},
+            "stds": {"S2L2A": {"blue": 2.0, "green": 2.0, "red": 2.0}},
+        }
+    dm = _make_hook_dm(data_root, normalize=normalize, **stats_kwargs)
+    dm.setup(stage="predict")
+    batch = next(iter(dm.predict_dataloader()))
+    original = copy.deepcopy(batch)
+    out = dm.aug(batch)
+    assert torch.equal(out["timestamps"], original["timestamps"])
+    torch.testing.assert_close(out["location"], original["location"])
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Tests: nodata_value / set_nodata (post-normalization remap)
+# ---------------------------------------------------------------------------
+
+
+def _nodata_dm(**overrides):
+    """GELOSDataModule with nontrivial stats (mean 5, std 2) and nodata remap on."""
+    kwargs = dict(
+        data_root="unused",
+        batch_size=2,
+        num_workers=0,
+        dataset_class=ExampleGELOSDataSet,
+        bands={"S2L2A": ["blue", "green"], "DEM": ["DEM"]},
+        means={"S2L2A": {"blue": 5.0, "green": 5.0}, "DEM": {"DEM": 5.0}},
+        stds={"S2L2A": {"blue": 2.0, "green": 2.0}, "DEM": {"DEM": 2.0}},
+        nodata_value=-999,
+        set_nodata=0,
+    )
+    kwargs.update(overrides)
+    return GELOSDataModule(**kwargs)
+
+
+def test_nodata_remap_after_normalization():
+    """Sentinel pixels become exactly set_nodata, NOT (set_nodata - mean) / std."""
+    dm = _nodata_dm()
+    s2 = torch.full((2, 2, 4, 8, 8), 3.0)
+    dem = torch.full((2, 1, 4, 8, 8), 3.0)
+    s2[0, 0, 0, :2, :2] = -999.0
+    dem[1, 0, 2, 4, 4] = -999.0
+    s2_mask = s2 == -999.0
+    dem_mask = dem == -999.0
+    out = dm.aug({"image": {"S2L2A": s2, "DEM": dem}})
+    # Masked pixels are exactly 0.0 — not (0 - 5) / 2 = -2.5, proving the write
+    # lands after normalization; unmasked pixels are (3 - 5) / 2 = -1.0.
+    assert torch.all(out["image"]["S2L2A"][s2_mask] == 0.0)
+    assert torch.all(out["image"]["DEM"][dem_mask] == 0.0)
+    assert torch.all(out["image"]["S2L2A"][~s2_mask] == -1.0)
+    assert torch.all(out["image"]["DEM"][~dem_mask] == -1.0)
+    # The raw-batch detection mask is exposed for mask-aware backbones.
+    assert set(out[NODATA_MASK_KEY]) == {"S2L2A", "DEM"}
+    assert out[NODATA_MASK_KEY]["S2L2A"].dtype == torch.bool
+    assert out[NODATA_MASK_KEY]["DEM"].dtype == torch.bool
+    assert torch.equal(out[NODATA_MASK_KEY]["S2L2A"], s2_mask)
+    assert torch.equal(out[NODATA_MASK_KEY]["DEM"], dem_mask)
+    gc.collect()
+
+
+def test_nodata_remap_single_modality_tensor_batch():
+    """Single modality -> Normalize branch with a plain tensor batch."""
+    dm = _nodata_dm(
+        bands={"S2L2A": ["blue", "green"]},
+        means={"S2L2A": {"blue": 5.0, "green": 5.0}},
+        stds={"S2L2A": {"blue": 2.0, "green": 2.0}},
+    )
+    image = torch.full((2, 2, 4, 8, 8), 3.0)
+    image[0, 1, 2, 3, 4] = -999.0
+    mask = image == -999.0
+    out = dm.aug({"image": image})
+    assert torch.all(out["image"][mask] == 0.0)
+    assert torch.all(out["image"][~mask] == -1.0)
+    # Tensor path: the mask key holds a single bool tensor, not a dict.
+    assert isinstance(out[NODATA_MASK_KEY], torch.Tensor)
+    assert out[NODATA_MASK_KEY].dtype == torch.bool
+    assert torch.equal(out[NODATA_MASK_KEY], mask)
+    gc.collect()
+
+
+def test_nodata_remap_with_normalize_false():
+    """With normalize=False the wrapped IdentityAug still remaps the sentinel."""
+    dm = _nodata_dm(normalize=False)
+    s2 = torch.full((2, 2, 4, 8, 8), 3.0)
+    dem = torch.full((2, 1, 4, 8, 8), 3.0)
+    s2[1, 0, 0, 0, 0] = -999.0
+    s2_mask = s2 == -999.0
+    out = dm.aug({"image": {"S2L2A": s2, "DEM": dem}})
+    assert torch.all(out["image"]["S2L2A"][s2_mask] == 0.0)
+    assert torch.all(out["image"]["S2L2A"][~s2_mask] == 3.0)
+    assert torch.all(out["image"]["DEM"] == 3.0)
+    gc.collect()
+
+
+def test_nodata_remap_per_modality_dicts():
+    """A per-modality dict masks only its listed modalities; others pass through."""
+    dm = _nodata_dm(nodata_value={"S2L2A": -999}, set_nodata={"S2L2A": 0})
+    s2 = torch.full((2, 2, 4, 8, 8), 3.0)
+    dem = torch.full((2, 1, 4, 8, 8), 3.0)
+    s2[0, 0, 0, 0, 0] = -999.0
+    dem[0, 0, 0, 0, 0] = -999.0
+    s2_mask = s2 == -999.0
+    out = dm.aug({"image": {"S2L2A": s2, "DEM": dem}})
+    assert torch.all(out["image"]["S2L2A"][s2_mask] == 0.0)
+    # DEM is unlisted: its sentinel is normalized like any other value.
+    assert out["image"]["DEM"][0, 0, 0, 0, 0] == (-999.0 - 5.0) / 2.0
+    assert torch.all(out["image"]["DEM"][0, 0, 0, 0, 1:] == -1.0)
+    # Only the listed modality carries a mask.
+    assert set(out[NODATA_MASK_KEY]) == {"S2L2A"}
+    assert torch.equal(out[NODATA_MASK_KEY]["S2L2A"], s2_mask)
+    gc.collect()
+
+
+def test_nodata_value_without_set_nodata_raises():
+    """nodata_value and set_nodata must be provided together (both directions)."""
+    with pytest.raises(ValueError, match="together"):
+        _nodata_dm(set_nodata=None)
+    with pytest.raises(ValueError, match="together"):
+        _nodata_dm(nodata_value=None)
+    gc.collect()
+
+
+def test_nodata_dict_unknown_modality_raises():
+    """Dict keys not in the datamodule's modalities fail fast at construction."""
+    with pytest.raises(ValueError, match="unknown modalities"):
+        _nodata_dm(nodata_value={"S1RTC": -999}, set_nodata=0)
+    with pytest.raises(ValueError, match="unknown modalities"):
+        _nodata_dm(nodata_value=-999, set_nodata={"S1RTC": 0})
+    gc.collect()
+
+
+def test_nodata_set_nodata_dict_missing_masked_modality_raises():
+    """A scalar nodata_value masks all modalities; set_nodata dict must cover them."""
+    with pytest.raises(ValueError, match="missing target values"):
+        _nodata_dm(nodata_value=-999, set_nodata={"S2L2A": 0})
+    gc.collect()
+
+
+def test_nodata_dict_with_concat_bands_raises():
+    """Per-modality dicts cannot be applied to a concatenated image tensor."""
+    dm = _nodata_dm(
+        concat_bands=True,
+        nodata_value={"S2L2A": -999, "DEM": -999},
+        set_nodata={"S2L2A": 0, "DEM": 0},
+    )
+    batch = {"image": torch.full((2, 3, 4, 8, 8), 3.0)}
+    with pytest.raises(ValueError, match="concat_bands"):
+        dm.aug(batch)
+    gc.collect()
+
+
+def test_nodata_with_db_scale_overlap_warns():
+    """Masked modalities overlapping db_scale_bands/perturb_bands log a warning."""
+    from loguru import logger
+
+    messages, sink_id = _capture_loguru_warnings()
+    try:
+        _nodata_dm(
+            bands={"S1RTC": ["VV", "VH"], "DEM": ["DEM"]},
+            means={"S1RTC": {"VV": 5.0, "VH": 5.0}, "DEM": {"DEM": 5.0}},
+            stds={"S1RTC": {"VV": 2.0, "VH": 2.0}, "DEM": {"DEM": 2.0}},
+            db_scale_bands={"S1RTC": ["VV"]},
+        )
+    finally:
+        logger.remove(sink_id)
+    assert any("S1RTC" in message and "db_scale_bands" in message for message in messages)
+
+    messages, sink_id = _capture_loguru_warnings()
+    try:
+        _nodata_dm(perturb_bands={"S2L2A": {"blue": 0.1}})
+    finally:
+        logger.remove(sink_id)
+    assert any("S2L2A" in message and "perturb_bands" in message for message in messages)
+    gc.collect()
+
+
+def test_datamodule_wraps_aug_in_nodata_remap():
+    """dm.aug is wrapped only when nodata params are set, around the expected inner aug."""
+    from terratorch.datamodules.generic_multimodal_data_module import MultimodalNormalize
+    from terratorch.datamodules.generic_pixel_wise_data_module import Normalize
+
+    dm = _nodata_dm()
+    assert isinstance(dm.aug, NoDataRemap)
+    assert isinstance(dm.aug.aug, MultimodalNormalize)
+
+    dm = _nodata_dm(
+        bands={"S2L2A": ["blue", "green"]},
+        means={"S2L2A": {"blue": 5.0, "green": 5.0}},
+        stds={"S2L2A": {"blue": 2.0, "green": 2.0}},
+    )
+    assert isinstance(dm.aug, NoDataRemap)
+    assert isinstance(dm.aug.aug, Normalize)
+
+    dm = _nodata_dm(normalize=False)
+    assert isinstance(dm.aug, NoDataRemap)
+    assert isinstance(dm.aug.aug, IdentityAug)
+
+    dm = _nodata_dm(nodata_value=None, set_nodata=None)
+    assert not isinstance(dm.aug, NoDataRemap)
+    assert isinstance(dm.aug, MultimodalNormalize)
+    # Without nodata params the batch never grows a mask key.
+    out = dm.aug(
+        {"image": {"S2L2A": torch.full((2, 2, 4, 8, 8), 3.0), "DEM": torch.full((2, 1, 4, 8, 8), 3.0)}}
+    )
+    assert NODATA_MASK_KEY not in out
     gc.collect()
 
 

@@ -100,10 +100,19 @@ def _band_stats(bands: list[str], values: list[float]) -> dict[str, float]:
 # {"normalize": False} (the backbone normalizes internally, e.g. OlmoEarth) or
 # per-modality pretraining stats with optional dB conversion and value-clipping
 # requirements.
+# Every spec also carries "set_nodata": the value the model should receive at
+# nodata pixels (GELOSDataModule writes it AFTER normalization). It is only
+# injected when the config sets ``nodata_value`` (see inject_model_normalization).
+# Rationale for 0: after z-scoring (Prithvi/TerraMind) 0 is the band mean; for
+# OlmoEarth raw DN 0 is mapped in-range by its min-max normalizer
+# ((0 - (mean - 2σ)) / 4σ ≈ 0.3), and the value only matters for patches that
+# stay below the OlmoEarth nodata mask threshold. For DINOv3 the stats are
+# clip-and-stretch scaled, so 0 after z-scoring is again the band mean.
 MODEL_NORMALIZATION = {
     "prithvi_eo_v2": {
         "means": {"S2L2A": _band_stats(_PRITHVI_BANDS, PRITHVI_V2_MEAN)},
         "stds": {"S2L2A": _band_stats(_PRITHVI_BANDS, PRITHVI_V2_STD)},
+        "set_nodata": 0,
     },
     "terramind_v1": {
         "means": {
@@ -119,8 +128,9 @@ MODEL_NORMALIZATION = {
         # TerraMind's S1 pretraining stats are in dB; the on-disk chips are
         # linear power, so the datamodule must convert before normalizing.
         "db_scale_bands": {"S1RTC": ["VV", "VH"]},
+        "set_nodata": 0,
     },
-    "olmoearth_v1": {"normalize": False},
+    "olmoearth_v1": {"normalize": False, "set_nodata": 0},
     # Resolution takes the FIRST prefix match in insertion order, so
     # more-specific prefixes (dinov3_vitl16_sat) must precede shorter ones
     # (dinov3, which serves every other dinov3_* variant).
@@ -132,6 +142,7 @@ MODEL_NORMALIZATION = {
         "clip_range_bands": {
             "S2L2A": {band: [0.0, _DINOV3_S2_CLIP_MAX] for band in _DINOV3_SAT_MEAN}
         },
+        "set_nodata": 0,
     },
     "dinov3": {
         "means": {"S2L2A": {band: m * _DINOV3_S2_CLIP_MAX for band, m in _IMAGENET_MEAN.items()}},
@@ -139,6 +150,7 @@ MODEL_NORMALIZATION = {
         "clip_range_bands": {
             "S2L2A": {band: [0.0, _DINOV3_S2_CLIP_MAX] for band in _IMAGENET_MEAN}
         },
+        "set_nodata": 0,
     },
 }
 
@@ -155,8 +167,11 @@ def resolve_model_normalization(
     Returns:
         Dict of ``GELOSDataModule`` init kwargs (``means``/``stds`` and
         optionally ``db_scale_bands``/``clip_range_bands``, or
-        ``normalize: False`` for backbones that normalize internally), or
-        ``None`` if the model is not registered.
+        ``normalize: False`` for backbones that normalize internally), plus
+        the model's ``set_nodata`` target when registered, or ``None`` if the
+        model is not registered. Note
+        ``set_nodata`` is only valid on the datamodule together with
+        ``nodata_value``; :func:`inject_model_normalization` enforces that.
 
     Raises:
         ValueError: the model is registered but a configured modality or band
@@ -170,7 +185,10 @@ def resolve_model_normalization(
     if spec is None:
         return None
     if "normalize" in spec:
-        return {"normalize": spec["normalize"]}
+        resolved: dict[str, object] = {"normalize": spec["normalize"]}
+        if "set_nodata" in spec:
+            resolved["set_nodata"] = spec["set_nodata"]
+        return resolved
 
     means: dict[str, dict[str, float]] = {}
     stds: dict[str, dict[str, float]] = {}
@@ -190,7 +208,9 @@ def resolve_model_normalization(
         means[modality] = {band: model_means[band] for band in band_list}
         stds[modality] = {band: spec["stds"][modality][band] for band in band_list}
 
-    resolved: dict[str, object] = {"means": means, "stds": stds}
+    resolved = {"means": means, "stds": stds}
+    if "set_nodata" in spec:
+        resolved["set_nodata"] = spec["set_nodata"]
     db_scale = {
         modality: [b for b in band_list if b in spec.get("db_scale_bands", {}).get(modality, [])]
         for modality, band_list in bands.items()
@@ -218,6 +238,13 @@ def inject_model_normalization(data_init_args: dict, model_name: str) -> list[st
     Mutates ``data_init_args`` in place. Keys already present in the config are
     never overwritten, so explicit config values always win.
 
+    ``set_nodata`` is special: ``GELOSDataModule`` requires ``nodata_value`` and
+    ``set_nodata`` to be set together (the on-disk sentinel and the value fed
+    to the model are only meaningful as a pair), so the model's ``set_nodata``
+    default is injected only when the config already sets ``nodata_value``.
+    ``nodata_value`` itself is never injected: only the dataset knows its
+    sentinel.
+
     Returns:
         The list of injected keys (empty if the model is unregistered, the
         config left no gaps to fill, or no ``bands`` are configured).
@@ -236,6 +263,8 @@ def inject_model_normalization(data_init_args: dict, model_name: str) -> list[st
             "falling back to dataset statistics"
         )
         return []
+    if "nodata_value" not in data_init_args:
+        resolved.pop("set_nodata", None)
     injected = [key for key in resolved if key not in data_init_args]
     for key in injected:
         data_init_args[key] = resolved[key]

@@ -58,6 +58,8 @@ Your subclass must define:
 - **`_load_file(self, path, band_indices)`**: Load a single GeoTIFF and return a NumPy array with shape `[H, W, C]`, selecting only the requested band indices
 - **`_get_sample_id(self, index)`**: Return a `(filename, file_id)` tuple — `filename` names the output parquet record, `file_id` is stored as metadata within it
 
+Optionally, override the metadata hooks **`_get_timestamps(self, index)`** and **`_get_location(self, index)`**. The first returns a `(T, 3)` integer array of canonical calendar dates `[year, month, day]` (month 1–12), one row per timestep of the primary temporal sensor, which flows into `batch["timestamps"]` and into date-aware backbones such as OlmoEarth. The second returns a `(2,)` float array `[lat, lon]` in decimal degrees, which flows into `batch["location"]` for location-aware backbones. Both default to `None`, in which case the key is absent and behavior is unchanged. See the [Configuration Reference](docs/docs/configuration.md) for details.
+
 Optionally, define per-band **`means`** and **`stds`** dicts on your class. `GELOSDataModule` will fall back to these for normalization if statistics are not passed explicitly in the YAML config. You can compute these by iterating through your dataset with zero-initialized stats (see `calculate_statistics.py` in [gelos-lc](https://github.com/ClarkCGA/gelos-lc) for an example).
 
 ### 4. Create YAML experiment configs

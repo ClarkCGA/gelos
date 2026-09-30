@@ -12,7 +12,7 @@ import typer
 import yaml
 
 import gelos.backbones.dinov3_backbone  # noqa: F401 — registers dinov3_*_pretrained backbones
-from gelos.gelosdatamodule import GELOSDataModule
+from gelos.gelosdatamodule import NODATA_MASK_KEY, GELOSDataModule
 from gelos.normalization import inject_model_normalization
 
 try:
@@ -27,37 +27,67 @@ class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
     def check_file_ids(self, file_ids, x):
         return
 
+    @staticmethod
+    def _resolve_setter(backbone: Any, name: str) -> Any:
+        """Return the object exposing ``name`` — the backbone itself or its
+        ``.encoder`` (when wrapped, e.g. by ``TemporalWrapper``) — else None."""
+        if hasattr(backbone, name):
+            return backbone
+        target = getattr(backbone, "encoder", None)
+        if hasattr(target, name):
+            return target
+        return None
+
     @torch.no_grad()
     def predict_step(self, batch: dict) -> Any:
-        """Thread per-batch acquisition dates into a date-aware backbone.
+        """Thread per-batch side-channel keys into a backbone that can use them.
 
         Stock terratorch ``predict_step``/``get_embeddings`` only forward
-        ``batch["image"]`` to the backbone, so the outer ``"timestamps"`` key
-        cannot reach it through the normal call path. We pop it here and stash it
-        on the backbone (or its ``.encoder`` when wrapped by ``TemporalWrapper``)
-        via ``set_batch_timestamps``, then clear it in ``finally`` so the stash
-        never outlives one batch. The override is a no-op for backbones lacking
-        the setter (e.g. Prithvi, TerraMind), keeping the task generic.
+        ``batch["image"]`` to the backbone, so outer batch keys cannot reach it
+        through the normal call path. Three keys are popped here so stock
+        terratorch code never sees them, and stashed on the backbone (or its
+        ``.encoder`` when wrapped by ``TemporalWrapper``), then cleared in
+        ``finally`` so a stash never outlives one batch:
+
+        - ``"timestamps"`` -> ``set_batch_timestamps`` (date-aware temporal
+          encoding, OlmoEarth); ``(B, T, 3)`` canonical ``[year, month, day]``.
+        - ``"location"`` -> ``set_batch_location``; ``(B, 2)`` ``[lat, lon]``.
+          No current backbone exposes it — groundwork for a future
+          location-aware wrapper (e.g. Prithvi TL).
+        - ``"nodata_mask"`` (``gelos.gelosdatamodule.NODATA_MASK_KEY``, attached
+          by ``NoDataRemap`` when ``nodata_value`` is configured) ->
+          ``set_batch_nodata_mask`` (OlmoEarth drops nodata patches from
+          attention and pooling).
+
+        Each setter is resolved independently — a backbone may expose any
+        subset; dispatch is a no-op for backbones lacking a setter (e.g.
+        Prithvi, TerraMind), keeping the task generic.
 
         ``@torch.no_grad()`` mirrors the parent ``predict_step``.
         """
         timestamps = batch.pop("timestamps", None)
+        location = batch.pop("location", None)
+        nodata_mask = batch.pop(NODATA_MASK_KEY, None)
         backbone = getattr(self, "model", None)
         # OlmoEarth backbone is either self.model or self.model.encoder if wrapped.
-        target = getattr(backbone, "encoder", None)
-        if hasattr(backbone, "set_batch_timestamps"):
-            setter_obj = backbone
-        elif hasattr(target, "set_batch_timestamps"):
-            setter_obj = target
-        else:
-            setter_obj = None
+        setter_obj = self._resolve_setter(backbone, "set_batch_timestamps")
+        loc_setter_obj = self._resolve_setter(backbone, "set_batch_location")
+        mask_setter_obj = self._resolve_setter(backbone, "set_batch_nodata_mask")
         if timestamps is not None and setter_obj is not None:
             setter_obj.set_batch_timestamps(timestamps)
+        if location is not None and loc_setter_obj is not None:
+            loc_setter_obj.set_batch_location(location)
+        if nodata_mask is not None and mask_setter_obj is not None:
+            mask_setter_obj.set_batch_nodata_mask(nodata_mask)
         try:
             return super().predict_step(batch)
         finally:
             if setter_obj is not None:
                 setter_obj.clear_batch_timestamps()
+            if loc_setter_obj is not None:
+                loc_setter_obj.clear_batch_location()
+            if mask_setter_obj is not None:
+                mask_setter_obj.clear_batch_nodata_mask()
 
     def write_parquet(self, embedding: torch.Tensor, filename: str, metadata: dict, dir_path):
         """Write a single sample to parquet, storing the embedding as float32.

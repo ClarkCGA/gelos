@@ -44,6 +44,12 @@ class GELOSDataSet(NonGeoDataset):
         - ``_get_file_paths``
         - ``_load_file``
         - ``_get_sample_id``
+
+    Subclasses may additionally override the optional hooks
+    ``_get_timestamps`` (per-timestep acquisition dates, added to the output
+    as a ``timestamps`` key) and ``_get_location`` (per-chip ``[lat, lon]``,
+    added as a ``location`` key). Both default to ``None``, in which case the
+    corresponding key is absent and behavior is unchanged.
     """
 
     def __init__(
@@ -101,6 +107,33 @@ class GELOSDataSet(NonGeoDataset):
     def _get_sample_id(self, index: int) -> tuple[str, Any]:
         """Return (filename_string, file_id) for the sample at index."""
         ...
+
+    def _get_timestamps(self, index: int) -> np.ndarray | None:
+        """Optional hook: per-timestep acquisition dates for the sample at index.
+
+        Override to return a ``(T, 3)`` integer array of canonical calendar
+        dates ``[year, month, day]`` (month 1-12, day 1-31), one row per
+        timestep of the primary temporal sensor (S2 for OlmoEarth). The value
+        is added to the output dict as ``output["timestamps"]`` (a
+        ``torch.long`` tensor) and collates to ``(B, T, 3)``; backbones
+        convert to their own packing at consumption time. Returning ``None``
+        (the default) means no ``timestamps`` key is added and behavior is
+        unchanged for non-overriding subclasses.
+        """
+        return None
+
+    def _get_location(self, index: int) -> np.ndarray | None:
+        """Optional hook: chip-center location for the sample at index.
+
+        Override to return a ``(2,)`` float array ``[lat, lon]`` in decimal
+        degrees (latitude first) — per-sample, deliberately not per-timestep:
+        a chip has one footprint, matching Prithvi TL's ``location_coords``
+        ``(B, 2)`` consumption shape. The value is added to the output dict as
+        ``output["location"]`` (a ``torch.float32`` tensor) and collates to
+        ``(B, 2)``. Returning ``None`` (the default) means no ``location``
+        key is added and behavior is unchanged for non-overriding subclasses.
+        """
+        return None
 
     def __getitem__(self, index: int) -> dict:
         output = {}
@@ -160,6 +193,27 @@ class GELOSDataSet(NonGeoDataset):
         filename, file_id = self._get_sample_id(index)
         output["filename"] = np.array(filename, dtype=str)
         output["file_id"] = file_id
+
+        # Optional metadata hooks — added AFTER the transform/image-format
+        # block so image-space transforms never touch them.
+        timestamps = self._get_timestamps(index)
+        if timestamps is not None:
+            ts = np.asarray(timestamps)
+            if ts.ndim != 2 or ts.shape[1] != 3:
+                raise ValueError(
+                    f"_get_timestamps must return a (T, 3) [year, month, day] "
+                    f"array, got shape {ts.shape}."
+                )
+            output["timestamps"] = torch.as_tensor(ts, dtype=torch.long)
+
+        location = self._get_location(index)
+        if location is not None:
+            loc = np.asarray(location)
+            if loc.ndim != 1 or loc.shape[0] != 2:
+                raise ValueError(
+                    f"_get_location must return a (2,) [lat, lon] array, got shape {loc.shape}."
+                )
+            output["location"] = torch.as_tensor(loc, dtype=torch.float32)
 
         return output
 

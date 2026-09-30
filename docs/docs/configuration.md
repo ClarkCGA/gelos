@@ -52,6 +52,16 @@ data:
     # db_scale_bands:
     #   S1RTC: [VV, VH]
 
+    # optional: remap on-disk nodata pixels AFTER normalization, so the model
+    # receives set_nodata (not a normalized sentinel). Scalars apply to all
+    # modalities; dicts ({S2L2A: -999}) apply per modality. Must be set together;
+    # for recognized models (Prithvi, TerraMind, OlmoEarth) set_nodata is
+    # auto-filled with the model's default (0) whenever nodata_value is set.
+    # For OlmoEarth, nodata_value also drives the encoder's input mask: nodata
+    # patches are dropped from attention and pooling (see the OlmoEarth notes).
+    # nodata_value: -999
+    # set_nodata: 0
+
     # albumentations / terratorch transforms applied to each chip.
     # FlattenTemporalIntoChannels and UnflattenTemporalFromChannels are needed
     # to apply spatial transforms across all timesteps.
@@ -152,6 +162,8 @@ style:
 | `means` / `stds` | Optional. Per-modality/band normalization statistics: `{sensor: {band: value}}`. Resolution order per band: these explicit args → model-matched pretraining stats injected by `gelos.generation` (see below) → lowercase `means`/`stds` class attributes on the dataset class → uppercase `MEANS`/`STDS` class attributes → default (mean 0.0, std 1.0). If an entire modality resolves to the defaults, normalization is an identity and a loud warning is logged |
 | `normalize` | Optional, default `true`. Set to `false` to skip z-score normalization entirely (identity aug) — for backbones that apply their own pretraining normalization internally, e.g. OlmoEarth (injected automatically for OlmoEarth models, see below) |
 | `db_scale_bands` | Optional. Convert listed bands from linear power to decibels (`10 * log10(clip(x, 1e-10))`) at load time, e.g. `{S1RTC: [VV, VH]}`. Do not use together with OlmoEarth's built-in normalization, which already converts S1 to dB |
+| `nodata_value` | Optional. On-disk nodata sentinel to detect, e.g. `-999`. A scalar applies to every modality; a `{modality: value}` dict (e.g. `{S2L2A: -999}`) masks only its listed modalities. Must be set together with `set_nodata` (auto-filled for recognized models, see below). Detection happens on the raw batch, before normalization; combining a masked modality with `db_scale_bands` or `perturb_bands` on the same bands corrupts the sentinel before detection and logs a warning. For OlmoEarth the detected mask is also passed to the encoder as an input mask (see the OlmoEarth notes) |
+| `set_nodata` | Optional. Value the model receives at nodata positions, e.g. `0`. Written AFTER normalization, so the model sees exactly this value (not a normalized sentinel). A scalar, or a `{modality: value}` dict covering every masked modality. Must be set together with `nodata_value`. For recognized models (`gelos.normalization`: Prithvi EO V2, TerraMind v1, OlmoEarth) the default `0` is injected automatically whenever `nodata_value` is set and `set_nodata` is not — after z-scoring `0` is the band mean; for OlmoEarth raw DN `0` is mapped in-range by its min-max normalizer and only matters for partially-nodata patches below the mask threshold. `nodata_value` itself is never injected (only the dataset knows its sentinel) |
 
 **Model-matched normalization defaults.** For recognized backbones, `gelos.generation`
 automatically fills any of `means`/`stds`/`db_scale_bands`/`normalize` you did not set,
@@ -172,6 +184,8 @@ with `COASTAL_AEROSOL`) raises an error; override with explicit `means`/`stds` i
 | `model` | TerraTorch model identifier (e.g., `prithvi_eo_v2_300`, `prithvi_eo_v2_600`, `terramind_v1_base`, `olmoearth_v1_base`, `olmoearth_v1_base_s1s2`, `olmoearth_v1_2_base`) |
 | `model_args.bands` | Band names as the **model** expects them (may differ from your dataset band names) |
 | `model_args.bands_s1` | S1 band names for OlmoEarth S1+S2 models (e.g., `[VV, VH]`). Omit or set to null to disable S1. |
+| `model_args.mask_nodata` | OlmoEarth only. Default `true`: when `data.init_args.nodata_value` is set, nodata patches are masked out of the encoder (see **Nodata masking** below). Set `false` to feed `set_nodata` values through unmasked |
+| `model_args.nodata_patch_threshold` | OlmoEarth only. Fraction in `[0, 1]` (default `0`) of nodata pixels (any band, per timestep) at or above which a `patch_size × patch_size` patch is masked. `0` masks any patch touching nodata; `1.0` masks only fully-nodata patches |
 | `layers` | Which transformer layers to extract embeddings from. `-1` means the last layer |
 | `embedding_pooling` | Set to `null` to keep the full token sequence |
 | `has_cls` | Whether the model produces a CLS token at position 0 |
@@ -247,22 +261,71 @@ Notes and limitations:
   so strided `slice_args` can extract single-timestep vs. all-timestep features,
   matching the Prithvi token layout. Note that with `keep`, a single timestep's
   tokens still come from one joint space-time attention pass over all timesteps.
-- **Spatial pooling (`model_args.spatial_pooling`).** Optional integer factor `s`
-  (default off): after encoding, the `H'×W'` token grid is average-pooled over
-  non-overlapping `s×s` neighborhoods, so each output token covers
-  `(s*patch_size)²` input pixels. Use it to match the spatial footprint of
-  larger-patch models — e.g. `patch_size: 4, spatial_pooling: 4` yields tokens
-  covering 16×16 pixels whose grid and indices line up exactly with
+- **Spatial pooling (`model_args.spatial_pooling`).** Optional (default off).
+  An integer factor `s`: after encoding, the `H'×W'` token grid is
+  average-pooled over non-overlapping `s×s` neighborhoods, so each output token
+  covers `(s*patch_size)²` input pixels. Use it to match the spatial footprint
+  of larger-patch models — e.g. `patch_size: 4, spatial_pooling: 4` yields
+  tokens covering 16×16 pixels whose grid and indices line up exactly with
   Prithvi/TerraMind's 16-pixel patches, so the same `slice_args` strategies
-  apply across models. Encoding still runs at the fine `patch_size`; only the
-  output tokens are aggregated.
-- **Timestamps.** When the batch carries per-timestep acquisition dates (a
-  `timestamps` key of shape `(B, T, 3)` as `[day, month_index, year]`), the
-  generation task threads them into the backbone so OlmoEarth's temporal
-  encoding reflects true acquisition dates. When absent, timestamps fall back
-  to a constant `[15, 0, 2020]` (day=15, month=Jan, year=2020), and
-  acquisition-date-dependent temporal encoding will not reflect true
-  seasonality.
+  apply across models. The string `mean`: the whole token grid is mean-pooled
+  per timestep (over valid tokens only, see **Nodata masking**), so every
+  sample yields the same-size vector regardless of its nodata footprint —
+  `(B, T, D)` with `temporal_pooling: keep`, `(B, 1, D)` with
+  `temporal_pooling: mean`. Encoding still runs at the fine `patch_size`; only
+  the output tokens are aggregated.
+- **Nodata masking (`model_args.mask_nodata`, default `true`).** When
+  `data.init_args.nodata_value` is set, the datamodule's raw-batch nodata mask
+  is passed to the OlmoEarth backbone (as `batch["nodata_mask"]`, popped by the
+  generation task). Each `patch_size × patch_size` patch whose fraction of
+  nodata pixels — in any band, per timestep — is above zero (or at or above
+  `model_args.nodata_patch_threshold` if set to a value in `(0, 1]`; default `0`,
+  i.e. any nodata pixel) is flagged `MISSING` for
+  the encoder: those tokens are removed before attention (they neither attend
+  nor are attended to) and excluded from every pooling mean (band-set, S1/S2
+  fusion — a patch valid in only one modality keeps that modality's token
+  alone — spatial and temporal). Consequences to be aware of: masked positions
+  in un-pooled grids come back as **zero vectors** (strided `slice_args` may
+  select them); a pooled position whose window has no valid token is a zero
+  vector and logs a warning; a sample with no valid patch at all is encoded
+  **unmasked** with a warning (the encoder cannot process an empty sequence);
+  and a batch containing any masked patch runs the encoder without its
+  `fast_pass` shortcut, which is slower. Minimal config:
+
+  ```yaml
+  data:
+    init_args:
+      nodata_value: -999        # set_nodata: 0 is auto-filled for OlmoEarth
+  model:
+    init_args:
+      model: olmoearth_v1_2_base
+      model_args:
+        spatial_pooling: mean   # one vector per timestep, same size for every chip
+        temporal_pooling: keep
+        nodata_patch_threshold: 0   # any nodata pixel masks the patch
+  ```
+- **Timestamps.** Datasets opt in to real acquisition dates by overriding
+  `GELOSDataSet._get_timestamps(index)`, returning a `(T, 3)` integer array of
+  canonical calendar dates `[year, month, day]` (month 1–12) — one row per
+  timestep of the primary temporal sensor (S2 for OlmoEarth). The value flows
+  automatically into `batch["timestamps"]` `(B, T, 3)` and from there into any
+  backbone exposing `set_batch_timestamps`. Each backbone converts internally
+  to its own layout — OlmoEarth reindexes to its `[day, month_index, year]`
+  packing at consumption time — so datasets never encode a backbone-specific
+  format. When the hook is not overridden (the default), OlmoEarth falls back
+  to the constant dummy date `[15, 0, 2020]` (day=15, month=Jan, year=2020;
+  unchanged behavior), and acquisition-date-dependent temporal encoding will
+  not reflect true seasonality. Timestamps whose shape does not match the
+  input's `(B, T, 3)` emit a warning and fall back to the constant date.
+- **Location.** Datasets opt in to chip location by overriding
+  `GELOSDataSet._get_location(index)`, returning a `(2,)` float array
+  `[lat, lon]` in decimal degrees (one footprint per chip). The value flows
+  into `batch["location"]` `(B, 2)` and is dispatched generically to any
+  backbone exposing `set_batch_location`. **No current backbone consumes it** —
+  the plumbing exists so a future location-aware backbone wrapper (e.g.
+  Prithvi TL, whose encoder accepts `location_coords (B, 2)`) plugs in with no
+  dataset or task changes. When the hook is not overridden the key is absent
+  and behavior is unchanged everywhere.
 
 ### Embedding extraction strategies
 
