@@ -69,6 +69,27 @@ _TERRAMIND_S2L2A_BANDS = [
 ]
 
 
+# DINOv3 (LVD-1689M web-image checkpoint) was pretrained on RGB in [0, 1]
+# normalized with ImageNet statistics. We reproduce that for Sentinel-2 by
+# clip-and-stretch: clip reflectance DN to [0, _DINOV3_S2_CLIP_MAX] (via
+# clip_range_bands), then fold the /_DINOV3_S2_CLIP_MAX stretch into the
+# z-score stats: (x/c - m)/s == (x - m*c)/(s*c). The 2500 DN ceiling (~0.25
+# reflectance) is the conventional S2 true-color stretch; a plain /10000 would
+# render land scenes far darker than the natural images the model saw.
+_IMAGENET_MEAN = {"RED": 0.485, "GREEN": 0.456, "BLUE": 0.406}
+_IMAGENET_STD = {"RED": 0.229, "GREEN": 0.224, "BLUE": 0.225}
+_DINOV3_S2_CLIP_MAX = 2500.0
+
+# DINOv3 SAT-493M (Maxar satellite RGB) checkpoints use their own transform
+# stats instead of ImageNet's — from the facebookresearch/dinov3 README's
+# make_transform for sat493m models (RGB order). The same clip-and-stretch
+# mapping applies; only the folded-in stats differ. Note SAT-493M was trained
+# on Maxar's rendered 8-bit RGB, so the S2 true-color stretch is the closest
+# available approximation, not an exact reproduction of Maxar processing.
+_DINOV3_SAT_MEAN = {"RED": 0.430, "GREEN": 0.411, "BLUE": 0.296}
+_DINOV3_SAT_STD = {"RED": 0.213, "GREEN": 0.156, "BLUE": 0.143}
+
+
 def _band_stats(bands: list[str], values: list[float]) -> dict[str, float]:
     if len(bands) != len(values):
         raise ValueError(f"band/stat length mismatch: {bands} vs {values}")
@@ -77,14 +98,16 @@ def _band_stats(bands: list[str], values: list[float]) -> dict[str, float]:
 
 # Backbone-name prefix -> normalization spec. A spec is either
 # {"normalize": False} (the backbone normalizes internally, e.g. OlmoEarth) or
-# per-modality pretraining stats with optional dB conversion requirements.
+# per-modality pretraining stats with optional dB conversion and value-clipping
+# requirements.
 # Every spec also carries "set_nodata": the value the model should receive at
 # nodata pixels (GELOSDataModule writes it AFTER normalization). It is only
 # injected when the config sets ``nodata_value`` (see inject_model_normalization).
 # Rationale for 0: after z-scoring (Prithvi/TerraMind) 0 is the band mean; for
 # OlmoEarth raw DN 0 is mapped in-range by its min-max normalizer
 # ((0 - (mean - 2σ)) / 4σ ≈ 0.3), and the value only matters for patches that
-# stay below the OlmoEarth nodata mask threshold.
+# stay below the OlmoEarth nodata mask threshold. For DINOv3 the stats are
+# clip-and-stretch scaled, so 0 after z-scoring is again the band mean.
 MODEL_NORMALIZATION = {
     "prithvi_eo_v2": {
         "means": {"S2L2A": _band_stats(_PRITHVI_BANDS, PRITHVI_V2_MEAN)},
@@ -108,6 +131,27 @@ MODEL_NORMALIZATION = {
         "set_nodata": 0,
     },
     "olmoearth_v1": {"normalize": False, "set_nodata": 0},
+    # Resolution takes the FIRST prefix match in insertion order, so
+    # more-specific prefixes (dinov3_vitl16_sat) must precede shorter ones
+    # (dinov3, which serves every other dinov3_* variant).
+    "dinov3_vitl16_sat": {
+        "means": {
+            "S2L2A": {band: m * _DINOV3_S2_CLIP_MAX for band, m in _DINOV3_SAT_MEAN.items()}
+        },
+        "stds": {"S2L2A": {band: s * _DINOV3_S2_CLIP_MAX for band, s in _DINOV3_SAT_STD.items()}},
+        "clip_range_bands": {
+            "S2L2A": {band: [0.0, _DINOV3_S2_CLIP_MAX] for band in _DINOV3_SAT_MEAN}
+        },
+        "set_nodata": 0,
+    },
+    "dinov3": {
+        "means": {"S2L2A": {band: m * _DINOV3_S2_CLIP_MAX for band, m in _IMAGENET_MEAN.items()}},
+        "stds": {"S2L2A": {band: s * _DINOV3_S2_CLIP_MAX for band, s in _IMAGENET_STD.items()}},
+        "clip_range_bands": {
+            "S2L2A": {band: [0.0, _DINOV3_S2_CLIP_MAX] for band in _IMAGENET_MEAN}
+        },
+        "set_nodata": 0,
+    },
 }
 
 
@@ -122,9 +166,10 @@ def resolve_model_normalization(
 
     Returns:
         Dict of ``GELOSDataModule`` init kwargs (``means``/``stds`` and
-        optionally ``db_scale_bands``, or ``normalize: False`` for backbones
-        that normalize internally), plus the model's ``set_nodata`` target when
-        registered, or ``None`` if the model is not registered. Note
+        optionally ``db_scale_bands``/``clip_range_bands``, or
+        ``normalize: False`` for backbones that normalize internally), plus
+        the model's ``set_nodata`` target when registered, or ``None`` if the
+        model is not registered. Note
         ``set_nodata`` is only valid on the datamodule together with
         ``nodata_value``; :func:`inject_model_normalization` enforces that.
 
@@ -173,6 +218,17 @@ def resolve_model_normalization(
     db_scale = {modality: band_list for modality, band_list in db_scale.items() if band_list}
     if db_scale:
         resolved["db_scale_bands"] = db_scale
+    clip_range = {
+        modality: {
+            band: spec["clip_range_bands"][modality][band]
+            for band in band_list
+            if band in spec.get("clip_range_bands", {}).get(modality, {})
+        }
+        for modality, band_list in bands.items()
+    }
+    clip_range = {modality: ranges for modality, ranges in clip_range.items() if ranges}
+    if clip_range:
+        resolved["clip_range_bands"] = clip_range
     return resolved
 
 

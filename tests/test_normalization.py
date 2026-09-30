@@ -77,6 +77,76 @@ def test_olmoearth_disables_datamodule_normalization():
     assert resolved == {"normalize": False, "set_nodata": 0}
 
 
+def test_dinov3_resolves_clip_and_stretch_imagenet_stats():
+    """DINOv3 gets clip-to-2500 plus ImageNet stats folded onto the DN scale."""
+    resolved = resolve_model_normalization(
+        "dinov3_vitb16_pretrained", {"S2L2A": ["RED", "GREEN", "BLUE"]}
+    )
+    assert set(resolved) == {"means", "stds", "clip_range_bands", "set_nodata"}
+    assert resolved["means"]["S2L2A"] == {
+        "RED": 0.485 * 2500,
+        "GREEN": 0.456 * 2500,
+        "BLUE": 0.406 * 2500,
+    }
+    assert resolved["stds"]["S2L2A"] == {
+        "RED": 0.229 * 2500,
+        "GREEN": 0.224 * 2500,
+        "BLUE": 0.225 * 2500,
+    }
+    assert resolved["clip_range_bands"] == {
+        "S2L2A": {
+            "RED": [0.0, 2500.0],
+            "GREEN": [0.0, 2500.0],
+            "BLUE": [0.0, 2500.0],
+        }
+    }
+
+
+def test_dinov3_non_rgb_band_raises():
+    with pytest.raises(ValueError, match="NIR_NARROW"):
+        resolve_model_normalization("dinov3_vitb16", {"S2L2A": ["RED", "NIR_NARROW"]})
+
+
+def test_dinov3_sat_resolves_clip_and_stretch_sat_stats():
+    """The satellite variant gets SAT-493M stats folded onto the DN scale, not ImageNet's."""
+    resolved = resolve_model_normalization(
+        "dinov3_vitl16_sat_pretrained", {"S2L2A": ["RED", "GREEN", "BLUE"]}
+    )
+    assert set(resolved) == {"means", "stds", "clip_range_bands", "set_nodata"}
+    assert resolved["means"]["S2L2A"] == {
+        "RED": 0.430 * 2500,
+        "GREEN": 0.411 * 2500,
+        "BLUE": 0.296 * 2500,
+    }
+    assert resolved["stds"]["S2L2A"] == {
+        "RED": 0.213 * 2500,
+        "GREEN": 0.156 * 2500,
+        "BLUE": 0.143 * 2500,
+    }
+    assert resolved["clip_range_bands"] == {
+        "S2L2A": {
+            "RED": [0.0, 2500.0],
+            "GREEN": [0.0, 2500.0],
+            "BLUE": [0.0, 2500.0],
+        }
+    }
+
+
+def test_dinov3_sat_prefix_precedes_generic_dinov3():
+    # Resolution takes the first startswith match, so the sat entry must sit
+    # before the generic "dinov3" entry or it would silently get ImageNet stats.
+    keys = list(MODEL_NORMALIZATION)
+    assert keys.index("dinov3_vitl16_sat") < keys.index("dinov3")
+    # And the generic entry still serves the web variant (ImageNet RED mean).
+    resolved = resolve_model_normalization("dinov3_vitb16_pretrained", {"S2L2A": ["RED"]})
+    assert resolved["means"]["S2L2A"]["RED"] == 0.485 * 2500
+
+
+def test_dinov3_sat_non_rgb_band_raises():
+    with pytest.raises(ValueError, match="NIR_NARROW"):
+        resolve_model_normalization("dinov3_vitl16_sat", {"S2L2A": ["RED", "NIR_NARROW"]})
+
+
 def test_unknown_model_returns_none():
     assert resolve_model_normalization("some_future_model", {"S2L2A": ["BLUE"]}) is None
 
@@ -101,7 +171,13 @@ def test_inject_unknown_model_or_missing_bands_is_noop():
 
 
 def test_registry_covers_expected_models():
-    assert set(MODEL_NORMALIZATION) == {"prithvi_eo_v2", "terramind_v1", "olmoearth_v1"}
+    assert set(MODEL_NORMALIZATION) == {
+        "prithvi_eo_v2",
+        "terramind_v1",
+        "olmoearth_v1",
+        "dinov3_vitl16_sat",
+        "dinov3",
+    }
     assert all(spec["set_nodata"] == 0 for spec in MODEL_NORMALIZATION.values())
 
 
