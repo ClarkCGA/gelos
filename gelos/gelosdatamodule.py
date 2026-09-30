@@ -14,6 +14,10 @@ from terratorch.datamodules.generic_pixel_wise_data_module import Normalize
 from torch.utils.data import DataLoader
 from torchgeo.datamodules import NonGeoDataModule
 
+# Batch key under which ``NoDataRemap`` exposes the raw-batch nodata mask for
+# mask-aware backbones (see ``gelos.generation.LenientEmbeddingGenerationTask``).
+NODATA_MASK_KEY = "nodata_mask"
+
 
 class IdentityAug:
     """No-op batch augmentation used when ``normalize=False``.
@@ -39,6 +43,14 @@ class NoDataRemap:
 
     Works identically whichever aug is wrapped (``Normalize``,
     ``MultimodalNormalize``, ``IdentityAug``, or a user-supplied aug).
+
+    The detected raw-batch mask is also attached to the returned batch under
+    ``batch[NODATA_MASK_KEY]`` (``"nodata_mask"``) so mask-aware backbones
+    (OlmoEarth) can exclude nodata patches from attention and pooling: a
+    ``{modality: BoolTensor(B, C, T, H, W)}`` dict for dict batches (only the
+    masked modalities are listed), or a single ``BoolTensor`` for the tensor
+    path. ``True`` marks a nodata pixel. The generation task pops the key before
+    the batch reaches terratorch.
 
     Args:
         aug: The batch augmentation to wrap (called between mask computation and
@@ -80,6 +92,7 @@ class NoDataRemap:
                     else self.set_nodata
                 )
                 batch["image"][modality][mask] = target
+            batch[NODATA_MASK_KEY] = masks
         else:
             if isinstance(self.nodata_value, dict) or isinstance(self.set_nodata, dict):
                 # ValueError (not TypeError): dicts are valid config, just not for
@@ -92,6 +105,7 @@ class NoDataRemap:
             mask = image == self.nodata_value
             batch = self.aug(batch)
             batch["image"][mask] = self.set_nodata
+            batch[NODATA_MASK_KEY] = mask
         return batch
 
 
@@ -150,7 +164,10 @@ class GELOSDataModule(NonGeoDataModule):
                 modalities. Must be provided together with ``set_nodata``. Detected pixels
                 are remapped to ``set_nodata`` AFTER normalization, so with
                 ``nodata_value=-999, set_nodata=0`` the model receives exactly ``0`` at
-                nodata positions (not a normalized sentinel).
+                nodata positions (not a normalized sentinel). The raw-batch detection
+                mask is also exposed under ``batch["nodata_mask"]`` (bool, ``True`` =
+                nodata) for mask-aware backbones such as OlmoEarth, which drop nodata
+                patches from attention and pooling.
             set_nodata (float | dict[str, float], optional): value the model should receive
                 at nodata positions, e.g. ``0``. A scalar, or a ``{modality: value}`` dict
                 covering every modality masked by ``nodata_value``. Must be provided
