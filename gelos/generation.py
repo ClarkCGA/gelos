@@ -17,6 +17,11 @@ try:
 except ImportError:
     pass
 
+try:
+    import gelos.backbones.prithvi_tl_backbone  # noqa: F401 — registers Prithvi TL factories
+except ImportError:
+    pass
+
 app = typer.Typer()
 
 
@@ -49,8 +54,8 @@ class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
         - ``"timestamps"`` -> ``set_batch_timestamps`` (date-aware temporal
           encoding, OlmoEarth); ``(B, T, 3)`` canonical ``[year, month, day]``.
         - ``"location"`` -> ``set_batch_location``; ``(B, 2)`` ``[lat, lon]``.
-          No current backbone exposes it — groundwork for a future
-          location-aware wrapper (e.g. Prithvi TL).
+          Consumed by ``PrithviTLBackbone`` (``prithvi_eo_v2_*_tl_coords``),
+          which also consumes ``"timestamps"`` and raises if either is missing.
         - ``"nodata_mask"`` (``gelos.gelosdatamodule.NODATA_MASK_KEY``, attached
           by ``NoDataRemap`` when ``nodata_value`` is configured) ->
           ``set_batch_nodata_mask`` (OlmoEarth drops nodata patches from
@@ -58,7 +63,7 @@ class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
 
         Each setter is resolved independently — a backbone may expose any
         subset; dispatch is a no-op for backbones lacking a setter (e.g.
-        Prithvi, TerraMind), keeping the task generic.
+        plain Prithvi, TerraMind), keeping the task generic.
 
         ``@torch.no_grad()`` mirrors the parent ``predict_step``.
         """

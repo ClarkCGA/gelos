@@ -32,6 +32,15 @@ def test_prithvi_resolves_v2_stats():
     assert resolved["stds"]["S2L2A"]["SWIR_2"] == 1049.0
 
 
+def test_prithvi_tl_coords_name_resolves_v2_stats():
+    # The gelos-registered TL wrapper names share the prithvi_eo_v2 prefix, so
+    # TL configs get Prithvi's pretraining normalization automatically.
+    tl = resolve_model_normalization("prithvi_eo_v2_300_tl_coords", {"S2L2A": PRITHVI_BANDS})
+    plain = resolve_model_normalization("prithvi_eo_v2_300", {"S2L2A": PRITHVI_BANDS})
+    assert tl == plain
+    assert tl["means"]["S2L2A"]["BLUE"] == 1087.0
+
+
 def test_prithvi_band_subset_and_order_respected():
     resolved = resolve_model_normalization("prithvi_eo_v2_600", {"S2L2A": ["RED", "BLUE"]})
     assert list(resolved["means"]["S2L2A"]) == ["RED", "BLUE"]
