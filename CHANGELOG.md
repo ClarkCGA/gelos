@@ -14,6 +14,16 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **Fixed-size kNN comparison plots (issue #84).** `knn_purity_plot`,
+  `knn_purity_distribution_plot` and `knn_purity_violin_distribution_plot` now share one
+  layout: the figure size depends only on the facet grid shape (margins fixed in
+  inches), the legend is stacked one entry per line in a reserved band below the plots
+  (room for four experiments) instead of a side-by-side legend outside the canvas, and
+  files are saved at a fixed dpi without `bbox_inches="tight"`, so images of the same
+  grid shape are pixel-identical in size regardless of experiment count or name length.
+  Facets in all three plots now share their x and y axes. The distribution/violin
+  plots drop `constrained_layout` and size their width per column (`6 in`, unchanged
+  for the default two-column grid).
 - **OlmoEarth nodata input mask + masked pooling.** Follow-up to the `nodata_value` /
   `set_nodata` remap below (#81): the datamodule's `NoDataRemap` now also attaches the
   raw-batch detection mask to the batch as `batch["nodata_mask"]`
