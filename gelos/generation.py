@@ -4,11 +4,14 @@ from typing import Any, Optional
 from lightning.pytorch import Trainer
 from lightning.pytorch.cli import instantiate_class
 from loguru import logger
+import pyarrow as pa
+import pyarrow.parquet as pq
 from terratorch.tasks import EmbeddingGenerationTask
 import torch
 import typer
 import yaml
 
+import gelos.backbones.dinov3_backbone  # noqa: F401 — registers dinov3_*_pretrained backbones
 from gelos.gelosdatamodule import NODATA_MASK_KEY, GELOSDataModule
 from gelos.normalization import inject_model_normalization
 
@@ -90,6 +93,28 @@ class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
                 loc_setter_obj.clear_batch_location()
             if mask_setter_obj is not None:
                 mask_setter_obj.clear_batch_nodata_mask()
+
+    def write_parquet(self, embedding: torch.Tensor, filename: str, metadata: dict, dir_path):
+        """Write a single sample to parquet, storing the embedding as float32.
+
+        Stock terratorch round-trips the embedding through ``.tolist()``, which
+        promotes the model's float32 outputs to Python floats and stores a
+        float64 column — doubling embedding storage for no information gain
+        (~5 MB/chip for a 224px ViT, ~600 GB across a 78k-chip experiment).
+        ``gelos.extraction`` reads via pyarrow list ops, which are
+        dtype-agnostic, so downstream analysis is unaffected.
+        """
+        out_path = Path(dir_path) / f"{Path(filename).stem}_embedding.parquet"
+        arr = embedding.detach().cpu().numpy()
+        emb_type = pa.float32()
+        for _ in range(arr.ndim):
+            emb_type = pa.list_(emb_type)
+        columns = {"embedding": pa.array([arr.tolist()], type=emb_type)}
+        for key, value in metadata.items():
+            columns[key] = pa.array([value.tolist() if value.ndim else value.item()])
+        # Dictionary encoding is pure overhead on near-unique floats (+60%
+        # observed vs plain); zstd shaves another ~8% where snappy cannot.
+        pq.write_table(pa.table(columns), out_path, use_dictionary=False, compression="zstd")
 
 
 def instantiate_recursive(node: Any) -> Any:

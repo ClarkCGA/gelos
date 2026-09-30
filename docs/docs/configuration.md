@@ -417,6 +417,11 @@ comparison metric; by default the source metric is derived from the plot `type`
 | `knn_purity_distribution_plot` | Per-class box plots of per-query KNN purity vs k | (none) |
 | `knn_purity_violin_distribution_plot` | Per-class violin plots of per-query KNN purity vs k. Split violin (one half per group) when exactly two experiments are compared, otherwise side-by-side single violins. Mean shown as a diamond, median as a short line | `split` (bool, default auto: split iff exactly two experiments). `split_pairs` (list of 2-element experiment-name lists; each pair → one split violin per k; unpaired experiments → single violins; takes precedence over `split`). Requires `metric: knn_purity_per_query_comparison` |
 
+All kNN plots use a fixed layout: figure size depends only on the facet grid shape,
+the legend is stacked one entry per line in a fixed band below the plots (room for
+four experiments), and files are saved at a fixed dpi so images of the same grid
+shape are pixel-identical in size.
+
 Example:
 
 ```yaml

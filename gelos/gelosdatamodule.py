@@ -130,6 +130,7 @@ class GELOSDataModule(NonGeoDataModule):
         perturb_bands: dict[str, dict[str, float]] | None = None,
         normalize: bool = True,
         db_scale_bands: dict[str, list[str]] | None = None,
+        clip_range_bands: dict[str, dict[str, list[float]]] | None = None,
         nodata_value: float | dict[str, float] | None = None,
         set_nodata: float | dict[str, float] | None = None,
         **kwargs: Any,
@@ -158,6 +159,11 @@ class GELOSDataModule(NonGeoDataModule):
                 ``{"S1RTC": ["VV", "VH"]}``. Passed through to the dataset class. Do NOT use for
                 backbones that already convert S1 to dB internally (e.g. OlmoEarth with
                 ``apply_pretraining_normalization=True``).
+            clip_range_bands (dict[str, dict[str, list[float]]], optional): bands to clip to a
+                fixed ``[min, max]`` value range at load time (after any dB conversion), e.g.
+                ``{"S2L2A": {"RED": [0.0, 2500.0]}}``. Passed through to the dataset class.
+                Combined with matching ``means``/``stds`` this reproduces clip-and-stretch
+                preprocessing for RGB-pretrained backbones (e.g. DINOv3).
             nodata_value (float | dict[str, float], optional): on-disk nodata sentinel to
                 detect in the raw batch, e.g. ``-999``. A scalar applies to every modality;
                 a ``{modality: value}`` dict (e.g. ``{"S2L2A": -999}``) masks only its listed
@@ -192,6 +198,7 @@ class GELOSDataModule(NonGeoDataModule):
         self.perturb_bands = perturb_bands
         self.normalize = normalize
         self.db_scale_bands = db_scale_bands
+        self.clip_range_bands = clip_range_bands
         self.nodata_value = nodata_value
         self.set_nodata = set_nodata
 
@@ -310,11 +317,14 @@ class GELOSDataModule(NonGeoDataModule):
         """
         if stage != "predict":
             raise ValueError("GELOS dataset is for prediction only")
-        # Only forward db_scale_bands when set, so dataset subclasses that predate
-        # the parameter keep working as long as the feature is unused.
+        # Only forward db_scale_bands/clip_range_bands when set, so dataset
+        # subclasses that predate the parameters keep working as long as the
+        # features are unused.
         extra_kwargs = {}
         if self.db_scale_bands is not None:
             extra_kwargs["db_scale_bands"] = self.db_scale_bands
+        if self.clip_range_bands is not None:
+            extra_kwargs["clip_range_bands"] = self.clip_range_bands
         self.dataset = self.dataset_class(
             data_root=self.data_root,
             bands=self.bands,

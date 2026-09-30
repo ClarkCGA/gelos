@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "gelos"
-version = "0.3.7"
+version = "0.7.0"
 description = "Repository for Geospatial Exploration of Latent Observation Space (GELOS)"
 authors = [
   { name = "Denys Godwin" },
@@ -34,6 +34,11 @@ dependencies = [
     "umap-learn>=0.5,<0.6",
     "zarr>=3.0",
     "olmoearth-pretrain>=0.1.1",
+    # torch.hub.load of facebookresearch/dinov3 imports the repo's hubconf,
+    # whose import chain needs termcolor; safetensors reads the HF-format
+    # DINOv3 weights in gelos.backbones.dinov3_backbone.
+    "termcolor",
+    "safetensors",
 ]
 
 [project.optional-dependencies]

@@ -33,6 +33,42 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
   input when `T == model_args.num_frames`. Adds `configs/prithvi_eo_v2_300_tl.yaml` and
   its no-TL control `configs/prithvi_eo_v2_300.yaml`. Defaults and existing backbones
   are unchanged.
+
+## [v0.7.0] - 2026-09-30
+
+- **DINOv3 backbones (issue #16).** New `gelos.backbones.dinov3_backbone` registers
+  `dinov3_vitb16_pretrained` (web LVD-1689M ViT-B/16) and `dinov3_vitl16_sat_pretrained`
+  (satellite SAT-493M ViT-L/16) in terratorch's backbone registry; registration happens on
+  `import gelos.generation`. Pretrained weights are resolved at first run from a local
+  checkpoint (per-variant env var), `torch.hub`, or the gated `facebook/dinov3-*`
+  HuggingFace repos (requires `HF_TOKEN`; the transformers-format `model.safetensors` is
+  converted to the hub layout on download). Configs must list S2 bands in RED, GREEN, BLUE
+  order. Adds `termcolor` and `safetensors` as core dependencies.
+- **Clip-and-stretch normalization for DINOv3.** New `GELOSDataModule`/`GELOSDataSet` param
+  `clip_range_bands: dict[str, dict[str, list[float]]] | None` clips bands to a fixed
+  `[min, max]` at load time (after any dB conversion), e.g.
+  `{"S2L2A": {"RED": [0.0, 2500.0]}}`. `gelos.normalization` registers DINOv3 specs that
+  clip S2 RGB to `[0, 2500]` DN and fold the `/2500` stretch into the z-score stats
+  (ImageNet stats for web variants, SAT-493M stats for `dinov3_vitl16_sat`), with
+  `set_nodata: 0`.
+- **Embedding Parquet stored as float32.** `LenientEmbeddingGenerationTask.write_parquet`
+  now writes the embedding column as nested `float32` lists (stock terratorch promoted to
+  float64), with dictionary encoding disabled and `zstd` compression — roughly halving
+  embedding storage. `gelos.extraction` is dtype-agnostic, so downstream analysis is
+  unaffected, but external readers of the Parquet files will see `float32`.
+- **Fixed-size kNN comparison plots (issue #84).** `knn_purity_plot`,
+  `knn_purity_distribution_plot` and `knn_purity_violin_distribution_plot` now share one
+  layout: the figure size depends only on the facet grid shape (margins fixed in
+  inches), the legend is stacked one entry per line in a reserved band below the plots
+  (room for four experiments) instead of a side-by-side legend outside the canvas, and
+  files are saved at a fixed dpi without `bbox_inches="tight"`, so images of the same
+  grid shape are pixel-identical in size regardless of experiment count or name length.
+  Facets in all three plots now share their x and y axes. The distribution/violin
+  plots drop `constrained_layout` and size their width per column (`6 in`, unchanged
+  for the default two-column grid).
+
+## [v0.6.0] - 2026-09-29
+
 - **OlmoEarth nodata input mask + masked pooling.** Follow-up to the `nodata_value` /
   `set_nodata` remap below (#81): the datamodule's `NoDataRemap` now also attaches the
   raw-batch detection mask to the batch as `batch["nodata_mask"]`
@@ -85,7 +121,6 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
   (those per-sample steps run first and corrupt the sentinel). Per-model target values
   are not yet registered in `gelos.normalization`, so both keys must currently be set
   explicitly per config. Documented in the configuration reference (#81).
-
 - **OlmoEarth v1.2 backbones.** New terratorch factory functions
   `olmoearth_v1_2_{nano,tiny,small,base}` (Sentinel-2 only) and `..._s1s2` (S2+S1),
   registered in `BACKBONE_REGISTRY`, with hidden dims 128/192/384/768. New shipped
@@ -94,6 +129,14 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
   so `gelos/normalization.py` (prefix-matched to `olmoearth_v1`) already covers the new
   names. Bumps `olmoearth-pretrain>=0.1.1` (the first release exposing the v1.2 `ModelID`
   entries).
+
+## [v0.5.0] - 2026-07-21
+
+Entries below were recorded without per-release headings and may include changes
+first shipped in earlier v0.3.x/v0.4 tags.
+
+- **Renamed "raw pixels" to "spectral bands"** throughout the library for clarity.
+  **Breaking** for configs and code that reference the old name.
 - **Analysis completion markers.** `run_analysis` now writes a `.analysis_complete` marker
   (mirroring generation's `.embeddings_complete`) and skips fully-completed configs on
   re-runs. Model runs (`knn`/`linear_probe`/`random_forest`) now also skip individually
