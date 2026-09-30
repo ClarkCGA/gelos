@@ -163,6 +163,68 @@ def _resolve_experiment_colors(
     }
 
 
+# Standard kNN figure layout (issue #84): the figure size depends only on the
+# facet grid shape, a fixed bottom band holds up to ``_KNN_LEGEND_ROWS`` stacked
+# legend entries, and files are saved at a fixed dpi so the pixel size of any two
+# plots with the same grid shape is identical regardless of the legend content.
+_KNN_LEGEND_ROWS = 4
+_KNN_LEGEND_ROW_IN = 0.28
+_KNN_XLABEL_PAD_IN = 0.55
+_KNN_LEGEND_BAND_IN = _KNN_LEGEND_ROWS * _KNN_LEGEND_ROW_IN + _KNN_XLABEL_PAD_IN
+_KNN_LEFT_IN = 0.6
+_KNN_RIGHT_IN = 0.15
+_KNN_TOP_IN = 0.4
+_KNN_DPI = 300
+
+
+def _knn_figure(n_rows: int, n_cols: int, *, col_width: float, row_height: float):
+    """Build a kNN figure and gridspec whose layout depends only on the grid shape.
+
+    Margins are fixed in inches (converted to figure fractions), including a
+    constant bottom band reserved for the xlabel row plus up to
+    ``_KNN_LEGEND_ROWS`` stacked legend entries.
+    """
+    width = _KNN_LEFT_IN + n_cols * col_width + _KNN_RIGHT_IN
+    height = _KNN_TOP_IN + n_rows * row_height + _KNN_LEGEND_BAND_IN
+    fig = plt.figure(figsize=(width, height))
+    gs = fig.add_gridspec(
+        n_rows,
+        n_cols,
+        hspace=0.5,
+        wspace=0.3,
+        left=_KNN_LEFT_IN / width,
+        right=1 - _KNN_RIGHT_IN / width,
+        top=1 - _KNN_TOP_IN / height,
+        bottom=_KNN_LEGEND_BAND_IN / height,
+    )
+    return fig, gs
+
+
+def _knn_legend_and_save(fig, handles, labels, output_path: str | Path | None) -> None:
+    """Place a stacked legend in the reserved bottom band, then save (fixed dpi) or show.
+
+    The legend is anchored just below the xlabel row and stacks one entry per
+    line downward into the band; fewer entries simply leave blank space. The
+    figure is saved without ``bbox_inches="tight"`` so the pixel size is
+    deterministic.
+    """
+    if handles:
+        y_top = (_KNN_LEGEND_BAND_IN - _KNN_XLABEL_PAD_IN) / fig.get_figheight()
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            ncol=1,
+            frameon=False,
+            bbox_to_anchor=(0.5, y_top),
+        )
+    if output_path:
+        fig.savefig(output_path, dpi=_KNN_DPI)
+    else:
+        plt.show()
+    plt.close(fig)
+
+
 def knn_purity_plot(
     metric_result: dict,
     output_path: str | Path = None,
@@ -175,6 +237,11 @@ def knn_purity_plot(
 
     One subplot per class, each showing purity vs k with one line per
     experiment — makes cross-model comparison direct.
+
+    Layout is fixed per facet grid shape: the figure size depends only on
+    ``(n_rows, n_cols)``, the legend is stacked one entry per line in a
+    reserved band below the plots (room for four experiments), all facets
+    share x and y axes, and the file is saved at a fixed dpi.
 
     Args:
         metric_result: Output from ``knn_purity_comparison`` metric.
@@ -200,15 +267,17 @@ def knn_purity_plot(
 
     n_cols = n_cols if n_cols is not None else (min(6, n_classes) if n_classes else 1)
     n_rows = (n_classes + n_cols - 1) // n_cols if n_classes else 1
-    fig_height = max(3, 2.5 * n_rows)
-    fig = plt.figure(figsize=(3.5 * n_cols, fig_height))
-    gs = fig.add_gridspec(n_rows, n_cols, hspace=0.5, wspace=0.3)
+    fig, gs = _knn_figure(n_rows, n_cols, col_width=3.5, row_height=2.5)
 
     facet_axes = []
     for idx, cls in enumerate(classes):
         row = idx // n_cols
         col = idx % n_cols
-        ax = fig.add_subplot(gs[row, col])
+        ax = fig.add_subplot(
+            gs[row, col],
+            sharex=facet_axes[0] if facet_axes else None,
+            sharey=facet_axes[0] if facet_axes else None,
+        )
         facet_axes.append(ax)
 
         for i, exp in enumerate(experiments):
@@ -232,23 +301,9 @@ def knn_purity_plot(
         ax.set_ylim(0, 1.05)
         ax.grid(True, alpha=0.3)
 
-    # Single shared legend for facets, placed below the grid.
-    if facet_axes:
-        handles, labels = facet_axes[0].get_legend_handles_labels()
-        if handles:
-            fig.legend(
-                handles,
-                labels,
-                loc="upper center",
-                ncol=min(len(labels), 4),
-                bbox_to_anchor=(0.5, -0.02),
-            )
-
-    if output_path:
-        plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    else:
-        plt.show()
-    plt.close(fig)
+    # Single shared legend for facets, stacked in the reserved band below the grid.
+    handles, labels = facet_axes[0].get_legend_handles_labels() if facet_axes else ([], [])
+    _knn_legend_and_save(fig, handles, labels, output_path)
 
 
 def knn_purity_distribution_plot(
@@ -264,6 +319,11 @@ def knn_purity_distribution_plot(
     values and at each k position one boxplot per experiment is drawn
     side-by-side — exposes the spread of per-query purity that the
     aggregated line plot collapses to a mean.
+
+    Layout is fixed per facet grid shape: the figure size depends only on
+    ``(n_rows, n_cols)``, the legend is stacked one entry per line in a
+    reserved band below the plots (room for four experiments), all facets
+    share x and y axes, and the file is saved at a fixed dpi.
 
     Args:
         metric_result: Output from ``knn_purity_per_query_comparison`` metric.
@@ -292,12 +352,16 @@ def knn_purity_distribution_plot(
 
     n_cols = min(2, n_classes) if n_classes else 1
     n_rows = (n_classes + n_cols - 1) // n_cols if n_classes else 1
-    fig_height = max(3.5, 3.5 * n_rows)
-    fig = plt.figure(figsize=(12, fig_height), constrained_layout=True)
-    gs = fig.add_gridspec(n_rows, n_cols)
+    fig, gs = _knn_figure(n_rows, n_cols, col_width=6.0, row_height=3.5)
 
+    facet_axes = []
     for idx, cls in enumerate(classes):
-        ax = fig.add_subplot(gs[idx // n_cols, idx % n_cols])
+        ax = fig.add_subplot(
+            gs[idx // n_cols, idx % n_cols],
+            sharex=facet_axes[0] if facet_axes else None,
+            sharey=facet_axes[0] if facet_axes else None,
+        )
+        facet_axes.append(ax)
 
         for i, exp in enumerate(experiments):
             data_per_k = []
@@ -343,24 +407,11 @@ def knn_purity_distribution_plot(
         ax.set_xlim(-0.5, n_k - 0.5)
         ax.grid(True, alpha=0.3)
 
-    if n_experiments:
-        handles = [
-            Patch(facecolor=colors[i], edgecolor="black", label=short_labels[experiments[i]])
-            for i in range(n_experiments)
-        ]
-        fig.legend(
-            handles,
-            [short_labels[e] for e in experiments],
-            loc="upper center",
-            ncol=min(n_experiments, 4),
-            bbox_to_anchor=(0.5, -0.02),
-        )
-
-    if output_path:
-        plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    else:
-        plt.show()
-    plt.close(fig)
+    handles = [
+        Patch(facecolor=colors[i], edgecolor="black", label=short_labels[experiments[i]])
+        for i in range(n_experiments)
+    ]
+    _knn_legend_and_save(fig, handles, [short_labels[e] for e in experiments], output_path)
 
 
 def knn_purity_violin_distribution_plot(
@@ -385,6 +436,11 @@ def knn_purity_violin_distribution_plot(
     (1 or 3+ experiments) side-by-side single violins are drawn. The mean is
     marked with a diamond and the median with a short horizontal line, matching
     the box-plot variant.
+
+    Layout is fixed per facet grid shape: the figure size depends only on
+    ``(n_rows, n_cols)``, the legend is stacked one entry per line in a
+    reserved band below the plots (room for four experiments), all facets
+    share x and y axes, and the file is saved at a fixed dpi.
 
     Args:
         metric_result: Output from ``knn_purity_per_query_comparison`` metric.
@@ -481,12 +537,16 @@ def knn_purity_violin_distribution_plot(
 
     n_cols = n_cols if n_cols is not None else (min(2, n_classes) if n_classes else 1)
     n_rows = (n_classes + n_cols - 1) // n_cols if n_classes else 1
-    fig_height = max(3.5, 3.5 * n_rows)
-    fig = plt.figure(figsize=(12, fig_height), constrained_layout=True)
-    gs = fig.add_gridspec(n_rows, n_cols)
+    fig, gs = _knn_figure(n_rows, n_cols, col_width=6.0, row_height=3.5)
 
+    facet_axes = []
     for idx, cls in enumerate(classes):
-        ax = fig.add_subplot(gs[idx // n_cols, idx % n_cols])
+        ax = fig.add_subplot(
+            gs[idx // n_cols, idx % n_cols],
+            sharex=facet_axes[0] if facet_axes else None,
+            sharey=facet_axes[0] if facet_axes else None,
+        )
+        facet_axes.append(ax)
 
         if split_pairs is not None:
             for k_idx, k in enumerate(k_values):
@@ -623,24 +683,11 @@ def knn_purity_violin_distribution_plot(
         ax.set_xlim(-0.5, n_k - 0.5)
         ax.grid(True, alpha=0.3)
 
-    if n_experiments:
-        handles = [
-            Patch(facecolor=colors[i], edgecolor="black", label=short_labels[experiments[i]])
-            for i in range(n_experiments)
-        ]
-        fig.legend(
-            handles,
-            [short_labels[e] for e in experiments],
-            loc="upper center",
-            ncol=min(n_experiments, 4),
-            bbox_to_anchor=(0.5, -0.02),
-        )
-
-    if output_path:
-        plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    else:
-        plt.show()
-    plt.close(fig)
+    handles = [
+        Patch(facecolor=colors[i], edgecolor="black", label=short_labels[experiments[i]])
+        for i in range(n_experiments)
+    ]
+    _knn_legend_and_save(fig, handles, [short_labels[e] for e in experiments], output_path)
 
 
 def per_class_similarity_distribution_plot(

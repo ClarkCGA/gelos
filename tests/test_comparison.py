@@ -490,6 +490,124 @@ def test_knn_purity_violin_distribution_plot_split_pairs_empty(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Tests: fixed kNN plot layout (issue #84)
+# ---------------------------------------------------------------------------
+
+
+def _make_purity_df(experiments, ks=(1, 5)):
+    """Build an aggregated knn_purity_comparison df (classes overall/0/1) for any experiments."""
+    rows = []
+    for e_idx, exp in enumerate(experiments):
+        for k in ks:
+            for cls in ("overall", "0", "1"):
+                rows.append(
+                    {
+                        "k": k,
+                        "class": cls,
+                        "purity": 0.5 + 0.05 * e_idx + (0.1 if cls == "0" else 0.0) - 0.01 * k,
+                        "n_samples": 100 if cls == "overall" else 50,
+                        "experiment": exp,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+_KNN_PLOT_CASES = [
+    (knn_purity_plot, _make_purity_df),
+    (knn_purity_distribution_plot, _make_per_query_df),
+    (knn_purity_violin_distribution_plot, _make_per_query_df),
+]
+
+# 60-char names starting with different letters: _strip_common_prefix strips
+# nothing and truncates each to 25 chars.
+_KNN_LONG_NAMES = [(f"{c}xperiment_" + "long_name_" * 6)[:60] for c in "ABCD"]
+_KNN_NAME_SETS = [["A"], ["A", "B"], ["A", "B", "C", "D"], _KNN_LONG_NAMES]
+
+
+def _capture_knn_figures(monkeypatch):
+    """Patch ``plt.close`` in comp_plots to collect figures instead of closing them."""
+    import gelos.comp_plots as comp_plots
+
+    figs = []
+    monkeypatch.setattr(comp_plots.plt, "close", lambda fig, *a, **k: figs.append(fig))
+    return figs
+
+
+def _release_knn_figures(monkeypatch):
+    """Undo the ``plt.close`` patch before closing everything to avoid figure leaks."""
+    import matplotlib.pyplot as plt
+
+    monkeypatch.undo()
+    plt.close("all")
+    gc.collect()
+
+
+@pytest.mark.parametrize(("plot_fn", "make_df"), _KNN_PLOT_CASES)
+def test_knn_plot_fixed_size_and_axes(plot_fn, make_df, tmp_path, monkeypatch):
+    """PNG pixel size, figure size and axes positions do not depend on the legend content."""
+    import matplotlib.image as mpimg
+
+    figs = _capture_knn_figures(monkeypatch)
+    try:
+        shapes, sizes, positions = [], [], []
+        for i, names in enumerate(_KNN_NAME_SETS):
+            path = tmp_path / f"{plot_fn.__name__}_{i}.png"
+            plot_fn({"comparison_df": make_df(names)}, output_path=path)
+            assert path.exists()
+            fig = figs[-1]
+            shapes.append(mpimg.imread(path).shape[:2])
+            sizes.append(tuple(fig.get_size_inches()))
+            positions.append([ax.get_position().bounds for ax in fig.axes])
+            assert len(fig.legends) == 1
+            assert len(fig.legends[0].get_texts()) == len(names)
+        assert len(figs) == len(_KNN_NAME_SETS)
+        assert len(set(shapes)) == 1, shapes
+        assert len(set(sizes)) == 1, sizes
+        assert all(p == positions[0] for p in positions), positions
+    finally:
+        _release_knn_figures(monkeypatch)
+
+
+@pytest.mark.parametrize(("plot_fn", "make_df"), _KNN_PLOT_CASES)
+def test_knn_plot_legend_inside_figure(plot_fn, make_df, tmp_path, monkeypatch):
+    """Four long-name legend entries stay inside the canvas and below the xlabels."""
+    figs = _capture_knn_figures(monkeypatch)
+    try:
+        path = tmp_path / f"{plot_fn.__name__}_long.png"
+        plot_fn({"comparison_df": make_df(_KNN_LONG_NAMES)}, output_path=path)
+        fig = figs[-1]
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        legend_bbox = fig.legends[0].get_window_extent(renderer)
+        fig_bbox = fig.bbox
+        assert legend_bbox.x0 >= 0 and legend_bbox.y0 >= 0
+        assert legend_bbox.x1 <= fig_bbox.width and legend_bbox.y1 <= fig_bbox.height
+        # Lowest axes row (smallest y0 in figure fraction) must sit above the legend.
+        lowest_y0 = min(ax.get_position().y0 for ax in fig.axes)
+        lowest_axes = [ax for ax in fig.axes if ax.get_position().y0 == lowest_y0]
+        xlabel_bottom = min(ax.get_tightbbox(renderer).y0 for ax in lowest_axes)
+        assert legend_bbox.y1 <= xlabel_bottom
+    finally:
+        _release_knn_figures(monkeypatch)
+
+
+@pytest.mark.parametrize(("plot_fn", "make_df"), _KNN_PLOT_CASES)
+def test_knn_plot_shared_axes(plot_fn, make_df, tmp_path, monkeypatch):
+    """Facets share both x and y axes."""
+    figs = _capture_knn_figures(monkeypatch)
+    try:
+        path = tmp_path / f"{plot_fn.__name__}_shared.png"
+        plot_fn({"comparison_df": make_df(["A", "B"])}, output_path=path)
+        fig = figs[-1]
+        assert len(fig.axes) >= 2
+        ax0, ax1 = fig.axes[0], fig.axes[1]
+        assert ax0.get_shared_x_axes().joined(ax0, ax1)
+        assert ax0.get_shared_y_axes().joined(ax0, ax1)
+    finally:
+        _release_knn_figures(monkeypatch)
+
+
+# ---------------------------------------------------------------------------
 # Tests: Comparison setup
 # ---------------------------------------------------------------------------
 
