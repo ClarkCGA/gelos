@@ -14,6 +14,13 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **kNN plot legends: no character limit; wider left margin (issue #84, follow-up).**
+  Comparison-plot legend labels are no longer truncated to 25 characters
+  (`_strip_common_prefix` still strips a shared prefix); since kNN legend entries are
+  stacked one per line, label length is now up to the user's experiment `label`s. The
+  shared kNN left margin grows from 0.6 in to 1.0 in so the `knn_gsd_plot` y-axis
+  (4–5-digit km tick labels) no longer clips; all kNN figures are 0.4 in wider as a
+  result.
 - **kNN geographic-distance plots (issue #85).** New analysis metric `knn_geo_distance`
   (`gelos.metrics`) measures how geographically local a model's embedding neighbourhoods
   are: for each chip and each k it finds the k nearest neighbours in embedding space (the

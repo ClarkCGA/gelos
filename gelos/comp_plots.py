@@ -10,12 +10,14 @@ import numpy as np
 import pandas as pd
 
 
-def _strip_common_prefix(labels: list[str], max_len: int = 25) -> dict[str, str]:
+def _strip_common_prefix(labels: list[str]) -> dict[str, str]:
     """Return a mapping from full label to a shortened display label.
 
-    Strips any common leading substring shared by ALL labels, then truncates
-    each result to max_len characters. Falls back to the original if stripping
-    produces an empty string.
+    Strips any common leading substring shared by ALL labels, backing off to
+    the nearest word boundary so no label is cut mid-word. Falls back to the
+    original label if stripping produces an empty string. Labels are never
+    truncated: kNN legend entries are stacked one per line (issue #84), so
+    label length is the user's responsibility.
     """
     if not labels:
         return {}
@@ -27,17 +29,18 @@ def _strip_common_prefix(labels: list[str], max_len: int = 25) -> dict[str, str]
         else:
             break
     # Walk back to the nearest word boundary so we don't cut mid-word
-    while prefix_len > 0 and prefix_len < len(labels[0]) and labels[0][prefix_len - 1] not in (
-        " ",
-        "_",
-        "-",
+    while (
+        prefix_len > 0
+        and prefix_len < len(labels[0])
+        and labels[0][prefix_len - 1]
+        not in (
+            " ",
+            "_",
+            "-",
+        )
     ):
         prefix_len -= 1
-    short = {}
-    for label in labels:
-        s = label[prefix_len:].strip() or label
-        short[label] = s[:max_len] if len(s) > max_len else s
-    return short
+    return {label: label[prefix_len:].strip() or label for label in labels}
 
 
 def pca_ablation_table(
@@ -167,11 +170,14 @@ def _resolve_experiment_colors(
 # facet grid shape, a fixed bottom band holds up to ``_KNN_LEGEND_ROWS`` stacked
 # legend entries, and files are saved at a fixed dpi so the pixel size of any two
 # plots with the same grid shape is identical regardless of the legend content.
+# The left margin is sized for the widest y-axis decoration among the kNN plots:
+# the geo-distance plots' 4-5-digit km tick labels plus ylabel need about 0.82 in
+# with ``log_x`` (measured), so nothing is drawn outside the canvas.
 _KNN_LEGEND_ROWS = 4
 _KNN_LEGEND_ROW_IN = 0.28
 _KNN_XLABEL_PAD_IN = 0.55
 _KNN_LEGEND_BAND_IN = _KNN_LEGEND_ROWS * _KNN_LEGEND_ROW_IN + _KNN_XLABEL_PAD_IN
-_KNN_LEFT_IN = 0.6
+_KNN_LEFT_IN = 1.0
 _KNN_RIGHT_IN = 0.15
 _KNN_TOP_IN = 0.4
 _KNN_DPI = 300
@@ -182,7 +188,8 @@ def _knn_figure(n_rows: int, n_cols: int, *, col_width: float, row_height: float
 
     Margins are fixed in inches (converted to figure fractions), including a
     constant bottom band reserved for the xlabel row plus up to
-    ``_KNN_LEGEND_ROWS`` stacked legend entries.
+    ``_KNN_LEGEND_ROWS`` stacked legend entries and a left margin
+    (``_KNN_LEFT_IN``) wide enough for the widest kNN y-axis decoration.
     """
     width = _KNN_LEFT_IN + n_cols * col_width + _KNN_RIGHT_IN
     height = _KNN_TOP_IN + n_rows * row_height + _KNN_LEGEND_BAND_IN
@@ -973,7 +980,7 @@ def per_class_ecdf_plot(
 
     One subplot per class; one empirical CDF step curve per ablation
     experiment. Unlike overlaid histograms, near-identical distributions
-    render as clearly separated monotone S-curves. 
+    render as clearly separated monotone S-curves.
     Args:
         metric_result: Output from ``per_chip_similarity_to_control``.
         output_path: Path to save the figure. Shows interactively if None.
@@ -1018,7 +1025,6 @@ def per_class_ecdf_plot(
         ax = fig.add_subplot(gs[row, col])
         is_bottom_row = row == n_rows - 1
         is_left_col = col == 0
-
 
         any_drawn = False
         for exp in experiments:
