@@ -107,3 +107,5 @@ run_analysis(
 ```
 
 The analysis pipeline extracts embeddings according to each strategy's `slice_args`, then runs transforms, plots, and models. Results are cached — transform outputs as CSVs, extracted embeddings as `.npy` files — so re-running skips completed steps.
+
+Figures are written to `{figures_base_dir}/{data_version}/{config_stem}/`, one folder per experiment config, named `{strategy}_{layer}_{transform}_{plot}.png` for plots and `{strategy}_{layer}_{model}_confusion_matrix.png` for model confusion matrices. Comparison figures follow the same rule under `{figures_base_dir}/comparisons/{config_stem}/{plot}.png`. Existing figures are skipped on re-runs, so delete a PNG to regenerate it.

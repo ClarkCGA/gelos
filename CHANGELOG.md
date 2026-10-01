@@ -14,6 +14,17 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **Per-config figure folders (issue #89).** `run_analysis` now writes experiment figures
+  to `{figures_base_dir}/{data_version}/{config_stem}/` instead of one flat
+  `{figures_base_dir}/{data_version}/` folder, and the config stem is dropped from file
+  names: `{strategy}_{layer}_{transform}_{plot}.png` and
+  `{strategy}_{layer}_{model}_confusion_matrix.png` (new `gelos.analysis.build_figure_prefix`
+  helper; `build_prefix` and all processed-data CSV/NPY names are unchanged). Comparison
+  figures likewise drop the config-stem prefix: `comparisons/{config_stem}/{plot}.png`.
+  Figures from earlier runs are not moved; they will be regenerated once in the new
+  location on the next run and the old flat files can be deleted. Downstream code that
+  globs `figures/{data_version}/{config}_*.png` must update to the new layout.
+
 ## [v0.7.0] - 2026-09-30
 
 - **DINOv3 backbones (issue #16).** New `gelos.backbones.dinov3_backbone` registers

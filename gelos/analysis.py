@@ -51,6 +51,17 @@ def build_prefix(config_stem: str, strategy_key: str, embedding_layer: str) -> s
     return f"{config_stem}_{strategy_key}_{embedding_layer}"
 
 
+def build_figure_prefix(strategy_key: str, embedding_layer: str) -> str:
+    """Build the deterministic file-name prefix for experiment figures.
+
+    This is the single source of truth for the ``{strategy}_{layer}`` convention
+    used for plot and confusion-matrix PNGs. Unlike :func:`build_prefix`, the
+    config stem is omitted because figures are written under a per-config
+    directory (``AnalysisContext.figures_dir``), so it would be redundant.
+    """
+    return f"{strategy_key}_{embedding_layer}"
+
+
 def load_chip_tracker(path: Path) -> pd.DataFrame:
     """Load a chip tracker file as a DataFrame, dispatching on file extension.
 
@@ -192,7 +203,8 @@ def setup_analysis_run(
         raw_data_dir: Root directory for raw data.
         embedding_dir: Root directory for embeddings.
         processed_data_dir: Root directory for processed outputs.
-        figures_base_dir: Root directory for generated figures.
+        figures_base_dir: Root directory for generated figures. Figures for this
+            run land under ``{figures_base_dir}/{data_version}/{config_stem}/``.
 
     Returns:
         :class:`AnalysisContext` with all resolved paths and loaded objects.
@@ -223,7 +235,7 @@ def setup_analysis_run(
     chip_id_column = yaml_config["chip_id_column"]
     chip_gdf = load_chip_tracker(data_root / chip_tracker_file)
     chip_gdf = chip_gdf.set_index(chip_id_column)
-    figures_dir = figures_base_dir / data_version
+    figures_dir = figures_base_dir / data_version / config_stem
     figures_dir.mkdir(exist_ok=True, parents=True)
 
     if not input_dir.exists():
@@ -277,6 +289,11 @@ def run_analysis(
     plots, model results) still skip individually, so a re-entered run only
     computes what is missing. Delete the cached outputs for a full recompute.
 
+    Figures are written to ``{figures_base_dir}/{data_version}/{config_stem}/``
+    as ``{strategy}_{layer}_{transform}_{plot}.png`` and
+    ``{strategy}_{layer}_{model}_confusion_matrix.png`` (see
+    :func:`build_figure_prefix`).
+
     Args:
         yaml_path: Path to the YAML experiment config.
         raw_data_dir: Root directory for raw data.
@@ -311,6 +328,7 @@ def run_analysis(
             slice_args = strategy_cfg["slice_args"]
             strategy_title = strategy_cfg.get("title", strategy_key)
             prefix = build_prefix(ctx.config_stem, strategy_key, embedding_layer)
+            figure_prefix = build_figure_prefix(strategy_key, embedding_layer)
 
             # --- Validate strategy has at least one analysis step ---
             has_transforms = "transforms" in strategy_cfg
@@ -425,7 +443,7 @@ def run_analysis(
                     continue
 
                 data = transform_results[t_type]
-                output_path = ctx.figures_dir / f"{prefix}_{t_type}_{p_type}.png"
+                output_path = ctx.figures_dir / f"{figure_prefix}_{t_type}_{p_type}.png"
                 if output_path.exists():
                     logger.info(
                         f"plot {p_type} for {strategy_key} with transform: {t_type}"
@@ -472,7 +490,7 @@ def run_analysis(
                 # (via _save_results_csv), so the cached result path is known
                 # before running.
                 results_csv = layer_dir / f"{run_name}_{m_type}_results.csv"
-                cm_path = ctx.figures_dir / f"{prefix}_{m_type}_confusion_matrix.png"
+                cm_path = ctx.figures_dir / f"{figure_prefix}_{m_type}_confusion_matrix.png"
                 if results_csv.exists() and cm_path.exists():
                     logger.info(f"model {m_type} results exist at {results_csv} - skipping")
                     continue
