@@ -14,6 +14,24 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **kNN geographic-distance plots (issue #85).** New analysis metric `knn_geo_distance`
+  (`gelos.metrics`) measures how geographically local a model's embedding neighbourhoods
+  are: for each chip and each k it finds the k nearest neighbours in embedding space (the
+  same brute-force Euclidean query as `knn_purity`, now shared via a private helper) and
+  averages two ground-distance measures over them — `gsd_m`, the great-circle (haversine,
+  R = 6 371 008.8 m) distance between chip centres in metres, and `lat_diff_deg`, the
+  absolute latitude difference in decimal degrees. It is class-agnostic (no label needed)
+  and writes `{prefix}_knn_geo_distance.csv` (long-form `k, measure, mean, median, q1, q3,
+  n_samples`) plus `{prefix}_knn_geo_distance_per_query.csv` (`k, query_idx, chip_id,
+  gsd_m, lat_diff_deg`). Chip centres come from the new `gelos.metrics.chip_centers_latlon`
+  (bounds midpoint of the tracker geometry after reprojecting to EPSG:4326, or `lat`/`lon`
+  / `latitude`/`longitude` columns of a CSV tracker). New comparison metric
+  `knn_geo_distance_comparison` joins the per-experiment CSVs, and two new comparison
+  plots — `knn_gsd_plot` (km) and `knn_lat_diff_plot` (degrees) — draw mean distance vs k
+  with one line per experiment (`show_iqr`, `log_x` params) using the fixed #84 layout;
+  both require `metric: knn_geo_distance_comparison` in the YAML. `run_analysis` now
+  passes `chip_gdf` and `chip_indices` to every analysis metric (built-in metrics accept
+  them via `**kwargs`).
 - **Per-config figure folders (issue #89).** `run_analysis` now writes experiment figures
   to `{figures_base_dir}/{data_version}/{config_stem}/` instead of one flat
   `{figures_base_dir}/{data_version}/` folder, and the config stem is dropped from file

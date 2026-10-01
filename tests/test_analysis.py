@@ -5,7 +5,13 @@ import numpy as np
 import pytest
 from shapely.geometry import Point
 
-from gelos.metrics import METRICS, knn_purity, pca_ablation
+from gelos.metrics import (
+    METRICS,
+    chip_centers_latlon,
+    knn_geo_distance,
+    knn_purity,
+    pca_ablation,
+)
 from gelos.models import MODELS, run_knn_cv, run_linear_probe_cv, run_random_forest_cv
 from gelos.plotting import PLOTS
 from gelos.transforms import (
@@ -248,6 +254,8 @@ def test_metrics_registry_keys():
     assert callable(METRICS["pca_ablation"])
     assert "knn_purity" in METRICS
     assert callable(METRICS["knn_purity"])
+    assert "knn_geo_distance" in METRICS
+    assert callable(METRICS["knn_geo_distance"])
 
 
 def test_pca_ablation_output(synthetic_embeddings, tmp_path):
@@ -412,6 +420,226 @@ def test_knn_purity_perfect_clusters(tmp_path):
     for row in result["rows"]:
         if row["class"] == "overall" and row["k"] <= 20:
             assert row["purity"] > 0.95, f"Expected high purity at k={row['k']}"
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Tests: knn_geo_distance metric (issue #85)
+# ---------------------------------------------------------------------------
+
+# Great-circle length of one degree of latitude on the sphere used by the metric.
+_METRES_PER_DEG = 2 * np.pi * 6_371_008.8 / 360
+
+
+def test_knn_geo_distance_output(synthetic_embeddings, mock_chip_gdf, tmp_path):
+    """knn_geo_distance writes aggregate + per-query CSVs with the expected schemas."""
+    import pandas as pd
+
+    embeddings, chip_indices = synthetic_embeddings
+    result = knn_geo_distance(
+        embeddings,
+        output_dir=tmp_path,
+        prefix="test",
+        chip_gdf=mock_chip_gdf,
+        chip_indices=chip_indices,
+    )
+    assert "rows" in result and "k_values" in result
+    assert result["k_values"] == [1, 2, 5, 10, 20, 50]
+
+    df = pd.read_csv(tmp_path / "test_knn_geo_distance.csv")
+    assert set(df.columns) == {"k", "measure", "mean", "median", "q1", "q3", "n_samples"}
+    # 6 default k values × 2 measures
+    assert len(df) == 6 * 2
+    assert set(df["measure"]) == {"gsd_m", "lat_diff_deg"}
+    assert (df[["mean", "median", "q1", "q3"]] >= 0).all().all()
+    assert (df.loc[df["measure"] == "lat_diff_deg", "mean"] <= 180).all()
+    assert (df["n_samples"] == N_SAMPLES).all()
+
+    per_query = pd.read_csv(tmp_path / "test_knn_geo_distance_per_query.csv")
+    assert set(per_query.columns) == {"k", "query_idx", "chip_id", "gsd_m", "lat_diff_deg"}
+    assert len(per_query) == 6 * N_SAMPLES
+    assert (per_query[["gsd_m", "lat_diff_deg"]] >= 0).all().all()
+    gc.collect()
+
+
+def test_knn_geo_distance_known_geometry(tmp_path):
+    """Hand-checked distances: 1-D embeddings fix the neighbour order, chips 1 deg apart."""
+    import pandas as pd
+
+    embeddings = np.array([[0.0], [1.0], [10.0]], dtype=np.float32)
+    chip_gdf = gpd.GeoDataFrame(
+        {"id": [0, 1, 2], "geometry": [Point(0.0, 0.0), Point(0.0, 1.0), Point(0.0, 3.0)]},
+        crs="EPSG:4326",
+    ).set_index("id")
+
+    knn_geo_distance(
+        embeddings,
+        output_dir=tmp_path,
+        prefix="geo",
+        chip_gdf=chip_gdf,
+        chip_indices=[0, 1, 2],
+        k_values=[1],
+    )
+
+    per_query = pd.read_csv(tmp_path / "geo_knn_geo_distance_per_query.csv").sort_values(
+        "query_idx"
+    )
+    # Nearest neighbours in embedding space: 0->1, 1->0, 2->1
+    np.testing.assert_allclose(per_query["lat_diff_deg"].to_numpy(), [1.0, 1.0, 2.0])
+    np.testing.assert_allclose(
+        per_query["gsd_m"].to_numpy(),
+        [_METRES_PER_DEG, _METRES_PER_DEG, 2 * _METRES_PER_DEG],
+        rtol=1e-6,
+    )
+    assert per_query["gsd_m"].iloc[0] == pytest.approx(111195.08, rel=1e-6)
+
+    agg = pd.read_csv(tmp_path / "geo_knn_geo_distance.csv").set_index("measure")
+    assert agg.loc["lat_diff_deg", "mean"] == pytest.approx(4 / 3)
+    assert agg.loc["gsd_m", "mean"] == pytest.approx(4 / 3 * _METRES_PER_DEG, rel=1e-6)
+    gc.collect()
+
+
+def test_knn_geo_distance_requires_coordinates(synthetic_embeddings, mock_chip_gdf, tmp_path):
+    """Missing chip_gdf / chip_indices or a length mismatch raise ValueError."""
+    embeddings, chip_indices = synthetic_embeddings
+    with pytest.raises(ValueError, match="requires chip_gdf"):
+        knn_geo_distance(embeddings, output_dir=tmp_path, prefix="x", chip_indices=chip_indices)
+    with pytest.raises(ValueError, match="requires chip_gdf"):
+        knn_geo_distance(embeddings, output_dir=tmp_path, prefix="x", chip_gdf=mock_chip_gdf)
+    with pytest.raises(ValueError, match="does not match"):
+        knn_geo_distance(
+            embeddings,
+            output_dir=tmp_path,
+            prefix="x",
+            chip_gdf=mock_chip_gdf,
+            chip_indices=chip_indices[:-1],
+        )
+    gc.collect()
+
+
+def test_knn_geo_distance_csv_tracker_latlon_columns(synthetic_embeddings, tmp_path):
+    """A plain DataFrame tracker works via lat/lon columns; without them it raises."""
+    import pandas as pd
+
+    embeddings, chip_indices = synthetic_embeddings
+    tracker = pd.DataFrame(
+        {
+            "id": chip_indices,
+            "lat": [float(i) for i in chip_indices],
+            "lon": [float(i) for i in chip_indices],
+        }
+    ).set_index("id")
+
+    lat, lon = chip_centers_latlon(tracker, chip_indices[:3])
+    np.testing.assert_array_equal(lat, [0.0, 1.0, 2.0])
+    np.testing.assert_array_equal(lon, [0.0, 1.0, 2.0])
+
+    knn_geo_distance(
+        embeddings,
+        output_dir=tmp_path,
+        prefix="csv",
+        chip_gdf=tracker,
+        chip_indices=chip_indices,
+        k_values=[1, 5],
+    )
+    assert (tmp_path / "csv_knn_geo_distance.csv").exists()
+
+    # latitude/longitude spelling is accepted too
+    alt = tracker.rename(columns={"lat": "latitude", "lon": "longitude"})
+    lat_alt, lon_alt = chip_centers_latlon(alt, chip_indices[:3])
+    np.testing.assert_array_equal(lat_alt, lat)
+    np.testing.assert_array_equal(lon_alt, lon)
+
+    no_coords = pd.DataFrame({"id": chip_indices, "lulc": 0}).set_index("id")
+    with pytest.raises(ValueError, match="lat/lon"):
+        chip_centers_latlon(no_coords, chip_indices)
+    with pytest.raises(ValueError, match="lat/lon"):
+        knn_geo_distance(
+            embeddings,
+            output_dir=tmp_path,
+            prefix="bad",
+            chip_gdf=no_coords,
+            chip_indices=chip_indices,
+        )
+    gc.collect()
+
+
+def test_knn_geo_distance_projected_crs(synthetic_embeddings, tmp_path):
+    """A tracker in a projected CRS gives the same results as EPSG:4326."""
+    import pandas as pd
+
+    embeddings, chip_indices = synthetic_embeddings
+    # Keep latitudes within the Web Mercator domain (mock_chip_gdf goes past 85 deg).
+    chip_gdf = gpd.GeoDataFrame(
+        {
+            "id": chip_indices,
+            "geometry": [Point(0.5 * i - 20.0, 0.5 * i - 25.0) for i in chip_indices],
+        },
+        crs="EPSG:4326",
+    ).set_index("id")
+    knn_geo_distance(
+        embeddings,
+        output_dir=tmp_path,
+        prefix="wgs84",
+        chip_gdf=chip_gdf,
+        chip_indices=chip_indices,
+        k_values=[1, 5],
+    )
+    knn_geo_distance(
+        embeddings,
+        output_dir=tmp_path,
+        prefix="merc",
+        chip_gdf=chip_gdf.to_crs(3857),
+        chip_indices=chip_indices,
+        k_values=[1, 5],
+    )
+    a = pd.read_csv(tmp_path / "wgs84_knn_geo_distance.csv")
+    b = pd.read_csv(tmp_path / "merc_knn_geo_distance.csv")
+    np.testing.assert_allclose(a["mean"].to_numpy(), b["mean"].to_numpy(), rtol=1e-6)
+    gc.collect()
+
+
+def test_knn_geo_distance_subsampling(synthetic_embeddings, mock_chip_gdf, tmp_path):
+    """n_subsample limits the number of query rows per k."""
+    import pandas as pd
+
+    embeddings, chip_indices = synthetic_embeddings
+    knn_geo_distance(
+        embeddings,
+        output_dir=tmp_path,
+        prefix="sub",
+        chip_gdf=mock_chip_gdf,
+        chip_indices=chip_indices,
+        n_subsample=30,
+    )
+    per_query = pd.read_csv(tmp_path / "sub_knn_geo_distance_per_query.csv")
+    n_queries = per_query[per_query["k"] == per_query["k"].iloc[0]].shape[0]
+    assert n_queries <= 30
+    assert len(per_query) == 6 * n_queries
+
+    agg = pd.read_csv(tmp_path / "sub_knn_geo_distance.csv")
+    assert (agg["n_samples"] <= 30).all()
+    gc.collect()
+
+
+def test_knn_geo_distance_skips_large_k(mock_chip_gdf, tmp_path):
+    """k values exceeding N-1 are skipped with a warning (same rule as knn_purity)."""
+    import pandas as pd
+
+    rng = np.random.RandomState(0)
+    n = 50
+    embeddings = rng.rand(n, 8).astype(np.float32)
+    chip_indices = list(range(n))
+    knn_geo_distance(
+        embeddings,
+        output_dir=tmp_path,
+        prefix="bigk",
+        chip_gdf=mock_chip_gdf,
+        chip_indices=chip_indices,
+        k_values=[1, 100],
+    )
+    agg = pd.read_csv(tmp_path / "bigk_knn_geo_distance.csv")
+    assert set(agg["k"]) == {1}
     gc.collect()
 
 
@@ -830,6 +1058,34 @@ def test_run_analysis_marker_and_model_skip(
     gc.collect()
 
 
+def test_run_analysis_passes_chip_gdf_to_metrics(
+    tmp_path, synthetic_embeddings, synthetic_labels, monkeypatch
+):
+    """run_analysis forwards chip_gdf/chip_indices so knn_geo_distance can run end to end."""
+    import pandas as pd
+
+    import gelos.analysis as analysis_mod
+
+    embeddings, chip_indices = synthetic_embeddings
+    ctx = _marker_ctx(tmp_path, synthetic_labels)
+    ctx.figures_dir.mkdir(parents=True)
+    strategy = ctx.embedding_extraction_strategies["strategy"]
+    del strategy["models"]
+    strategy["metrics"] = [{"type": "knn_geo_distance", "params": {"k_values": [1, 5]}}]
+    monkeypatch.setattr(analysis_mod, "setup_analysis_run", lambda *a, **k: ctx)
+    monkeypatch.setattr(
+        analysis_mod,
+        "extract_embeddings",
+        lambda directory, slice_args: (embeddings, chip_indices),
+    )
+
+    analysis_mod.run_analysis(tmp_path / "cfg.yaml", tmp_path, tmp_path, tmp_path, tmp_path)
+
+    metric_csv = ctx.output_dir / "layer_-1" / "exptest_strategy_layer_-1_knn_geo_distance.csv"
+    assert metric_csv.exists()
+    df = pd.read_csv(metric_csv)
+    assert set(df["k"]) == {1, 5}
+    assert set(df["measure"]) == {"gsd_m", "lat_diff_deg"}
 # ---------------------------------------------------------------------------
 # Tests: figure layout (issue #89)
 # ---------------------------------------------------------------------------

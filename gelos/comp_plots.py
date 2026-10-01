@@ -306,6 +306,145 @@ def knn_purity_plot(
     _knn_legend_and_save(fig, handles, labels, output_path)
 
 
+def _knn_geo_distance_plot(
+    metric_result: dict,
+    output_path: str | Path | None,
+    experiment_colors: dict[str, str] | None,
+    *,
+    measure: str,
+    scale: float,
+    ylabel: str,
+    title: str,
+    show_iqr: bool = False,
+    log_x: bool = False,
+) -> None:
+    """Single-panel line plot of mean geographic kNN distance vs k, one line per experiment.
+
+    Shared renderer behind :func:`knn_gsd_plot` and :func:`knn_lat_diff_plot`.
+    Selects the rows of ``comparison_df`` whose ``measure`` column equals
+    ``measure``, multiplies the ``mean``/``q1``/``q3`` columns by ``scale`` for
+    display and uses the fixed kNN layout (issue #84).
+    """
+    df = metric_result.get("comparison_df", pd.DataFrame())
+    if df.empty:
+        logger.warning(f"no data for {title} plot, skipping")
+        return
+
+    sub = df[df["measure"] == measure]
+    if sub.empty:
+        logger.warning(f"no '{measure}' rows for {title} plot, skipping")
+        return
+
+    experiments = list(sub["experiment"].unique())
+    colors = _resolve_experiment_colors(experiments, experiment_colors)
+    short_labels = _strip_common_prefix(experiments)
+    markers = ["o", "s", "^", "D", "v", "P", "X", "*"]
+
+    fig, gs = _knn_figure(1, 1, col_width=6.0, row_height=3.5)
+    ax = fig.add_subplot(gs[0, 0])
+
+    for i, exp in enumerate(experiments):
+        s = sub[sub["experiment"] == exp].sort_values("k")
+        if s.empty:
+            continue
+        ax.plot(
+            s["k"],
+            s["mean"] * scale,
+            marker=markers[i % len(markers)],
+            color=colors[exp],
+            label=short_labels[exp],
+        )
+        if show_iqr and {"q1", "q3"} <= set(s.columns):
+            ax.fill_between(
+                s["k"], s["q1"] * scale, s["q3"] * scale, color=colors[exp], alpha=0.15, lw=0
+            )
+
+    ax.set_xlabel("k")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.set_ylim(bottom=0)
+    ax.grid(True, alpha=0.3)
+    if log_x:
+        ax.set_xscale("log")
+
+    handles, labels = ax.get_legend_handles_labels()
+    _knn_legend_and_save(fig, handles, labels, output_path)
+
+
+def knn_gsd_plot(
+    metric_result: dict,
+    output_path: str | Path | None = None,
+    class_labels: dict[str, str] | None = None,
+    experiment_colors: dict[str, str] | None = None,
+    *,
+    show_iqr: bool = False,
+    log_x: bool = False,
+    **kwargs,
+) -> None:
+    """Mean ground surface distance (km) to the k nearest embedding neighbours vs k.
+
+    One line per experiment. Reads the ``gsd_m`` rows of the
+    ``knn_geo_distance_comparison`` output (set ``metric:
+    knn_geo_distance_comparison`` in the comparison YAML).
+
+    Args:
+        metric_result: Output from ``knn_geo_distance_comparison`` metric.
+        output_path: Path to save the figure. Shows interactively if None.
+        class_labels: Unused; accepted for dispatch compatibility.
+        experiment_colors: Optional mapping from experiment label to color.
+        show_iqr: Shade the interquartile band (``q1``–``q3``) under each line.
+        log_x: Use a logarithmic k axis.
+    """
+    _knn_geo_distance_plot(
+        metric_result,
+        output_path,
+        experiment_colors,
+        measure="gsd_m",
+        scale=1e-3,
+        ylabel="Mean distance to k nearest neighbours (km)",
+        title="kNN ground distance",
+        show_iqr=show_iqr,
+        log_x=log_x,
+    )
+
+
+def knn_lat_diff_plot(
+    metric_result: dict,
+    output_path: str | Path | None = None,
+    class_labels: dict[str, str] | None = None,
+    experiment_colors: dict[str, str] | None = None,
+    *,
+    show_iqr: bool = False,
+    log_x: bool = False,
+    **kwargs,
+) -> None:
+    """Mean absolute latitude difference (degrees) to the k nearest embedding neighbours vs k.
+
+    One line per experiment. Reads the ``lat_diff_deg`` rows of the
+    ``knn_geo_distance_comparison`` output (set ``metric:
+    knn_geo_distance_comparison`` in the comparison YAML).
+
+    Args:
+        metric_result: Output from ``knn_geo_distance_comparison`` metric.
+        output_path: Path to save the figure. Shows interactively if None.
+        class_labels: Unused; accepted for dispatch compatibility.
+        experiment_colors: Optional mapping from experiment label to color.
+        show_iqr: Shade the interquartile band (``q1``–``q3``) under each line.
+        log_x: Use a logarithmic k axis.
+    """
+    _knn_geo_distance_plot(
+        metric_result,
+        output_path,
+        experiment_colors,
+        measure="lat_diff_deg",
+        scale=1.0,
+        ylabel="Mean |Δ latitude| to k nearest neighbours (°)",
+        title="kNN latitude difference",
+        show_iqr=show_iqr,
+        log_x=log_x,
+    )
+
+
 def knn_purity_distribution_plot(
     metric_result: dict,
     output_path: str | Path = None,
@@ -939,6 +1078,8 @@ COMP_PLOTS: dict[str, callable] = {
     "pca_ablation_table": pca_ablation_table,
     "distance_matrix": distance_matrix,
     "knn_purity_plot": knn_purity_plot,
+    "knn_gsd_plot": knn_gsd_plot,
+    "knn_lat_diff_plot": knn_lat_diff_plot,
     "knn_purity_distribution_plot": knn_purity_distribution_plot,
     "knn_purity_violin_distribution_plot": knn_purity_violin_distribution_plot,
     "per_class_similarity_distribution_plot": per_class_similarity_distribution_plot,
