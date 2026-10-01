@@ -61,7 +61,9 @@ def setup_comparison(
     Args:
         yaml_path: Path to the comparison YAML config.
         processed_data_dir: Root directory for processed outputs.
-        figures_base_dir: Root directory for generated figures.
+        figures_base_dir: Root directory for generated figures. Comparison
+            figures land under ``{figures_base_dir}/comparisons/{config_stem}/``
+            as ``{plot}.png``.
 
     Returns:
         :class:`ComparisonContext` with resolved paths and parsed experiments.
@@ -215,7 +217,7 @@ def run_comparison(
             )
             continue
 
-        output_path = ctx.figures_dir / f"{ctx.config_stem}_{p_type}.png"
+        output_path = ctx.figures_dir / f"{p_type}.png"
         p_fn = COMP_PLOTS[p_type]
         p_fn(
             metric_results[source_metric],

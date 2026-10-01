@@ -32,6 +32,35 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
   both require `metric: knn_geo_distance_comparison` in the YAML. `run_analysis` now
   passes `chip_gdf` and `chip_indices` to every analysis metric (built-in metrics accept
   them via `**kwargs`).
+- **Per-config figure folders (issue #89).** `run_analysis` now writes experiment figures
+  to `{figures_base_dir}/{data_version}/{config_stem}/` instead of one flat
+  `{figures_base_dir}/{data_version}/` folder, and the config stem is dropped from file
+  names: `{strategy}_{layer}_{transform}_{plot}.png` and
+  `{strategy}_{layer}_{model}_confusion_matrix.png` (new `gelos.analysis.build_figure_prefix`
+  helper; `build_prefix` and all processed-data CSV/NPY names are unchanged). Comparison
+  figures likewise drop the config-stem prefix: `comparisons/{config_stem}/{plot}.png`.
+  Figures from earlier runs are not moved; they will be regenerated once in the new
+  location on the next run and the old flat files can be deleted. Downstream code that
+  globs `figures/{data_version}/{config}_*.png` must update to the new layout.
+- **Prithvi TL backbone option (issue #78).** New wrapper `PrithviTLBackbone`
+  (`gelos/backbones/prithvi_tl_backbone.py`) registers `prithvi_eo_v2_tiny_tl_coords`,
+  `prithvi_eo_v2_100_tl_coords`, `prithvi_eo_v2_300_tl_coords` and
+  `prithvi_eo_v2_600_tl_coords`, exposing Prithvi EO v2's time + location ("TL")
+  checkpoints as a comparison axis against plain Prithvi. The wrapper consumes the
+  existing `batch["timestamps"]` / `batch["location"]` side-channel via
+  `set_batch_timestamps` / `set_batch_location` (so `location` now has a consumer) and
+  forwards them explicitly as `temporal_coords` / `location_coords` to the terratorch TL
+  encoder — terratorch's stock `prithvi_eo_v2_*_tl` names run in gelos but silently drop
+  the TL embeddings, hence the separate `_coords` names (which keep the `prithvi_eo_v2`
+  prefix so Prithvi's pretraining normalization is injected unchanged). Fail-loud
+  contract: a dataset that does not override both `_get_timestamps` and `_get_location`,
+  or a shape mismatch, raises `ValueError` — TL is never silently skipped. Canonical
+  `[year, month, day]` dates are converted to Prithvi's `[year, day_of_year]` by the new
+  pure helper `calendar_to_prithvi_temporal_coords`. Works under `TemporalWrapper`
+  (4D b-major flatten; recommended, matches the plain Prithvi token layout) and on 5D
+  input when `T == model_args.num_frames`. Adds `configs/prithvi_eo_v2_300_tl.yaml` and
+  its no-TL control `configs/prithvi_eo_v2_300.yaml`. Defaults and existing backbones
+  are unchanged.
 
 ## [v0.7.0] - 2026-09-30
 

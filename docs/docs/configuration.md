@@ -188,7 +188,7 @@ with `COASTAL_AEROSOL`) raises an error; override with explicit `means`/`stds` i
 
 | Field | Purpose |
 |-------|---------|
-| `model` | TerraTorch model identifier (e.g., `prithvi_eo_v2_300`, `prithvi_eo_v2_600`, `terramind_v1_base`, `olmoearth_v1_base`, `olmoearth_v1_base_s1s2`, `olmoearth_v1_2_base`) |
+| `model` | TerraTorch model identifier (e.g., `prithvi_eo_v2_300`, `prithvi_eo_v2_600`, `prithvi_eo_v2_300_tl_coords` (also `tiny`/`100`/`600` TL siblings; see **Prithvi TL** below), `terramind_v1_base`, `olmoearth_v1_base`, `olmoearth_v1_base_s1s2`, `olmoearth_v1_2_base`) |
 | `model_args.bands` | Band names as the **model** expects them (may differ from your dataset band names) |
 | `model_args.bands_s1` | S1 band names for OlmoEarth S1+S2 models (e.g., `[VV, VH]`). Omit or set to null to disable S1. |
 | `model_args.mask_nodata` | OlmoEarth only. Default `true`: when `data.init_args.nodata_value` is set, nodata patches are masked out of the encoder (see **Nodata masking** below). Set `false` to feed `set_nodata` values through unmasked |
@@ -328,11 +328,50 @@ Notes and limitations:
   `GELOSDataSet._get_location(index)`, returning a `(2,)` float array
   `[lat, lon]` in decimal degrees (one footprint per chip). The value flows
   into `batch["location"]` `(B, 2)` and is dispatched generically to any
-  backbone exposing `set_batch_location`. **No current backbone consumes it** —
-  the plumbing exists so a future location-aware backbone wrapper (e.g.
-  Prithvi TL, whose encoder accepts `location_coords (B, 2)`) plugs in with no
-  dataset or task changes. When the hook is not overridden the key is absent
-  and behavior is unchanged everywhere.
+  backbone exposing `set_batch_location`. It is consumed by the **Prithvi TL**
+  wrapper (`prithvi_eo_v2_*_tl_coords`, see below), which feeds it to the
+  encoder as `location_coords (B, 2)` and raises if it is missing. When the
+  hook is not overridden the key is absent and behavior is unchanged for every
+  other backbone.
+
+#### Prithvi TL (`prithvi_eo_v2_*_tl_coords`)
+
+Prithvi EO v2 ships "TL" checkpoints whose encoder adds sinusoidal **temporal**
+(`[year, day_of_year]`) and **location** (`[lat, lon]`) embeddings to every patch
+token, giving a comparison axis against plain Prithvi. gelos exposes them through
+a wrapper in `gelos/backbones/prithvi_tl_backbone.py` (registered automatically
+when `gelos.generation` is imported) under four identifiers:
+
+| Model identifier | Checkpoint |
+|---|---|
+| `prithvi_eo_v2_tiny_tl_coords` | `ibm-nasa-geospatial/Prithvi-EO-2.0-tiny-TL` |
+| `prithvi_eo_v2_100_tl_coords` | `ibm-nasa-geospatial/Prithvi-EO-2.0-100M-TL` |
+| `prithvi_eo_v2_300_tl_coords` | `ibm-nasa-geospatial/Prithvi-EO-2.0-300M-TL` |
+| `prithvi_eo_v2_600_tl_coords` | `ibm-nasa-geospatial/Prithvi-EO-2.0-600M-TL` |
+
+Notes:
+
+- **Use the `_coords` names, not terratorch's stock `prithvi_eo_v2_300_tl`.**
+  terratorch's TL encoders only apply the time/location embeddings when
+  `temporal_coords` / `location_coords` are passed explicitly, and the embedding
+  task calls the backbone with the image alone — so the stock names run in gelos
+  but **silently drop the TL signal**. The `_coords` wrapper receives the
+  side-channel and forwards it; the names still start with `prithvi_eo_v2`, so
+  Prithvi's pretraining `means`/`stds` are injected as for plain Prithvi.
+- **Both dataset hooks are required; no silent fallback.** The dataset must
+  override `_get_timestamps` and `_get_location` (see **Timestamps** and
+  **Location** above). If either `batch["timestamps"]` or `batch["location"]` is
+  missing, or shapes do not match the input, generation raises a `ValueError`
+  naming the missing key and hook.
+- **Date conversion.** Canonical `[year, month, day]` timestamps are converted at
+  consumption time to Prithvi's `[year, day_of_year]` (1-based, Gregorian leap
+  years) by `calendar_to_prithvi_temporal_coords`.
+- **`temporal_wrapper: true` recommended.** Under `TemporalWrapper` each
+  timestep is encoded on its own (CLS at index 0), matching the plain Prithvi
+  token layout, so the same `slice_args` apply to both arms of the comparison
+  (`configs/prithvi_eo_v2_300_tl.yaml` vs. `configs/prithvi_eo_v2_300.yaml`).
+  With `temporal_wrapper: false` (joint space-time encoding, 5D input) the
+  number of timesteps must equal `model_args.num_frames`; a mismatch raises.
 
 ### Embedding extraction strategies
 

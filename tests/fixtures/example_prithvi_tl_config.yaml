@@ -1,0 +1,103 @@
+experiment_name: "Prithvi EO V2 300M TL - Example"
+data_version: "v0.50.1"
+chip_tracker: "gelos_chip_tracker.geojson"
+chip_id_column: "id"
+
+seed_everything: 0
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  callbacks: []
+  max_epochs: 0
+
+data:
+  class_path: gelos.gelosdatamodule.GELOSDataModule
+  init_args:
+    # Prithvi TL requires a dataset that overrides BOTH _get_timestamps and
+    # _get_location; TimestampedExampleGELOSDataSet does. Generation raises
+    # otherwise.
+    dataset_class: tests.test_data.TimestampedExampleGELOSDataSet
+    batch_size: 1
+    num_workers: 0
+    bands:
+      S2L2A:
+        - blue
+        - green
+        - red
+        - nir08
+        - swir16
+        - swir22
+    # Explicit stats: the normalization injector matches Prithvi's HLS band
+    # names (BLUE, ...) and would raise on the example dataset's lowercase names.
+    means:
+      S2L2A:
+        blue: 1087.0
+        green: 1342.0
+        red: 1433.0
+        nir08: 2734.0
+        swir16: 1958.0
+        swir22: 1363.0
+    stds:
+      S2L2A:
+        blue: 2248.0
+        green: 2179.0
+        red: 2178.0
+        nir08: 1850.0
+        swir16: 1242.0
+        swir22: 1049.0
+    transform:
+      - class_path: terratorch.datasets.transforms.FlattenTemporalIntoChannels
+      - class_path: albumentations.augmentations.geometric.resize.Resize
+        init_args:
+          height: 96
+          width: 96
+          interpolation: 0 # Nearest Neighbor
+      - class_path: albumentations.pytorch.transforms.ToTensorV2
+      - class_path: terratorch.datasets.transforms.UnflattenTemporalFromChannels
+        init_args:
+          n_timesteps: 4
+model:
+  class_path: terratorch.tasks.EmbeddingGenerationTask
+  title: Prithvi EO V2 300M TL
+  init_args:
+    model: prithvi_eo_v2_300_tl_coords
+    model_args:
+      pretrained: True
+      bands:
+        - BLUE
+        - GREEN
+        - RED
+        - NIR_NARROW
+        - SWIR_1
+        - SWIR_2
+    output_format: parquet
+    embed_file_key: filename
+    layers: [-1]
+    embedding_pooling: null
+    has_cls: True
+    temporal_cfg:
+      temporal_wrapper: True
+      temporal_pooling: keep
+
+embedding_extraction_strategies:
+  all_embeddings:
+    title: "All Embeddings"
+    slice_args:
+      - start: 0
+        stop: null
+        step:
+    transforms:
+      - type: pca
+        params:
+          n_components: 2
+
+style:
+  category_column: "lulc"
+  colors:
+    "1": "#419bdf"    # Water
+    "2": "#397d49"    # Trees
+  labels:
+    "1": "Water"
+    "2": "Trees"
