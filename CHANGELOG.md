@@ -14,6 +14,26 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **Prithvi TL backbone option (issue #78).** New wrapper `PrithviTLBackbone`
+  (`gelos/backbones/prithvi_tl_backbone.py`) registers `prithvi_eo_v2_tiny_tl_coords`,
+  `prithvi_eo_v2_100_tl_coords`, `prithvi_eo_v2_300_tl_coords` and
+  `prithvi_eo_v2_600_tl_coords`, exposing Prithvi EO v2's time + location ("TL")
+  checkpoints as a comparison axis against plain Prithvi. The wrapper consumes the
+  existing `batch["timestamps"]` / `batch["location"]` side-channel via
+  `set_batch_timestamps` / `set_batch_location` (so `location` now has a consumer) and
+  forwards them explicitly as `temporal_coords` / `location_coords` to the terratorch TL
+  encoder — terratorch's stock `prithvi_eo_v2_*_tl` names run in gelos but silently drop
+  the TL embeddings, hence the separate `_coords` names (which keep the `prithvi_eo_v2`
+  prefix so Prithvi's pretraining normalization is injected unchanged). Fail-loud
+  contract: a dataset that does not override both `_get_timestamps` and `_get_location`,
+  or a shape mismatch, raises `ValueError` — TL is never silently skipped. Canonical
+  `[year, month, day]` dates are converted to Prithvi's `[year, day_of_year]` by the new
+  pure helper `calendar_to_prithvi_temporal_coords`. Works under `TemporalWrapper`
+  (4D b-major flatten; recommended, matches the plain Prithvi token layout) and on 5D
+  input when `T == model_args.num_frames`. Adds `configs/prithvi_eo_v2_300_tl.yaml` and
+  its no-TL control `configs/prithvi_eo_v2_300.yaml`. Defaults and existing backbones
+  are unchanged.
+
 ## [v0.7.0] - 2026-09-30
 
 - **DINOv3 backbones (issue #16).** New `gelos.backbones.dinov3_backbone` registers
