@@ -18,11 +18,14 @@ data:
     dataset_class: gelos.gelosdataset.GELOSDataSet
     batch_size: 8
     num_workers: 4
-    # OlmoEarth is Sentinel-2 L2A only here. It requires the full 12-band S2L2A
-    # set; the production GELOS-LC dataset must supply all of these (including
-    # WATER_VAPOR / B09, which ExampleGELOSDataSet does not define). Bands must
-    # be RAW digital numbers (0-10000) -- the backbone applies OlmoEarth's
-    # pretraining normalization internally, hence normalize: false below.
+    # OlmoEarth is Sentinel-2 L2A only here. The full 12-band S2L2A set is listed
+    # (the production GELOS-LC dataset supplies all of these, including
+    # WATER_VAPOR / B09). A v1.2 checkpoint also accepts a SUBSET of these bands:
+    # absent bands are zero-filled after pretraining normalization (matching
+    # v1.2's pretraining band dropout; issue #81) -- keep model_args.bands below
+    # identical to this list. Bands must be RAW digital numbers (0-10000) -- the
+    # backbone applies OlmoEarth's pretraining normalization internally, hence
+    # normalize: false below.
     normalize: false
     bands:
       S2L2A:

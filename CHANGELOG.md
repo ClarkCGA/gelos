@@ -14,6 +14,23 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **OlmoEarth band subsets and v1 deprecation (issue #81).** `OlmoEarthBackbone`
+  (`model_args.bands`) now accepts a subset of the 12 Sentinel-2 L2A bands with a v1.2
+  checkpoint: absent bands are reordered into OlmoEarth's 12-band layout and set to
+  exactly `0` *after* pretraining normalization, per band for the whole sample — the
+  input v1.2's pretraining band dropout produced — so downstream datasets no longer
+  need to synthesize fake bands. Construction emits one `UserWarning` naming the
+  zero-filled bands (a stronger one when more than 3 of 12 are absent; never an error).
+  Unknown band names now raise `ValueError` instead of being ignored, and the input's
+  channel count must equal `len(model_args.bands)`. `build_band_reorder_index` returns
+  `None` for absent bands instead of raising (new `absent_s2_bands` helper). The S2
+  encoder mask's band-set dimension and the checkpoint generation are read from the
+  loaded encoder's `tokenization_config` (1 band set = v1.2, 3 = v1) instead of being
+  hard-coded. **Deprecated:** the OlmoEarth v1 factories `olmoearth_v1_{nano,tiny,base,
+  large}` and `..._s1s2` emit a `DeprecationWarning`; they still work for the full
+  12-band input, but a band subset with a v1 checkpoint raises. `OlmoEarthBackbone`'s
+  default `model_id` is now `allenai/OlmoEarth-v1_2-Base`; the OlmoEarth test fixtures
+  and docs were moved to v1.2.
 - **kNN geographic-distance plots (issue #85).** New analysis metric `knn_geo_distance`
   (`gelos.metrics`) measures how geographically local a model's embedding neighbourhoods
   are: for each chip and each k it finds the k nearest neighbours in embedding space (the

@@ -10,11 +10,14 @@ repo root so the auto-import finds this package.
 
 Registration mechanism (verified against terratorch's ``Registry``): the
 ``@registry.register`` decorator keys the registry on ``constructor.__name__``.
-We therefore register the factory functions named exactly ``olmoearth_v1_nano``,
-``olmoearth_v1_tiny``, ``olmoearth_v1_base``, ``olmoearth_v1_large``, and their
-S1+S2 counterparts ``olmoearth_v1_{nano,tiny,base,large}_s1s2`` into
-``TERRATORCH_BACKBONE_REGISTRY`` (the default source behind ``BACKBONE_REGISTRY``);
-``BACKBONE_REGISTRY.build("olmoearth_v1_base", **model_args)`` then resolves them.
+We therefore register the factory functions named exactly
+``olmoearth_v1_2_{nano,tiny,small,base}`` and their S1+S2 counterparts
+``olmoearth_v1_2_{nano,tiny,small,base}_s1s2`` into ``TERRATORCH_BACKBONE_REGISTRY``
+(the default source behind ``BACKBONE_REGISTRY``);
+``BACKBONE_REGISTRY.build("olmoearth_v1_2_base", **model_args)`` then resolves
+them. The OlmoEarth v1 factories ``olmoearth_v1_{nano,tiny,base,large}`` and
+``..._s1s2`` are still registered but DEPRECATED (they emit a
+``DeprecationWarning``; see issue #81).
 
 The OlmoEarth wrapper depends on the optional, heavy ``olmoearth-pretrain`` package.
 Importing the wrapper module does NOT require it (the dependency is lazy-imported

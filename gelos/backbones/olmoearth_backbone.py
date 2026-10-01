@@ -25,8 +25,27 @@ S1 extension (API NOTE R2):
   S1 band order: ["vv", "vh"] (lowercase, 2 bands, 1 band set).
   S1 mask shape: (B, H, W, T, 1) — 1 band set.
   S1 output key: out["tokens_and_masks"].sentinel1, shape (B, H', W', T, 1, D).
-  S2 mask shape: (B, H, W, T, 3) — 3 band sets (10m/20m/60m).
+  S2 mask shape: (B, H, W, T, S) — S band sets, read from the loaded encoder's
+    ``tokenization_config.get_num_bandsets("sentinel2_l2a")``: 1 for v1.2
+    checkpoints (one 12-band set), 3 for v1 (10m/20m/60m).
   Source: verified against allenai/olmoearth_pretrain datatypes.py and constants.py.
+
+Checkpoint generations (issue #81):
+  OlmoEarth v1.2 is the supported generation. The ``olmoearth_v1_*`` factories
+  (v1 checkpoints) are DEPRECATED: they still work for the full 12-band S2L2A
+  input but emit a ``DeprecationWarning`` and will be removed in a future
+  release. ``OlmoEarthBackbone``'s default ``model_id`` is v1.2 Base.
+
+Band subsets (issue #81, v1.2 only):
+  ``bands`` may be a SUBSET of the 12 S2L2A bands. Bands not listed are
+  zero-filled AFTER pretraining normalization, per band for the whole sample,
+  which is exactly what v1.2's pretraining band dropout fed the encoder
+  (``MultiModalPatchEmbeddings._apply_band_dropout`` multiplies a whole
+  normalized band channel by 0; paper arXiv 2605.20804 §2.2). One warning is
+  emitted at construction naming the zero-filled bands; a stronger warning
+  fires when more than ``_MAX_ABSENT_BANDS_IN_DISTRIBUTION`` bands are absent
+  (pretraining dropped about 10% of bands on average). v1 checkpoints have no
+  band dropout, so a band subset with a v1 checkpoint raises ``ValueError``.
 
 Pretraining normalization (``apply_pretraining_normalization=True``, the default):
   OlmoEarth was pretrained on data normalized by its own data loader (the encoder
@@ -272,38 +291,56 @@ def calendar_to_olmoearth_timestamps(timestamps: torch.Tensor) -> torch.Tensor:
     return torch.stack([day, month - 1, year], dim=-1)
 
 
-def build_band_reorder_index(bands: list[str]) -> list[int]:
-    """Build the channel-index permutation mapping ``bands`` -> OlmoEarth order.
+def build_band_reorder_index(bands: list[str]) -> list[int | None]:
+    """Build the channel-index map from ``bands`` -> OlmoEarth order.
 
     Pure index logic (no model dependency). Given the configured input ``bands``
-    (the channel order of the incoming GELOS tensor), returns a list of indices
-    into that tensor that, when used to gather the channel axis, reorders the
-    channels to :data:`OLMOEARTH_S2_BAND_ORDER`.
+    (the channel order of the incoming GELOS tensor), returns, for each band in
+    :data:`OLMOEARTH_S2_BAND_ORDER`, the position of that band in ``bands`` —
+    or ``None`` when the band is absent (a subset configuration: the backbone
+    zero-fills that channel after pretraining normalization, see
+    :class:`OlmoEarthBackbone`). With the full 12-band set the result is a plain
+    permutation usable directly with ``index_select``.
 
     Args:
         bands: Channel names in the order they appear in the input tensor.
 
     Returns:
         A list of length ``len(OLMOEARTH_S2_BAND_ORDER)`` where element ``i`` is
-        the position in ``bands`` of the ``i``-th OlmoEarth band.
+        the position in ``bands`` of the ``i``-th OlmoEarth band, or ``None``
+        if that band is not configured.
 
     Raises:
-        ValueError: If any band required by OlmoEarth is missing from ``bands``.
+        ValueError: If ``bands`` is empty or names a band that is not one of the
+            12 OlmoEarth S2L2A bands (unknown names are never silently
+            zero-filled: a typo such as ``nir09`` must not drop ``WATER_VAPOR``).
     """
+    unknown = [b for b in bands if b not in OLMOEARTH_S2_BAND_ORDER]
+    if unknown:
+        raise ValueError(
+            f"Unknown OlmoEarth S2L2A band name(s): {unknown}. Configured bands: "
+            f"{list(bands)}. Known bands: {OLMOEARTH_S2_BAND_ORDER}."
+        )
+    if not bands:
+        raise ValueError("OlmoEarth requires at least one S2L2A band; got an empty band list.")
+
     band_to_pos: dict[str, int] = {}
     for pos, name in enumerate(bands):
         # First occurrence wins; duplicates are ignored deterministically.
         band_to_pos.setdefault(name, pos)
 
-    missing = [b for b in OLMOEARTH_S2_BAND_ORDER if b not in band_to_pos]
-    if missing:
-        raise ValueError(
-            "OlmoEarth requires the full 12-band Sentinel-2 L2A set; missing "
-            f"band(s): {missing}. Configured bands: {bands}. Expected order: "
-            f"{OLMOEARTH_S2_BAND_ORDER}."
-        )
+    return [band_to_pos.get(b) for b in OLMOEARTH_S2_BAND_ORDER]
 
-    return [band_to_pos[b] for b in OLMOEARTH_S2_BAND_ORDER]
+
+def absent_s2_bands(reorder_index: Sequence[int | None]) -> list[str]:
+    """Names (in OlmoEarth order) of the bands :func:`build_band_reorder_index` left ``None``."""
+    return [b for b, src in zip(OLMOEARTH_S2_BAND_ORDER, reorder_index) if src is None]
+
+
+# Largest number of absent S2 bands still considered in distribution with v1.2's
+# pretraining band dropout (rate ~U(0, 0.2), i.e. ~10% of 12 bands on average).
+# Above this the constructor emits a stronger warning (it never raises for it).
+_MAX_ABSENT_BANDS_IN_DISTRIBUTION = 3
 
 
 # olmoearth_pretrain.datatypes.MaskValue integer codes, duplicated here so the
@@ -369,8 +406,9 @@ def patch_mask_to_olmoearth_mask(
         patch_size: Encoder patch size; each patch decision is repeated over a
             ``patch_size x patch_size`` pixel block (so the mask is patch-constant
             and the top-left pixel the encoder reads carries the patch value).
-        num_band_sets: ``S`` in the returned ``(B, H, W, T, S)`` mask (3 for S2,
-            1 for S1); every band set shares the patch decision.
+        num_band_sets: ``S`` in the returned ``(B, H, W, T, S)`` mask (the
+            encoder's S2 band-set count — 1 for v1.2, 3 for v1 — or 1 for S1);
+            every band set shares the patch decision.
         missing_value / online_value: Integer codes. Default to
             ``MaskValue.MISSING`` / ``MaskValue.ONLINE_ENCODER`` from
             ``olmoearth_pretrain`` when importable, else the hard-coded copies.
@@ -421,6 +459,21 @@ def masked_mean(
     return total / count.clamp(min=1).unsqueeze(-1), count > 0
 
 
+def _resolve_s2_num_band_sets(inner_encoder: nn.Module, model_id: str) -> int:
+    """Number of Sentinel-2 L2A band sets the loaded OlmoEarth encoder tokenizes.
+
+    Prefers the encoder's own ``tokenization_config.get_num_bandsets("sentinel2_l2a")``
+    (olmoearth_pretrain 0.1.1: 1 for v1.2 checkpoints, 3 for v1). Falls back to
+    parsing ``model_id`` only when the encoder exposes no tokenization config.
+    """
+    tokenization_config = getattr(inner_encoder, "tokenization_config", None)
+    get_num_bandsets = getattr(tokenization_config, "get_num_bandsets", None)
+    if get_num_bandsets is not None:
+        return int(get_num_bandsets("sentinel2_l2a"))
+    # v1.2 (and v1.1) checkpoints use a single 12-band set; v1 uses three.
+    return 1 if ("v1_2" in model_id or "v1_1" in model_id) else 3
+
+
 @contextmanager
 def _attention_mask_enabled(encoder: nn.Module):
     """Make an eval-mode OlmoEarth ``Encoder`` honor its token mask under attention.
@@ -454,6 +507,19 @@ class OlmoEarthBackbone(nn.Module):
     normalization (see below), runs the OlmoEarth encoder, mean-pools the
     token tensor over the spectral-group axis, and returns a single-element list
     ``[tokens]`` (terratorch necks expect a list of layer tensors).
+
+    Band subsets (v1.2 checkpoints only): ``bands`` may list only some of the
+    12 S2L2A bands (``C == len(bands)``; it must match ``data.bands.S2L2A``).
+    Each absent band's channel is set to exactly 0 *after* pretraining
+    normalization, for the whole sample (every pixel and timestep), whether or
+    not ``apply_pretraining_normalization`` is on — the same input v1.2's
+    pretraining band dropout produced, so the encoder infers the missing bands
+    from the present ones. Nodata masking is unaffected (the mask keeps the
+    dataset's channel count). Construction warns once, naming the zero-filled
+    bands, and more strongly when more than three bands are absent (far outside
+    the ~10% pretraining dropout rate). v1 checkpoints (deprecated) have no band
+    dropout, so they raise ``ValueError`` on a subset; the generation is read
+    from the loaded encoder's S2 band-set count (1 = v1.2, 3 = v1).
 
     With ``apply_pretraining_normalization=True`` (default), inputs must be RAW
     sensor scale — S2 L2A digital numbers (0–10000) and S1 linear-power gamma0 —
@@ -509,7 +575,7 @@ class OlmoEarthBackbone(nn.Module):
     def __init__(
         self,
         pretrained: bool = True,
-        model_id: str = "allenai/OlmoEarth-v1-Base",
+        model_id: str = "allenai/OlmoEarth-v1_2-Base",
         bands: list[str] | None = None,
         patch_size: int = 4,
         hidden_dim: int | None = None,
@@ -562,8 +628,16 @@ class OlmoEarthBackbone(nn.Module):
         self._batch_nodata_mask: dict[str, torch.Tensor] | torch.Tensor | None = None
 
         # Precompute and validate the band-reorder map eagerly so misconfigured
-        # bands fail at construction time, not mid-forward.
+        # bands (unknown names) fail at construction time, not mid-forward.
+        # Absent bands are ``None`` here; they are zero-filled in forward_features
+        # (v1.2 only — the v1 check below needs the loaded encoder).
         self.reorder_index = build_band_reorder_index(self.bands)
+        self.absent_bands: list[str] = absent_s2_bands(self.reorder_index)
+        # Gather/scatter indices for the subset path: present source channels
+        # of the input tensor and their target slots in the 12-band layout.
+        self._present_source_index = [s for s in self.reorder_index if s is not None]
+        self._present_target_index = [i for i, s in enumerate(self.reorder_index) if s is not None]
+        self._absent_target_index = [i for i, s in enumerate(self.reorder_index) if s is None]
 
         self.bands_s1 = list(bands_s1) if bands_s1 else None
         self.warn_missing_s1 = warn_missing_s1
@@ -611,6 +685,45 @@ class OlmoEarthBackbone(nn.Module):
             "embedding_dim",
             getattr(inner_enc, "embed_dim", fallback_dim),
         )
+
+        # S2 band-set count of the loaded checkpoint: 1 for v1.2 (one 12-band
+        # set, pretrained with band dropout), 3 for v1 (10m/20m/60m, no band
+        # dropout). Drives the S2 mask's last dim and the band-subset guard.
+        self.s2_num_band_sets = _resolve_s2_num_band_sets(inner_enc, model_id_clean)
+
+        if self.absent_bands:
+            if self.s2_num_band_sets != 1:
+                raise ValueError(
+                    f"OlmoEarth checkpoint {model_id!r} tokenizes Sentinel-2 L2A as "
+                    f"{self.s2_num_band_sets} band sets (a deprecated v1 checkpoint) and "
+                    "was not pretrained with band dropout, so a band subset is not "
+                    f"supported: absent band(s) {self.absent_bands}. Supply all 12 "
+                    f"bands {OLMOEARTH_S2_BAND_ORDER} or use a v1.2 checkpoint "
+                    "(e.g. 'allenai/OlmoEarth-v1_2-Base'), which zero-fills absent bands."
+                )
+            n_absent, n_total = len(self.absent_bands), len(OLMOEARTH_S2_BAND_ORDER)
+            if n_absent > _MAX_ABSENT_BANDS_IN_DISTRIBUTION:
+                warnings.warn(
+                    f"OlmoEarthBackbone: {n_absent} of {n_total} Sentinel-2 L2A bands are "
+                    f"absent from model_args.bands and will be zero-filled after "
+                    f"pretraining normalization: {self.absent_bands}. This is FAR "
+                    "OUTSIDE OlmoEarth v1.2's pretraining band-dropout regime (about "
+                    f"10% of bands, at most {_MAX_ABSENT_BANDS_IN_DISTRIBUTION} absent "
+                    "is in distribution); expect degraded embeddings. Configured "
+                    f"bands: {self.bands}.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                warnings.warn(
+                    f"OlmoEarthBackbone: Sentinel-2 L2A band(s) {self.absent_bands} are "
+                    "absent from model_args.bands and will be zero-filled after "
+                    "pretraining normalization (matching OlmoEarth v1.2's pretraining "
+                    f"band dropout; {n_total - n_absent} of {n_total} bands present). "
+                    f"Configured bands: {self.bands}.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
     def set_batch_timestamps(self, timestamps: torch.Tensor | None) -> None:
         """Stash the current batch's per-timestep timestamps for ``forward_features``.
@@ -737,9 +850,25 @@ class OlmoEarthBackbone(nn.Module):
                 f"Spatial dims (H={h}, W={w}) must be divisible by patch_size={self.patch_size}."
             )
 
-        # 1. Reorder S2 channels to OlmoEarth band order.
-        idx_s2 = torch.as_tensor(self.reorder_index, device=x_s2.device, dtype=torch.long)
-        x_s2 = x_s2.index_select(dim=1, index=idx_s2)  # (B, 12, T, H, W)
+        if c != len(self.bands):
+            raise ValueError(
+                f"OlmoEarthBackbone: input has {c} S2L2A channels but model_args.bands "
+                f"lists {len(self.bands)} ({self.bands}); data.bands.S2L2A and "
+                "model_args.bands must match."
+            )
+
+        # 1. Reorder S2 channels to OlmoEarth band order. With the full 12-band
+        # set this is a plain gather (unchanged path); with a subset, present
+        # channels are scattered into a zero 12-channel tensor and the absent
+        # slots are re-zeroed after normalization below.
+        n_oe = len(OLMOEARTH_S2_BAND_ORDER)
+        if self.absent_bands:
+            x_full = x_s2.new_zeros((b, n_oe, t, h, w))
+            x_full[:, self._present_target_index] = x_s2[:, self._present_source_index]
+            x_s2 = x_full  # (B, 12, T, H, W)
+        else:
+            idx_s2 = torch.as_tensor(self.reorder_index, device=x_s2.device, dtype=torch.long)
+            x_s2 = x_s2.index_select(dim=1, index=idx_s2)  # (B, 12, T, H, W)
 
         # 2. channels-first -> channels-last: (B, C, T, H, W) -> (B, H, W, T, C)
         x_s2 = x_s2.permute(0, 3, 4, 2, 1).contiguous()  # (B, H, W, T, 12)
@@ -748,6 +877,12 @@ class OlmoEarthBackbone(nn.Module):
         # min-max over mean±2σ, replicating olmoearth_pretrain's Normalizer.
         if self.apply_pretraining_normalization:
             x_s2 = minmax_normalize(x_s2, self._s2_norm_means, self._s2_norm_stds)
+
+        # 2c. Zero-fill absent bands AFTER normalization (raw 0 would normalize
+        # to a non-zero value): exactly what v1.2's pretraining band dropout fed
+        # the encoder — the whole band channel, every pixel and timestep, is 0.
+        if self.absent_bands:
+            x_s2[..., self._absent_target_index] = 0.0
 
         # 3. Per-timestep timestamps (real or dummy fallback). The stash is
         # canonical [year, month, day]; convert to OlmoEarth's
@@ -838,9 +973,12 @@ class OlmoEarthBackbone(nn.Module):
                 missing_s1[no_valid] = False
 
         # 5c. Broadcast patch decisions to OlmoEarth's pixel-level int masks:
-        # S2 (B, H, W, T, 3) — 3 band sets (10m/20m/60m); S1 (B, H, W, T, 1).
+        # S2 (B, H, W, T, S) with S = the encoder's S2 band-set count (1 for
+        # v1.2, 3 for v1: 10m/20m/60m); S1 (B, H, W, T, 1).
         missing_code, online_code = MaskValue.MISSING.value, MaskValue.ONLINE_ENCODER.value
-        sentinel2_mask = patch_mask_to_olmoearth_mask(missing_s2, p, 3, missing_code, online_code)
+        sentinel2_mask = patch_mask_to_olmoearth_mask(
+            missing_s2, p, self.s2_num_band_sets, missing_code, online_code
+        )
         if sentinel1_tensor is not None:
             sentinel1_mask = patch_mask_to_olmoearth_mask(
                 missing_s1, p, 1, missing_code, online_code
@@ -872,9 +1010,10 @@ class OlmoEarthBackbone(nn.Module):
                 output_dict = inner_encoder(sample, fast_pass=False, patch_size=p)
         tokens_and_masks = output_dict["tokens_and_masks"]
 
-        # 8. Pool S2 tokens over band-sets: (B, H', W', T, 3, D) -> (B, H', W', T, D).
-        # All band sets share the patch decision, so a plain mean is exact.
-        s2_tokens = tokens_and_masks.sentinel2_l2a  # (B, H', W', T, 3, D)
+        # 8. Pool S2 tokens over band-sets: (B, H', W', T, S, D) -> (B, H', W', T, D)
+        # (S = 1 for v1.2, so the mean is the identity; 3 for v1). All band sets
+        # share the patch decision, so a plain mean is exact.
+        s2_tokens = tokens_and_masks.sentinel2_l2a  # (B, H', W', T, S, D)
         pooled = s2_tokens.mean(dim=4)  # (B, H', W', T, D)
         valid = ~missing_s2  # (B, H', W', T)
 
@@ -942,6 +1081,21 @@ class OlmoEarthBackbone(nn.Module):
         return self.forward_features(x, **kwargs)
 
 
+def _warn_v1_deprecated(factory_name: str) -> None:
+    """Emit the OlmoEarth v1 factory deprecation warning (issue #81)."""
+    replacement = factory_name.replace("olmoearth_v1_", "olmoearth_v1_2_").replace(
+        "_large", "_base"
+    )
+    warnings.warn(
+        f"{factory_name} (OlmoEarth v1) is deprecated and will be removed in a future "
+        f"GELOS release; use {replacement} (OlmoEarth v1.2) instead. v1 checkpoints "
+        "still require the full 12-band S2L2A input (band subsets are zero-filled "
+        "only for v1.2).",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
 def olmoearth_v1_nano(
     pretrained: bool = True,
     model_id: str = "allenai/OlmoEarth-v1-Nano",
@@ -951,7 +1105,12 @@ def olmoearth_v1_nano(
     hidden_dim: int | None = 128,
     **kwargs,
 ) -> OlmoEarthBackbone:
-    """Terratorch backbone factory for the OlmoEarth Nano checkpoint (D=128).
+    """Terratorch backbone factory for the OlmoEarth Nano checkpoint (D=128). DEPRECATED.
+
+    .. deprecated::
+        OlmoEarth v1 checkpoints are deprecated in GELOS; use the v1.2 factory
+        ``olmoearth_v1_2_nano`` instead. Emits a ``DeprecationWarning`` and still
+        requires the full 12-band S2L2A input (no band-subset zero-fill).
 
     Registered under its own name (``olmoearth_v1_nano``) in
     ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_nano",
@@ -962,6 +1121,7 @@ def olmoearth_v1_nano(
     normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
     loader did. Configure the datamodule with ``normalize: false``.
     """
+    _warn_v1_deprecated("olmoearth_v1_nano")
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
@@ -982,7 +1142,12 @@ def olmoearth_v1_tiny(
     hidden_dim: int | None = 192,
     **kwargs,
 ) -> OlmoEarthBackbone:
-    """Terratorch backbone factory for the OlmoEarth Tiny checkpoint (D=192).
+    """Terratorch backbone factory for the OlmoEarth Tiny checkpoint (D=192). DEPRECATED.
+
+    .. deprecated::
+        OlmoEarth v1 checkpoints are deprecated in GELOS; use the v1.2 factory
+        ``olmoearth_v1_2_tiny`` instead. Emits a ``DeprecationWarning`` and still
+        requires the full 12-band S2L2A input (no band-subset zero-fill).
 
     Registered under its own name (``olmoearth_v1_tiny``) in
     ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_tiny",
@@ -993,6 +1158,7 @@ def olmoearth_v1_tiny(
     normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
     loader did. Configure the datamodule with ``normalize: false``.
     """
+    _warn_v1_deprecated("olmoearth_v1_tiny")
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
@@ -1013,7 +1179,12 @@ def olmoearth_v1_base(
     hidden_dim: int | None = 768,
     **kwargs,
 ) -> OlmoEarthBackbone:
-    """Terratorch backbone factory for the OlmoEarth Base checkpoint (D=768).
+    """Terratorch backbone factory for the OlmoEarth Base checkpoint (D=768). DEPRECATED.
+
+    .. deprecated::
+        OlmoEarth v1 checkpoints are deprecated in GELOS; use the v1.2 factory
+        ``olmoearth_v1_2_base`` instead. Emits a ``DeprecationWarning`` and still
+        requires the full 12-band S2L2A input (no band-subset zero-fill).
 
     Registered under its own name (``olmoearth_v1_base``) in
     ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_base",
@@ -1024,6 +1195,7 @@ def olmoearth_v1_base(
     normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
     loader did. Configure the datamodule with ``normalize: false``.
     """
+    _warn_v1_deprecated("olmoearth_v1_base")
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
@@ -1044,7 +1216,12 @@ def olmoearth_v1_large(
     hidden_dim: int | None = 1024,
     **kwargs,
 ) -> OlmoEarthBackbone:
-    """Terratorch backbone factory for the OlmoEarth Large checkpoint (D=1024).
+    """Terratorch backbone factory for the OlmoEarth Large checkpoint (D=1024). DEPRECATED.
+
+    .. deprecated::
+        OlmoEarth v1 checkpoints are deprecated in GELOS; use the v1.2 factory
+        ``olmoearth_v1_2_base`` instead. Emits a ``DeprecationWarning`` and still
+        requires the full 12-band S2L2A input (no band-subset zero-fill).
 
     Registered under its own name (``olmoearth_v1_large``) in
     ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_large",
@@ -1055,6 +1232,7 @@ def olmoearth_v1_large(
     normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
     loader did. Configure the datamodule with ``normalize: false``.
     """
+    _warn_v1_deprecated("olmoearth_v1_large")
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
@@ -1076,7 +1254,12 @@ def olmoearth_v1_nano_s1s2(
     hidden_dim: int | None = 128,
     **kwargs,
 ) -> OlmoEarthBackbone:
-    """Terratorch backbone factory for OlmoEarth Nano with S2+S1 combined input (D=128).
+    """Terratorch backbone factory for OlmoEarth Nano with S2+S1 combined input (D=128). DEPRECATED.
+
+    .. deprecated::
+        OlmoEarth v1 checkpoints are deprecated in GELOS; use the v1.2 factory
+        ``olmoearth_v1_2_nano_s1s2`` instead. Emits a ``DeprecationWarning`` and still
+        requires the full 12-band S2L2A input (no band-subset zero-fill).
 
     Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
     Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_nano``.
@@ -1089,6 +1272,7 @@ def olmoearth_v1_nano_s1s2(
     ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
     double-transformed.
     """
+    _warn_v1_deprecated("olmoearth_v1_nano_s1s2")
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
@@ -1111,7 +1295,12 @@ def olmoearth_v1_tiny_s1s2(
     hidden_dim: int | None = 192,
     **kwargs,
 ) -> OlmoEarthBackbone:
-    """Terratorch backbone factory for OlmoEarth Tiny with S2+S1 combined input (D=192).
+    """Terratorch backbone factory for OlmoEarth Tiny with S2+S1 combined input (D=192). DEPRECATED.
+
+    .. deprecated::
+        OlmoEarth v1 checkpoints are deprecated in GELOS; use the v1.2 factory
+        ``olmoearth_v1_2_tiny_s1s2`` instead. Emits a ``DeprecationWarning`` and still
+        requires the full 12-band S2L2A input (no band-subset zero-fill).
 
     Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
     Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_tiny``.
@@ -1124,6 +1313,7 @@ def olmoearth_v1_tiny_s1s2(
     ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
     double-transformed.
     """
+    _warn_v1_deprecated("olmoearth_v1_tiny_s1s2")
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
@@ -1146,7 +1336,12 @@ def olmoearth_v1_base_s1s2(
     hidden_dim: int | None = 768,
     **kwargs,
 ) -> OlmoEarthBackbone:
-    """Terratorch backbone factory for OlmoEarth Base with S2+S1 combined input (D=768).
+    """Terratorch backbone factory for OlmoEarth Base with S2+S1 combined input (D=768). DEPRECATED.
+
+    .. deprecated::
+        OlmoEarth v1 checkpoints are deprecated in GELOS; use the v1.2 factory
+        ``olmoearth_v1_2_base_s1s2`` instead. Emits a ``DeprecationWarning`` and still
+        requires the full 12-band S2L2A input (no band-subset zero-fill).
 
     Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
     Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_base``.
@@ -1159,6 +1354,7 @@ def olmoearth_v1_base_s1s2(
     ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
     double-transformed.
     """
+    _warn_v1_deprecated("olmoearth_v1_base_s1s2")
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
@@ -1181,7 +1377,12 @@ def olmoearth_v1_large_s1s2(
     hidden_dim: int | None = 1024,
     **kwargs,
 ) -> OlmoEarthBackbone:
-    """Terratorch backbone factory for OlmoEarth Large with S2+S1 combined input (D=1024).
+    """Terratorch backbone factory for OlmoEarth Large with S2+S1 combined input (D=1024). DEPRECATED.
+
+    .. deprecated::
+        OlmoEarth v1 checkpoints are deprecated in GELOS; use the v1.2 factory
+        ``olmoearth_v1_2_base_s1s2`` instead. Emits a ``DeprecationWarning`` and still
+        requires the full 12-band S2L2A input (no band-subset zero-fill).
 
     Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
     Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_large``.
@@ -1194,6 +1395,7 @@ def olmoearth_v1_large_s1s2(
     ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
     double-transformed.
     """
+    _warn_v1_deprecated("olmoearth_v1_large_s1s2")
     return OlmoEarthBackbone(
         pretrained=pretrained,
         model_id=model_id,
@@ -1496,14 +1698,14 @@ try:
     ):
         _REG.register(_f)
     _logger.info(
-        "Registered OlmoEarth backbones: 'olmoearth_v1_nano', "
-        "'olmoearth_v1_tiny', 'olmoearth_v1_base', 'olmoearth_v1_large', "
-        "'olmoearth_v1_nano_s1s2', 'olmoearth_v1_tiny_s1s2', "
-        "'olmoearth_v1_base_s1s2', 'olmoearth_v1_large_s1s2', "
-        "'olmoearth_v1_2_nano', 'olmoearth_v1_2_tiny', "
+        "Registered OlmoEarth backbones: 'olmoearth_v1_2_nano', 'olmoearth_v1_2_tiny', "
         "'olmoearth_v1_2_small', 'olmoearth_v1_2_base', "
         "'olmoearth_v1_2_nano_s1s2', 'olmoearth_v1_2_tiny_s1s2', "
-        "'olmoearth_v1_2_small_s1s2', 'olmoearth_v1_2_base_s1s2'."
+        "'olmoearth_v1_2_small_s1s2', 'olmoearth_v1_2_base_s1s2'; "
+        "DEPRECATED (v1, still registered): 'olmoearth_v1_nano', "
+        "'olmoearth_v1_tiny', 'olmoearth_v1_base', 'olmoearth_v1_large', "
+        "'olmoearth_v1_nano_s1s2', 'olmoearth_v1_tiny_s1s2', "
+        "'olmoearth_v1_base_s1s2', 'olmoearth_v1_large_s1s2'."
     )
 except Exception as _exc:
     import traceback as _tb
