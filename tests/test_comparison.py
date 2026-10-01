@@ -7,6 +7,7 @@ import pytest
 from gelos.comp_metrics import (
     COMP_METRICS,
     cosine_distance,
+    knn_geo_distance_comparison,
     knn_purity_comparison,
     knn_purity_per_query_comparison,
     pca_ablation_comparison,
@@ -16,6 +17,8 @@ from gelos.comp_metrics import (
 from gelos.comp_plots import (
     COMP_PLOTS,
     distance_matrix,
+    knn_gsd_plot,
+    knn_lat_diff_plot,
     knn_purity_distribution_plot,
     knn_purity_plot,
     knn_purity_violin_distribution_plot,
@@ -55,6 +58,7 @@ def test_comp_metrics_registry_keys():
         "wasserstein_distance",
         "knn_purity_comparison",
         "knn_purity_per_query_comparison",
+        "knn_geo_distance_comparison",
         "per_chip_similarity_to_control",
     }
     assert expected <= set(COMP_METRICS.keys())
@@ -68,6 +72,8 @@ def test_comp_plots_registry_keys():
         "pca_ablation_table",
         "distance_matrix",
         "knn_purity_plot",
+        "knn_gsd_plot",
+        "knn_lat_diff_plot",
         "knn_purity_distribution_plot",
         "knn_purity_violin_distribution_plot",
         "per_class_similarity_distribution_plot",
@@ -296,6 +302,156 @@ def test_knn_purity_per_query_comparison(tmp_path):
     gc.collect()
 
 
+# ---------------------------------------------------------------------------
+# Tests: kNN geographic distance comparison + plots (issue #85)
+# ---------------------------------------------------------------------------
+
+
+def _make_geo_distance_df(experiments, ks=(1, 5)):
+    """Build an aggregated knn_geo_distance_comparison df (both measures) for any experiments."""
+    rows = []
+    for e_idx, exp in enumerate(experiments):
+        for k in ks:
+            for measure, base in (("gsd_m", 50_000.0), ("lat_diff_deg", 0.5)):
+                mean = base * (1 + 0.1 * e_idx + 0.05 * k)
+                rows.append(
+                    {
+                        "k": k,
+                        "measure": measure,
+                        "mean": mean,
+                        "median": mean * 0.9,
+                        "q1": mean * 0.5,
+                        "q3": mean * 1.5,
+                        "n_samples": 100,
+                        "experiment": exp,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def test_knn_geo_distance_comparison(tmp_path):
+    """knn_geo_distance_comparison merges per-experiment CSVs and tags the experiment."""
+    exp_dir = tmp_path / "v3" / "config_a" / "layer_11"
+    exp_dir.mkdir(parents=True)
+    df_a = _make_geo_distance_df(["unused"]).drop(columns="experiment")
+    df_a.to_csv(exp_dir / "config_a_cls_layer_11_knn_geo_distance.csv", index=False)
+
+    experiments = [
+        ComparisonExperiment(
+            data_version="v3", config="config_a", strategy="cls", layer="layer_11", label="Exp A"
+        ),
+        ComparisonExperiment(
+            data_version="v3", config="config_b", strategy="cls", layer="layer_11", label="Exp B"
+        ),  # no CSV on disk -> skipped with a warning
+    ]
+
+    output_dir = tmp_path / "comparisons"
+    output_dir.mkdir()
+
+    result = knn_geo_distance_comparison(
+        [(exp.label, None) for exp in experiments],
+        processed_data_dir=tmp_path,
+        output_dir=output_dir,
+        prefix="test",
+        experiments=experiments,
+    )
+    merged = result["comparison_df"]
+    assert not merged.empty
+    assert set(merged["experiment"]) == {"Exp A"}
+    assert {"k", "measure", "mean", "median", "q1", "q3", "n_samples"} <= set(merged.columns)
+    assert len(merged) == len(df_a)
+
+    csv_files = list(output_dir.glob("*_knn_geo_distance_comparison.csv"))
+    assert len(csv_files) == 1
+    gc.collect()
+
+
+def test_knn_geo_distance_comparison_no_data(tmp_path):
+    """No per-experiment CSVs -> empty comparison_df, nothing written."""
+    experiments = [
+        ComparisonExperiment(
+            data_version="v3", config="config_a", strategy="cls", layer="layer_11", label="Exp A"
+        ),
+    ]
+    result = knn_geo_distance_comparison(
+        [("Exp A", None)],
+        processed_data_dir=tmp_path,
+        output_dir=tmp_path,
+        prefix="test",
+        experiments=experiments,
+    )
+    assert result["comparison_df"].empty
+    assert not list(tmp_path.glob("*_knn_geo_distance_comparison.csv"))
+    gc.collect()
+
+
+@pytest.mark.parametrize("plot_fn", [knn_gsd_plot, knn_lat_diff_plot])
+def test_knn_geo_distance_plot_output(plot_fn, tmp_path):
+    """Both geo-distance plots write a PNG, with and without the IQR band / log-x."""
+    df = _make_geo_distance_df(["A", "B"])
+    plain = tmp_path / f"{plot_fn.__name__}.png"
+    plot_fn({"comparison_df": df}, output_path=plain)
+    assert plain.exists()
+
+    styled = tmp_path / f"{plot_fn.__name__}_iqr_log.png"
+    plot_fn({"comparison_df": df}, output_path=styled, show_iqr=True, log_x=True)
+    assert styled.exists()
+    gc.collect()
+
+
+@pytest.mark.parametrize("plot_fn", [knn_gsd_plot, knn_lat_diff_plot])
+def test_knn_geo_distance_plot_empty_df(plot_fn, tmp_path):
+    """Empty comparison_df returns early without writing a file."""
+    output_path = tmp_path / f"{plot_fn.__name__}_empty.png"
+    plot_fn({"comparison_df": pd.DataFrame()}, output_path=output_path)
+    assert not output_path.exists()
+    gc.collect()
+
+
+def test_knn_geo_distance_plot_missing_measure(tmp_path):
+    """A df with only gsd_m rows -> knn_lat_diff_plot writes nothing, knn_gsd_plot does."""
+    df = _make_geo_distance_df(["A", "B"])
+    gsd_only = df[df["measure"] == "gsd_m"]
+
+    lat_path = tmp_path / "lat_diff_missing.png"
+    knn_lat_diff_plot({"comparison_df": gsd_only}, output_path=lat_path)
+    assert not lat_path.exists()
+
+    gsd_path = tmp_path / "gsd_present.png"
+    knn_gsd_plot({"comparison_df": gsd_only}, output_path=gsd_path)
+    assert gsd_path.exists()
+    gc.collect()
+
+
+def test_knn_geo_distance_plot_scales_and_single_axis(tmp_path, monkeypatch):
+    """gsd plot shows km (mean/1000), lat plot shows degrees; both are single-panel."""
+    from gelos import comp_plots
+
+    figs = []
+    monkeypatch.setattr(comp_plots.plt, "close", lambda fig, *a, **k: figs.append(fig))
+    try:
+        df = _make_geo_distance_df(["A"], ks=(1, 5))
+        knn_gsd_plot({"comparison_df": df}, output_path=tmp_path / "gsd.png")
+        knn_lat_diff_plot({"comparison_df": df}, output_path=tmp_path / "lat.png")
+
+        gsd_fig, lat_fig = figs
+        assert len(gsd_fig.axes) == 1 and len(lat_fig.axes) == 1
+
+        gsd_line = gsd_fig.axes[0].get_lines()[0]
+        expected_km = df[df["measure"] == "gsd_m"].sort_values("k")["mean"].to_numpy() / 1000
+        np.testing.assert_allclose(gsd_line.get_ydata(), expected_km)
+
+        lat_line = lat_fig.axes[0].get_lines()[0]
+        expected_deg = df[df["measure"] == "lat_diff_deg"].sort_values("k")["mean"].to_numpy()
+        np.testing.assert_allclose(lat_line.get_ydata(), expected_deg)
+    finally:
+        monkeypatch.undo()
+        import matplotlib.pyplot as plt
+
+        plt.close("all")
+        gc.collect()
+
+
 def test_knn_purity_distribution_plot_output(tmp_path):
     """knn_purity_distribution_plot creates a PNG file from per-query data."""
     rng = np.random.RandomState(0)
@@ -512,10 +668,17 @@ def _make_purity_df(experiments, ks=(1, 5)):
     return pd.DataFrame(rows)
 
 
-_KNN_PLOT_CASES = [
+# Facet-grid plots (one subplot per class); these also take the shared-axes test.
+_KNN_FACET_PLOT_CASES = [
     (knn_purity_plot, _make_purity_df),
     (knn_purity_distribution_plot, _make_per_query_df),
     (knn_purity_violin_distribution_plot, _make_per_query_df),
+]
+
+# Every fixed-layout kNN plot, including the single-panel geo-distance plots (issue #85).
+_KNN_PLOT_CASES = _KNN_FACET_PLOT_CASES + [
+    (knn_gsd_plot, _make_geo_distance_df),
+    (knn_lat_diff_plot, _make_geo_distance_df),
 ]
 
 # 60-char names starting with different letters: _strip_common_prefix strips
@@ -591,7 +754,7 @@ def test_knn_plot_legend_inside_figure(plot_fn, make_df, tmp_path, monkeypatch):
         _release_knn_figures(monkeypatch)
 
 
-@pytest.mark.parametrize(("plot_fn", "make_df"), _KNN_PLOT_CASES)
+@pytest.mark.parametrize(("plot_fn", "make_df"), _KNN_FACET_PLOT_CASES)
 def test_knn_plot_shared_axes(plot_fn, make_df, tmp_path, monkeypatch):
     """Facets share both x and y axes."""
     figs = _capture_knn_figures(monkeypatch)

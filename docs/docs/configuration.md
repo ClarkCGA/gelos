@@ -126,6 +126,13 @@ embedding_extraction_strategies:
         transform: raw
         params:
           n_neighbors: 5
+    # Available metrics: pca_ablation, knn_purity, knn_geo_distance
+    # Metrics run on the raw embeddings and write one CSV per metric that the
+    # comparison stage joins across experiments.
+    metrics:
+      - type: knn_geo_distance
+        params:
+          k_values: [1, 5, 10, 50]
 
 # --- Style ---
 # Maps category values to colors and labels for plotting.
@@ -336,6 +343,7 @@ Each key under `embedding_extraction_strategies` is a **user-defined name** that
 - **`transforms`**: Optional list of transforms to run on extracted embeddings
 - **`plots`**: Optional list of plots to generate
 - **`models`**: Optional list of classification models to run
+- **`metrics`**: Optional list of analysis metrics to compute on the raw embeddings (each writes a CSV consumed by the comparison stage)
 
 Available **transforms**:
 
@@ -359,6 +367,15 @@ Available **models**:
 | `linear_probe` | Logistic regression with stratified k-fold CV | `max_iter` (default 1000), `n_splits` (default 5) |
 | `random_forest` | Random forest with repeated stratified k-fold CV | `n_estimators` (default 100), `n_splits` (default 5), `n_repeats` (default 3) |
 
+Available **metrics** (always computed on the raw embeddings; outputs are cached as
+`{prefix}_{metric}.csv` under the processed layer directory):
+
+| Type | Description | Key params |
+|------|-------------|------------|
+| `pca_ablation` | Number of PCA components needed to reach each cumulative-variance threshold | `variance_thresholds` (default `[0.8, 0.85, 0.9, 0.95, 0.99]`) |
+| `knn_purity` | Fraction of each chip's k nearest embedding neighbours sharing its class, overall and per class. Requires class labels (`style.category_column`) | `k_values` (default `[1, 2, 5, 10, 20, 50]`), `n_subsample` (stratified query subsample) |
+| `knn_geo_distance` | Mean geographic distance between each chip and its k nearest embedding neighbours, aggregated over all chips (class-agnostic — works without chip-level labels). Two measures per k: `gsd_m`, the great-circle (haversine) distance between chip centres in metres, and `lat_diff_deg`, the absolute latitude difference in degrees. Needs chip coordinates: the geometry of a `.geojson` tracker (reprojected to EPSG:4326, centre = bounds midpoint) or `lat`/`lon` (or `latitude`/`longitude`) columns in a `.csv` tracker. Writes `{prefix}_knn_geo_distance.csv` (`k, measure, mean, median, q1, q3, n_samples`) and `{prefix}_knn_geo_distance_per_query.csv` (`k, query_idx, chip_id, gsd_m, lat_diff_deg`) | `k_values` (default `[1, 2, 5, 10, 20, 50]`), `n_subsample` (uniform query subsample) |
+
 For plots and models, the `transform` field selects which data to use as input: `"raw"` for the untransformed embeddings, or the name of a transform defined in the same strategy (e.g., `"tsne"`, `"pca"`).
 
 ### Style
@@ -377,6 +394,8 @@ comparison metric; by default the source metric is derived from the plot `type`
 |------|-------------|------------|
 | `knn_purity_distribution_plot` | Per-class box plots of per-query KNN purity vs k | (none) |
 | `knn_purity_violin_distribution_plot` | Per-class violin plots of per-query KNN purity vs k. Split violin (one half per group) when exactly two experiments are compared, otherwise side-by-side single violins. Mean shown as a diamond, median as a short line | `split` (bool, default auto: split iff exactly two experiments). `split_pairs` (list of 2-element experiment-name lists; each pair → one split violin per k; unpaired experiments → single violins; takes precedence over `split`). Requires `metric: knn_purity_per_query_comparison` |
+| `knn_gsd_plot` | Single panel: mean ground surface distance (km, haversine between chip centres) to the k nearest embedding neighbours vs k, one line per experiment | `show_iqr` (bool, default `false`: shade the q1–q3 band), `log_x` (bool, default `false`). Requires `metric: knn_geo_distance_comparison` |
+| `knn_lat_diff_plot` | Single panel: mean absolute latitude difference (degrees) to the k nearest embedding neighbours vs k, one line per experiment | `show_iqr`, `log_x` as above. Requires `metric: knn_geo_distance_comparison` |
 
 All kNN plots use a fixed layout: figure size depends only on the facet grid shape,
 the legend is stacked one entry per line in a fixed band below the plots (room for
@@ -391,6 +410,25 @@ comp_plots:
     metric: knn_purity_per_query_comparison
     params:
       split: true
+```
+
+The geographic-distance plots read the `knn_geo_distance_comparison` metric, which
+joins the per-experiment `knn_geo_distance` CSVs (so every compared experiment must
+list `knn_geo_distance` under its strategy `metrics`). Both plots take the same
+metric; the `metric` field is required because the plot names do not match it:
+
+```yaml
+comp_metrics:
+  - type: knn_geo_distance_comparison
+
+comp_plots:
+  - type: knn_gsd_plot
+    metric: knn_geo_distance_comparison
+    params:
+      show_iqr: true
+      log_x: true
+  - type: knn_lat_diff_plot
+    metric: knn_geo_distance_comparison
 ```
 
 To contrast several pairs of experiments as side-by-side split violins (for

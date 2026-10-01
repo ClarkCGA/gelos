@@ -252,6 +252,57 @@ def knn_purity_per_query_comparison(
     return {"comparison_df": merged}
 
 
+def knn_geo_distance_comparison(
+    experiment_embeddings: list[tuple[str, np.ndarray | None]],
+    processed_data_dir: Path,
+    output_dir: Path,
+    prefix: str,
+    experiments: list | None = None,
+    **kwargs,
+) -> dict:
+    """Join per-experiment KNN geographic-distance CSVs into a single comparison table.
+
+    Each experiment's ``{prefix}_knn_geo_distance.csv`` must already exist
+    (produced by the analysis-stage ``knn_geo_distance`` metric). Rows are
+    long-form, one per ``(k, measure)`` with ``measure`` in ``gsd_m`` /
+    ``lat_diff_deg`` and ``mean``/``median``/``q1``/``q3``/``n_samples``.
+
+    Args:
+        experiment_embeddings: List of (label, embeddings) tuples (embeddings unused here).
+        processed_data_dir: Root processed directory to resolve per-experiment CSVs.
+        output_dir: Directory to write the comparison CSV.
+        prefix: File name prefix for the comparison output.
+        experiments: List of :class:`ComparisonExperiment` objects for path resolution.
+
+    Returns:
+        Dict with ``comparison_df`` key holding the merged DataFrame.
+    """
+    if experiments is None:
+        raise ValueError("knn_geo_distance_comparison requires 'experiments' to resolve CSV paths")
+
+    frames = []
+    for exp in experiments:
+        csv_path = _resolve_metric_csv(exp, processed_data_dir, "knn_geo_distance")
+        if not csv_path.exists():
+            logger.warning(
+                f"no knn_geo_distance CSV found for '{exp.label}' at {csv_path}, skipping"
+            )
+            continue
+        df = pd.read_csv(csv_path)
+        df["experiment"] = exp.label
+        frames.append(df)
+
+    if not frames:
+        logger.warning("no KNN geo distance data found for any experiment")
+        return {"comparison_df": pd.DataFrame()}
+
+    merged = pd.concat(frames, ignore_index=True)
+    csv_path = output_dir / f"{prefix}_knn_geo_distance_comparison.csv"
+    merged.to_csv(csv_path, index=False)
+    logger.info(f"saved KNN geo distance comparison to {csv_path}")
+    return {"comparison_df": merged}
+
+
 def _load_experiment_with_indices(
     exp,
     processed_data_dir: Path,
@@ -484,6 +535,7 @@ cosine_distance.requires_embeddings = True
 wasserstein_distance.requires_embeddings = True
 knn_purity_comparison.requires_embeddings = False
 knn_purity_per_query_comparison.requires_embeddings = False
+knn_geo_distance_comparison.requires_embeddings = False
 per_chip_similarity_to_control.requires_embeddings = False
 
 COMP_METRICS: dict[str, callable] = {
@@ -492,5 +544,6 @@ COMP_METRICS: dict[str, callable] = {
     "wasserstein_distance": wasserstein_distance,
     "knn_purity_comparison": knn_purity_comparison,
     "knn_purity_per_query_comparison": knn_purity_per_query_comparison,
+    "knn_geo_distance_comparison": knn_geo_distance_comparison,
     "per_chip_similarity_to_control": per_chip_similarity_to_control,
 }
