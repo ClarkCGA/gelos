@@ -811,6 +811,10 @@ def test_run_analysis_marker_and_model_skip(
     assert any(key.endswith("_knn") for key in results)
     model_csv = ctx.output_dir / "layer_-1" / "exptest_strategy_layer_-1_knn_knn_results.csv"
     assert model_csv.exists()
+    # Figure names omit the config stem ("exptest"); the stem is the folder instead.
+    cm_png = ctx.figures_dir / "strategy_layer_-1_knn_confusion_matrix.png"
+    assert cm_png.exists()
+    assert not list(ctx.figures_dir.glob("exptest_*"))
 
     # Second run: marker short-circuits everything.
     assert analysis_mod.run_analysis(*args) == {}
@@ -823,4 +827,50 @@ def test_run_analysis_marker_and_model_skip(
     assert len(extract_calls) == 1  # .npy cache hit, no re-extraction
     assert results == {}  # model skipped, nothing recomputed
     assert model_csv.stat().st_mtime_ns == csv_mtime
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Tests: figure layout (issue #89)
+# ---------------------------------------------------------------------------
+
+
+def test_build_figure_prefix():
+    """Figure prefix is {strategy}_{layer} with no config stem."""
+    from gelos.analysis import build_figure_prefix
+
+    assert build_figure_prefix("cls", "layer_-1") == "cls_layer_-1"
+
+
+def test_setup_analysis_run_figures_dir_nested_by_config(tmp_path, cm_style_cfg):
+    """setup_analysis_run resolves figures_dir to {base}/{data_version}/{config_stem}."""
+    import yaml
+
+    from gelos.analysis import setup_analysis_run
+
+    raw = tmp_path / "raw"
+    (raw / "v1").mkdir(parents=True)
+    (raw / "v1" / "chips.csv").write_text("id,lulc\n0,0\n1,1\n2,2\n")
+
+    config = {
+        "data_version": "v1",
+        "experiment_name": "figures dir test",
+        "chip_tracker": "chips.csv",
+        "chip_id_column": "id",
+        "style": cm_style_cfg,
+        "embedding_extraction_strategies": {},
+    }
+    yaml_path = tmp_path / "exp_figures.yaml"
+    with open(yaml_path, "w") as f:
+        yaml.dump(config, f)
+
+    figures_base = tmp_path / "figures"
+    ctx = setup_analysis_run(
+        yaml_path, raw, tmp_path / "interim", tmp_path / "processed", figures_base
+    )
+
+    assert ctx.figures_dir == figures_base / "v1" / "exp_figures"
+    assert ctx.figures_dir.is_dir()
+    assert ctx.output_dir == tmp_path / "processed" / "v1" / "exp_figures"
+    assert ctx.embeddings_directories == []
     gc.collect()
