@@ -59,19 +59,43 @@ def test_band_reorder_index_handles_shuffled_input():
     assert reordered == OLMOEARTH_S2_BAND_ORDER
 
 
-def test_band_reorder_index_raises_on_missing_band():
-    # Drop WATER_VAPOR (B09) — the band ExampleGELOSDataSet also lacks.
+def test_band_reorder_index_marks_missing_band_as_none():
+    # Drop WATER_VAPOR (B09) — the band ExampleGELOSDataSet also lacks. A subset
+    # no longer raises: the absent band's slot is None (zero-filled in forward).
+    from gelos.backbones.olmoearth_backbone import absent_s2_bands
+
     missing = [b for b in ALL_12_BANDS if b != "WATER_VAPOR"]
-    with pytest.raises(ValueError, match="WATER_VAPOR"):
-        build_band_reorder_index(missing)
+    index = build_band_reorder_index(missing)
+    assert len(index) == 12
+    assert index[OLMOEARTH_S2_BAND_ORDER.index("WATER_VAPOR")] is None
+    present = [(i, s) for i, s in enumerate(index) if s is not None]
+    assert len(present) == 11
+    assert all(missing[s] == OLMOEARTH_S2_BAND_ORDER[i] for i, s in present)
+    assert absent_s2_bands(index) == ["WATER_VAPOR"]
 
 
 def test_band_reorder_index_reports_all_missing_bands():
-    with pytest.raises(ValueError) as exc:
-        build_band_reorder_index(["BLUE", "GREEN", "RED"])
-    msg = str(exc.value)
-    # Several required bands should be named in the error.
-    assert "COASTAL_AEROSOL" in msg and "WATER_VAPOR" in msg
+    from gelos.backbones.olmoearth_backbone import absent_s2_bands
+
+    index = build_band_reorder_index(["BLUE", "GREEN", "RED"])
+    absent = absent_s2_bands(index)
+    assert len(absent) == 9
+    assert "COASTAL_AEROSOL" in absent and "WATER_VAPOR" in absent
+    assert set(absent).isdisjoint({"BLUE", "GREEN", "RED"})
+    # Absent names come back in OlmoEarth order.
+    assert absent == [b for b in OLMOEARTH_S2_BAND_ORDER if b in absent]
+
+
+def test_band_reorder_index_unknown_band_raises():
+    # A typo (nir09) must raise, not silently zero-fill WATER_VAPOR.
+    bands = [b if b != "WATER_VAPOR" else "nir09" for b in ALL_12_BANDS]
+    with pytest.raises(ValueError, match="nir09"):
+        build_band_reorder_index(bands)
+
+
+def test_band_reorder_index_empty_raises():
+    with pytest.raises(ValueError, match="at least one"):
+        build_band_reorder_index([])
 
 
 # ---------------------------------------------------------------------------
@@ -261,14 +285,260 @@ def test_forward_features_spatial_pooling_rejects_non_divisible_grid():
         backbone.forward_features(x)
 
 
-def test_constructor_raises_on_missing_band_without_model():
-    # Construction validates bands before touching the model, so a missing band
-    # raises ValueError regardless of whether the extra is installed.
+def test_constructor_raises_on_unknown_band_without_model():
+    # Construction validates band names before touching the model, so an
+    # unknown band raises ValueError regardless of whether the extra is installed.
     from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
 
-    missing = [b for b in ALL_12_BANDS if b != "WATER_VAPOR"]
-    with pytest.raises(ValueError, match="WATER_VAPOR"):
-        OlmoEarthBackbone(pretrained=False, bands=missing)
+    bands = [b if b != "WATER_VAPOR" else "nir09" for b in ALL_12_BANDS]
+    with pytest.raises(ValueError, match="nir09"):
+        OlmoEarthBackbone(pretrained=False, bands=bands)
+
+
+def test_default_model_id_is_v1_2_base():
+    import inspect
+
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    params = inspect.signature(OlmoEarthBackbone.__init__).parameters
+    assert params["model_id"].default == "allenai/OlmoEarth-v1_2-Base"
+
+
+# ---------------------------------------------------------------------------
+# Band-subset zero-fill (issue #81) — needs the model package for construction
+# (the band-set count is read from the loaded encoder); the encoder forward is
+# replaced by a stub that captures the sample the wrapper built.
+# ---------------------------------------------------------------------------
+
+_V1_2_NANO = "allenai/OlmoEarth-v1_2-Nano"
+_V1_NANO = "allenai/OlmoEarth-v1-Nano"
+# S2-Agri-Patch style subset: no COASTAL_AEROSOL (B01) / WATER_VAPOR (B09).
+TEN_BANDS = [b for b in ALL_12_BANDS if b not in ("COASTAL_AEROSOL", "WATER_VAPOR")]
+
+
+class _CapturingEncoder(torch.nn.Module):
+    """Stands in for ``backbone.encoder.encoder``; records the sample it is given."""
+
+    def __init__(self, hidden_dim: int, num_band_sets: int):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.num_band_sets = num_band_sets
+        self.samples = []
+
+    def forward(self, sample, fast_pass=True, patch_size=4):
+        from types import SimpleNamespace
+
+        self.samples.append(sample)
+        b, h, w, t, _ = sample.sentinel2_l2a.shape
+        tokens = torch.zeros(
+            b, h // patch_size, w // patch_size, t, self.num_band_sets, self.hidden_dim
+        )
+        return {"tokens_and_masks": SimpleNamespace(sentinel2_l2a=tokens, sentinel1=None)}
+
+
+def _capturing_backbone(bands, model_id=_V1_2_NANO, **kwargs):
+    """Backbone with the inner encoder swapped for ``_CapturingEncoder`` (after init)."""
+    pytest.importorskip("olmoearth_pretrain")
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    backbone = OlmoEarthBackbone(pretrained=False, model_id=model_id, bands=bands, **kwargs)
+    stub = _CapturingEncoder(backbone.out_channels, backbone.s2_num_band_sets)
+    backbone.encoder.encoder = stub
+    return backbone.eval(), stub
+
+
+def _captured_s2(backbone, stub, x):
+    with torch.no_grad():
+        backbone.forward_features(x)
+    return stub.samples[-1].sentinel2_l2a  # (B, H, W, T, 12)
+
+
+def _raw_s2(c, b=1, t=2, h=8, w=8):
+    torch.manual_seed(0)
+    return 1500 + 500 * torch.randn(b, c, t, h, w)
+
+
+def test_subset_warns_once_naming_zero_filled_bands():
+    pytest.importorskip("olmoearth_pretrain")
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    with pytest.warns(UserWarning, match="zero-filled") as record:
+        backbone = OlmoEarthBackbone(pretrained=False, model_id=_V1_2_NANO, bands=TEN_BANDS)
+    fill_warnings = [w for w in record if "zero-filled" in str(w.message)]
+    assert len(fill_warnings) == 1
+    msg = str(fill_warnings[0].message)
+    assert "COASTAL_AEROSOL" in msg and "WATER_VAPOR" in msg
+    assert "FAR OUTSIDE" not in msg  # 2 of 12 absent is in distribution
+    assert backbone.absent_bands == ["COASTAL_AEROSOL", "WATER_VAPOR"]
+
+
+def test_many_absent_bands_warns_loudly_but_does_not_raise():
+    pytest.importorskip("olmoearth_pretrain")
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    six = ["BLUE", "GREEN", "RED", "NIR_BROAD", "SWIR_1", "SWIR_2"]
+    with pytest.warns(UserWarning, match="FAR OUTSIDE") as record:
+        backbone = OlmoEarthBackbone(pretrained=False, model_id=_V1_2_NANO, bands=six)
+    msg = str(next(w for w in record if "FAR OUTSIDE" in str(w.message)).message)
+    assert "6 of 12" in msg and "RED_EDGE_1" in msg
+    assert len(backbone.absent_bands) == 6
+
+
+def test_full_band_set_emits_no_zero_fill_warning():
+    pytest.importorskip("olmoearth_pretrain")
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        backbone = OlmoEarthBackbone(pretrained=False, model_id=_V1_2_NANO, bands=ALL_12_BANDS)
+    assert backbone.absent_bands == []
+
+
+def test_subset_with_v1_checkpoint_raises():
+    pytest.importorskip("olmoearth_pretrain")
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    with pytest.raises(ValueError, match="band subset is not supported"):
+        OlmoEarthBackbone(pretrained=False, model_id=_V1_NANO, bands=TEN_BANDS)
+
+
+def test_full_band_set_with_v1_checkpoint_still_works():
+    pytest.importorskip("olmoearth_pretrain")
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    backbone = OlmoEarthBackbone(pretrained=False, model_id=_V1_NANO, bands=ALL_12_BANDS)
+    assert backbone.s2_num_band_sets == 3
+    assert backbone.absent_bands == []
+
+
+def test_subset_absent_channels_zero_and_present_channels_unchanged():
+    from gelos.backbones.olmoearth_backbone import minmax_normalize
+
+    x12 = _raw_s2(12)
+    full_bb, full_stub = _capturing_backbone(ALL_12_BANDS)
+    with pytest.warns(UserWarning, match="zero-filled"):
+        sub_bb, sub_stub = _capturing_backbone(TEN_BANDS)
+
+    full = _captured_s2(full_bb, full_stub, x12)
+    keep = [i for i, b in enumerate(ALL_12_BANDS) if b in TEN_BANDS]
+    sub = _captured_s2(sub_bb, sub_stub, x12[:, keep])
+    assert full.shape == sub.shape == (1, 8, 8, 2, 12)
+
+    absent_idx = [OLMOEARTH_S2_BAND_ORDER.index(b) for b in ("COASTAL_AEROSOL", "WATER_VAPOR")]
+    present_idx = [i for i in range(12) if i not in absent_idx]
+    # Absent channels are exactly 0 after normalization ...
+    assert torch.equal(sub[..., absent_idx], torch.zeros_like(sub[..., absent_idx]))
+    # ... which is NOT what a raw-0 input would normalize to.
+    assert not torch.equal(full[..., absent_idx], torch.zeros_like(full[..., absent_idx]))
+    # Present channels are bit-identical to the full-band path.
+    assert torch.equal(sub[..., present_idx], full[..., present_idx])
+    # Full-band path is bit-identical to the hand-applied normalization.
+    expected = minmax_normalize(
+        x12.index_select(1, torch.tensor(full_bb.reorder_index)).permute(0, 3, 4, 2, 1),
+        full_bb._s2_norm_means,
+        full_bb._s2_norm_stds,
+    )
+    assert torch.equal(full, expected)
+
+
+def test_subset_zero_fill_without_pretraining_normalization():
+    x10 = _raw_s2(10)
+    with pytest.warns(UserWarning, match="zero-filled"):
+        bb, stub = _capturing_backbone(TEN_BANDS, apply_pretraining_normalization=False)
+    out = _captured_s2(bb, stub, x10)
+    absent_idx = [OLMOEARTH_S2_BAND_ORDER.index(b) for b in ("COASTAL_AEROSOL", "WATER_VAPOR")]
+    assert torch.equal(out[..., absent_idx], torch.zeros_like(out[..., absent_idx]))
+    # Present channels pass through raw (no normalization), reordered.
+    for i, name in enumerate(OLMOEARTH_S2_BAND_ORDER):
+        if name in TEN_BANDS:
+            assert torch.equal(out[..., i], x10[:, TEN_BANDS.index(name)].permute(0, 2, 3, 1))
+
+
+def test_subset_channel_count_mismatch_raises():
+    with pytest.warns(UserWarning, match="zero-filled"):
+        bb, _stub = _capturing_backbone(TEN_BANDS)
+    with pytest.raises(ValueError, match="must match"):
+        bb.forward_features(_raw_s2(12))
+
+
+def test_subset_nodata_mask_keeps_dataset_channel_count():
+    # The stashed nodata mask has the dataset's 10 channels, not 12; masking
+    # still works and the S2 mask's last dim follows the encoder's band sets (1).
+    with pytest.warns(UserWarning, match="zero-filled"):
+        bb, stub = _capturing_backbone(TEN_BANDS, temporal_pooling="keep")
+    x10 = _raw_s2(10)
+    mask = torch.zeros(1, 10, 2, 8, 8, dtype=torch.bool)
+    mask[0, :, :, 0:4, 0:4] = True  # patch (0, 0) nodata at both timesteps
+    bb.set_batch_nodata_mask(mask)
+    try:
+        with torch.no_grad():
+            bb.forward_features(x10)
+    finally:
+        bb.clear_batch_nodata_mask()
+    s2_mask = stub.samples[-1].sentinel2_l2a_mask
+    assert s2_mask.shape == (1, 8, 8, 2, 1)
+    assert (s2_mask[0, 0:4, 0:4] == 3).all()
+    assert (s2_mask[0, 4:, 4:] == 0).all()
+
+
+@pytest.mark.parametrize("model_id, expected", [(_V1_2_NANO, 1), (_V1_NANO, 3)])
+def test_s2_mask_band_sets_follow_encoder(model_id, expected):
+    bb, stub = _capturing_backbone(ALL_12_BANDS, model_id=model_id)
+    assert bb.s2_num_band_sets == expected
+    _captured_s2(bb, stub, _raw_s2(12))
+    assert stub.samples[-1].sentinel2_l2a_mask.shape[-1] == expected
+
+
+# ---------------------------------------------------------------------------
+# OlmoEarth v1 factory deprecation (issue #81).
+# ---------------------------------------------------------------------------
+
+V1_FACTORIES = [
+    "olmoearth_v1_nano",
+    "olmoearth_v1_tiny",
+    "olmoearth_v1_base",
+    "olmoearth_v1_large",
+    "olmoearth_v1_nano_s1s2",
+    "olmoearth_v1_tiny_s1s2",
+    "olmoearth_v1_base_s1s2",
+    "olmoearth_v1_large_s1s2",
+]
+
+
+@pytest.mark.parametrize("name", V1_FACTORIES)
+def test_v1_factories_emit_deprecation_warning(name):
+    pytest.importorskip("olmoearth_pretrain")
+    import gelos.backbones.olmoearth_backbone as oe
+
+    # Nano checkpoint for every factory: the warning is what is under test.
+    with pytest.warns(DeprecationWarning, match=name):
+        backbone = getattr(oe, name)(pretrained=False, model_id=_V1_NANO, bands=ALL_12_BANDS)
+    assert backbone.s2_num_band_sets == 3
+
+
+@pytest.mark.parametrize("name", V1_FACTORIES)
+def test_v1_factory_defaults_still_point_at_v1_checkpoints(name):
+    import inspect
+
+    import gelos.backbones.olmoearth_backbone as oe
+
+    params = inspect.signature(getattr(oe, name)).parameters
+    assert params["model_id"].default.startswith("allenai/OlmoEarth-v1-")
+
+
+def test_v1_2_factories_do_not_warn():
+    pytest.importorskip("olmoearth_pretrain")
+    import gelos.backbones.olmoearth_backbone as oe
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        oe.olmoearth_v1_2_nano(pretrained=False, bands=ALL_12_BANDS)
+    ours = [
+        w
+        for w in record
+        if issubclass(w.category, DeprecationWarning) and "olmoearth_v1" in str(w.message)
+    ]
+    assert not ours
 
 
 # ---------------------------------------------------------------------------
@@ -839,6 +1109,23 @@ def test_example_s1s2_fixture_yaml_valid():
     model_args = config["model"]["init_args"]["model_args"]
     assert "bands_s1" in model_args
     assert set(model_args["bands_s1"]) == {"VV", "VH"}
+    # Fixtures track the supported generation (v1 is deprecated).
+    assert config["model"]["init_args"]["model"] == "olmoearth_v1_2_base_s1s2"
+    assert model_args["model_id"] == "allenai/OlmoEarth-v1_2-Base"
+
+
+def test_example_olmoearth_fixture_yaml_valid():
+    from pathlib import Path
+
+    import yaml
+
+    path = Path(__file__).parent / "fixtures" / "example_olmoearth_config.yaml"
+    config = yaml.safe_load(path.read_text())
+    assert config["data"]["init_args"]["normalize"] is False
+    assert config["model"]["init_args"]["model"] == "olmoearth_v1_2_base"
+    model_args = config["model"]["init_args"]["model_args"]
+    assert model_args["model_id"] == "allenai/OlmoEarth-v1_2-Base"
+    assert model_args["bands"] == config["data"]["init_args"]["bands"]["S2L2A"]
 
 
 # ---------------------------------------------------------------------------

@@ -1,3 +1,6 @@
+# DEPRECATED (issue #81): OlmoEarth v1 checkpoints are deprecated in GELOS and
+# this factory emits a DeprecationWarning. Use the v1.2 equivalent instead:
+#   configs/olmoearth_v1_2_base.yaml
 experiment_name: "OlmoEarth V1 Base"
 data_version: "v0.50.1"
 chip_tracker: "gelos_chip_tracker.geojson"
@@ -18,8 +21,9 @@ data:
     dataset_class: gelos.gelosdataset.GELOSDataSet
     batch_size: 8
     num_workers: 4
-    # OlmoEarth is Sentinel-2 L2A only here. It requires the full 12-band S2L2A
-    # set; the production GELOS-LC dataset must supply all of these (including
+    # OlmoEarth is Sentinel-2 L2A only here. v1 checkpoints require the full
+    # 12-band S2L2A set (band subsets are zero-filled only for v1.2); the
+    # production GELOS-LC dataset must supply all of these (including
     # WATER_VAPOR / B09, which ExampleGELOSDataSet does not define). Bands must
     # be RAW digital numbers (0-10000) -- the backbone applies OlmoEarth's
     # pretraining normalization internally, hence normalize: false below.

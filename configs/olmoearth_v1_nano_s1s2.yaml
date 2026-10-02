@@ -1,3 +1,6 @@
+# DEPRECATED (issue #81): OlmoEarth v1 checkpoints are deprecated in GELOS and
+# this factory emits a DeprecationWarning. Use the v1.2 equivalent instead:
+#   configs/olmoearth_v1_2_nano_s1s2.yaml
 experiment_name: "OlmoEarth V1 Nano - S2+S1"
 data_version: "v0.50.1"
 chip_tracker: "gelos_chip_tracker.geojson"
@@ -18,8 +21,9 @@ data:
     dataset_class: gelos.gelosdataset.GELOSDataSet
     batch_size: 8
     num_workers: 4
-    # OlmoEarth S2+S1 mode. S2 requires the full 12-band S2L2A set (including
-    # WATER_VAPOR / B09) as RAW digital numbers (0-10000). S1 requires VV and VH
+    # OlmoEarth S2+S1 mode. v1 checkpoints require the full 12-band S2L2A set
+    # (including WATER_VAPOR / B09; subsets are zero-filled only for v1.2) as RAW
+    # digital numbers (0-10000). S1 requires VV and VH
     # as RAW LINEAR POWER gamma0 (e.g. Planetary Computer sentinel-1-rtc) -- the
     # backbone converts S1 to dB and applies OlmoEarth's pretraining
     # normalization to both modalities internally, hence normalize: false below.

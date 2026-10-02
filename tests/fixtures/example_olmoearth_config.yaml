@@ -1,4 +1,4 @@
-experiment_name: "OlmoEarth V1 Base - Example"
+experiment_name: "OlmoEarth V1.2 Base - Example"
 data_version: "v0.50.1"
 chip_tracker: "gelos_chip_tracker.geojson"
 chip_id_column: "id"
@@ -18,15 +18,16 @@ data:
     dataset_class: tests.test_data.ExampleGELOSDataSet
     batch_size: 1
     num_workers: 0
-    # NOTE: This fixture is for structural YAML validation only; it requires the
-    # production 12-band GELOS-LC dataset for live inference. ExampleGELOSDataSet
-    # defines only 11 S2L2A bands and lacks WATER_VAPOR (B09), which OlmoEarth
-    # requires. A real smoke run therefore needs a dataset that supplies the full
-    # 12-band S2L2A set (see configs/olmoearth_v1_base.yaml). The 11 bands the
-    # example dataset does provide are listed here for shape; the wrapper raises a
-    # clear ValueError on the missing WATER_VAPOR band. Bands must be RAW digital
-    # numbers — the backbone applies OlmoEarth's pretraining normalization
-    # internally, hence normalize: false below.
+    # NOTE: This fixture is for structural YAML validation only. ExampleGELOSDataSet
+    # defines only 11 S2L2A bands under its own (lowercase) names and lacks
+    # WATER_VAPOR (B09). A real smoke run needs a dataset exposing the GELOS-LC
+    # band names (see configs/olmoearth_v1_2_base.yaml); with a v1.2 checkpoint
+    # the wrapper then accepts a SUBSET of the 12 bands and zero-fills the absent
+    # ones after pretraining normalization (issue #81) -- an unknown band name
+    # still raises a clear ValueError. The 11 bands the example dataset provides
+    # are listed here for shape. Bands must be RAW digital numbers -- the backbone
+    # applies OlmoEarth's pretraining normalization internally, hence
+    # normalize: false below.
     normalize: false
     bands:
       S2L2A:
@@ -54,11 +55,11 @@ data:
           n_timesteps: 4
 model:
   class_path: terratorch.tasks.EmbeddingGenerationTask
-  title: OlmoEarth V1 Base
+  title: OlmoEarth V1.2 Base
   init_args:
-    model: olmoearth_v1_base  # registered via gelos.backbones.olmoearth_backbone
+    model: olmoearth_v1_2_base  # registered via gelos.backbones.olmoearth_backbone
     model_args:
-      model_id: allenai/OlmoEarth-v1-Base
+      model_id: allenai/OlmoEarth-v1_2-Base
       pretrained: True
       patch_size: 4
       bands:
