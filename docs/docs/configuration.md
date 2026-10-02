@@ -451,7 +451,11 @@ comparison metric; by default the source metric is derived from the plot `type`
 All kNN plots use a fixed layout: figure size depends only on the facet grid shape,
 the legend is stacked one entry per line in a fixed band below the plots (room for
 four experiments), and files are saved at a fixed dpi so images of the same grid
-shape are pixel-identical in size.
+shape are pixel-identical in size. Legend labels are shown in full: a prefix common
+to all experiments is stripped, but nothing is truncated, so choose experiment
+`label`s that fit the figure width (roughly 60 characters is safe for the
+single-panel and multi-column grids; narrower single-column grids fit fewer, and
+longer labels run off the sides of the fixed canvas).
 
 Example:
 

@@ -16,6 +16,7 @@ from gelos.comp_metrics import (
 )
 from gelos.comp_plots import (
     COMP_PLOTS,
+    _strip_common_prefix,
     distance_matrix,
     knn_gsd_plot,
     knn_lat_diff_plot,
@@ -681,8 +682,8 @@ _KNN_PLOT_CASES = _KNN_FACET_PLOT_CASES + [
     (knn_lat_diff_plot, _make_geo_distance_df),
 ]
 
-# 60-char names starting with different letters: _strip_common_prefix strips
-# nothing and truncates each to 25 chars.
+# 60-char names starting with different letters: they share no prefix, so
+# _strip_common_prefix strips nothing and each is rendered in full (no truncation).
 _KNN_LONG_NAMES = [(f"{c}xperiment_" + "long_name_" * 6)[:60] for c in "ABCD"]
 _KNN_NAME_SETS = [["A"], ["A", "B"], ["A", "B", "C", "D"], _KNN_LONG_NAMES]
 
@@ -703,6 +704,25 @@ def _release_knn_figures(monkeypatch):
     monkeypatch.undo()
     plt.close("all")
     gc.collect()
+
+
+def test_strip_common_prefix_no_truncation():
+    """_strip_common_prefix strips a shared prefix but never truncates labels."""
+    long_label = "x" * 120
+    assert _strip_common_prefix([long_label]) == {long_label: long_label}
+    assert len(_strip_common_prefix([long_label])[long_label]) == 120
+    # Shared prefix ending on a word boundary is stripped whole.
+    assert _strip_common_prefix(["model_a_run_1", "model_a_run_2"]) == {
+        "model_a_run_1": "1",
+        "model_a_run_2": "2",
+    }
+    # Shared prefix ending mid-word backs off to the previous word boundary.
+    assert _strip_common_prefix(["model_alpha", "model_amber"]) == {
+        "model_alpha": "alpha",
+        "model_amber": "amber",
+    }
+    assert _strip_common_prefix(["same", "same"]) == {"same": "same"}
+    assert _strip_common_prefix([]) == {}
 
 
 @pytest.mark.parametrize(("plot_fn", "make_df"), _KNN_PLOT_CASES)
@@ -733,12 +753,13 @@ def test_knn_plot_fixed_size_and_axes(plot_fn, make_df, tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(("plot_fn", "make_df"), _KNN_PLOT_CASES)
 def test_knn_plot_legend_inside_figure(plot_fn, make_df, tmp_path, monkeypatch):
-    """Four long-name legend entries stay inside the canvas and below the xlabels."""
+    """Four long-name legend entries are rendered verbatim, inside the canvas and below the xlabels."""
     figs = _capture_knn_figures(monkeypatch)
     try:
         path = tmp_path / f"{plot_fn.__name__}_long.png"
         plot_fn({"comparison_df": make_df(_KNN_LONG_NAMES)}, output_path=path)
         fig = figs[-1]
+        assert [t.get_text() for t in fig.legends[0].get_texts()] == _KNN_LONG_NAMES
         fig.canvas.draw()
         renderer = fig.canvas.get_renderer()
         legend_bbox = fig.legends[0].get_window_extent(renderer)
@@ -750,6 +771,33 @@ def test_knn_plot_legend_inside_figure(plot_fn, make_df, tmp_path, monkeypatch):
         lowest_axes = [ax for ax in fig.axes if ax.get_position().y0 == lowest_y0]
         xlabel_bottom = min(ax.get_tightbbox(renderer).y0 for ax in lowest_axes)
         assert legend_bbox.y1 <= xlabel_bottom
+    finally:
+        _release_knn_figures(monkeypatch)
+
+
+@pytest.mark.parametrize("plot_fn", [knn_gsd_plot, knn_lat_diff_plot])
+@pytest.mark.parametrize("kwargs", [{}, {"show_iqr": True, "log_x": True}])
+def test_knn_geo_distance_plot_axes_inside_canvas(plot_fn, kwargs, tmp_path, monkeypatch):
+    """With 5-digit km values the y-axis decoration (ticks + ylabel) stays inside the canvas."""
+    from gelos import comp_plots
+
+    df = _make_geo_distance_df(["A", "B", "C", "D"], ks=(1, 5, 10, 50))
+    gsd = df["measure"] == "gsd_m"
+    df.loc[gsd, ["mean", "median", "q1", "q3"]] *= 500  # base 25 000 000 m -> 5-digit km
+    figs = _capture_knn_figures(monkeypatch)
+    try:
+        path = tmp_path / f"{plot_fn.__name__}_wide_ticks.png"
+        plot_fn({"comparison_df": df}, output_path=path, **kwargs)
+        fig = figs[-1]
+        assert fig.get_figwidth() == pytest.approx(
+            comp_plots._KNN_LEFT_IN + 6.0 + comp_plots._KNN_RIGHT_IN
+        )
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        for ax in fig.axes:
+            bbox = ax.get_tightbbox(renderer)
+            assert bbox.x0 >= 0, bbox
+            assert bbox.x1 <= fig.bbox.width, bbox
     finally:
         _release_knn_figures(monkeypatch)
 
