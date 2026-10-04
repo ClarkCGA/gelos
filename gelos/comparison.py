@@ -41,6 +41,7 @@ class ComparisonContext:
     figures_dir: Path
     class_labels: dict[str, str]
     experiment_colors: dict[str, str]
+    figure_format: str = "png"
 
 
 def _resolve_embedding_path(exp: ComparisonExperiment, processed_data_dir: Path) -> Path:
@@ -63,7 +64,7 @@ def setup_comparison(
         processed_data_dir: Root directory for processed outputs.
         figures_base_dir: Root directory for generated figures. Comparison
             figures land under ``{figures_base_dir}/comparisons/{config_stem}/``
-            as ``{plot}.png``.
+            as ``{plot}.png`` (or ``.svg`` with ``figure_format: svg``).
 
     Returns:
         :class:`ComparisonContext` with resolved paths and parsed experiments.
@@ -97,6 +98,10 @@ def setup_comparison(
     raw_labels = yaml_config.get("class_labels", {}) or {}
     class_labels = {str(k): str(v) for k, v in raw_labels.items()}
 
+    figure_format = str(yaml_config.get("figure_format", "png")).lower()
+    if figure_format not in ("png", "svg"):
+        raise ValueError(f"figure_format must be 'png' or 'svg', got '{figure_format}'")
+
     output_dir = processed_data_dir / "comparisons" / config_stem
     output_dir.mkdir(exist_ok=True, parents=True)
     figures_dir = figures_base_dir / "comparisons" / config_stem
@@ -112,6 +117,7 @@ def setup_comparison(
         figures_dir=figures_dir,
         class_labels=class_labels,
         experiment_colors=experiment_colors,
+        figure_format=figure_format,
     )
 
 
@@ -217,7 +223,7 @@ def run_comparison(
             )
             continue
 
-        output_path = ctx.figures_dir / f"{p_type}.png"
+        output_path = ctx.figures_dir / f"{p_type}.{ctx.figure_format}"
         p_fn = COMP_PLOTS[p_type]
         p_fn(
             metric_results[source_metric],

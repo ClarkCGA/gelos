@@ -39,6 +39,7 @@ class AnalysisContext:
     output_dir: Path
     figures_dir: Path
     null_handling: str = "drop"
+    figure_format: str = "png"
     embeddings_directories: list[Path] = field(default_factory=list)
 
 
@@ -227,6 +228,10 @@ def setup_analysis_run(
     null_handling = yaml_config.get("null_handling", "drop")
     if null_handling not in ("drop", "zero"):
         raise ValueError(f"null_handling must be 'drop' or 'zero', got '{null_handling}'")
+    # Image format for saved figures: "png" (default) or "svg" (vector, for slides).
+    figure_format = str(yaml_config.get("figure_format", "png")).lower()
+    if figure_format not in ("png", "svg"):
+        raise ValueError(f"figure_format must be 'png' or 'svg', got '{figure_format}'")
     output_dir = processed_data_dir / data_version / config_stem
     input_dir = embedding_dir / data_version / config_stem
 
@@ -264,6 +269,7 @@ def setup_analysis_run(
         output_dir=output_dir,
         figures_dir=figures_dir,
         null_handling=null_handling,
+        figure_format=figure_format,
         embeddings_directories=embeddings_directories,
     )
 
@@ -292,7 +298,8 @@ def run_analysis(
     Figures are written to ``{figures_base_dir}/{data_version}/{config_stem}/``
     as ``{strategy}_{layer}_{transform}_{plot}.png`` and
     ``{strategy}_{layer}_{model}_confusion_matrix.png`` (see
-    :func:`build_figure_prefix`).
+    :func:`build_figure_prefix`). Set ``figure_format: svg`` in the YAML to
+    write ``.svg`` instead of ``.png`` (default).
 
     Args:
         yaml_path: Path to the YAML experiment config.
@@ -448,7 +455,7 @@ def run_analysis(
                     continue
 
                 data = transform_results[t_type]
-                output_path = ctx.figures_dir / f"{figure_prefix}_{t_type}_{p_type}.png"
+                output_path = ctx.figures_dir / f"{figure_prefix}_{t_type}_{p_type}.{ctx.figure_format}"
                 if output_path.exists():
                     logger.info(
                         f"plot {p_type} for {strategy_key} with transform: {t_type}"
@@ -495,7 +502,7 @@ def run_analysis(
                 # (via _save_results_csv), so the cached result path is known
                 # before running.
                 results_csv = layer_dir / f"{run_name}_{m_type}_results.csv"
-                cm_path = ctx.figures_dir / f"{figure_prefix}_{m_type}_confusion_matrix.png"
+                cm_path = ctx.figures_dir / f"{figure_prefix}_{m_type}_confusion_matrix.{ctx.figure_format}"
                 if results_csv.exists() and cm_path.exists():
                     logger.info(f"model {m_type} results exist at {results_csv} - skipping")
                     continue

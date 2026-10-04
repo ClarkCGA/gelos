@@ -1130,3 +1130,34 @@ def test_setup_analysis_run_figures_dir_nested_by_config(tmp_path, cm_style_cfg)
     assert ctx.output_dir == tmp_path / "processed" / "v1" / "exp_figures"
     assert ctx.embeddings_directories == []
     gc.collect()
+
+
+@pytest.mark.parametrize("fmt,ok", [(None, "png"), ("svg", "svg"), ("SVG", "svg"), ("jpg", None)])
+def test_setup_analysis_run_figure_format(tmp_path, cm_style_cfg, fmt, ok):
+    """figure_format defaults to png, accepts svg, rejects others."""
+    import yaml
+
+    from gelos.analysis import setup_analysis_run
+
+    raw = tmp_path / "raw"
+    (raw / "v1").mkdir(parents=True)
+    (raw / "v1" / "chips.csv").write_text("id,lulc\n0,0\n1,1\n2,2\n")
+    config = {
+        "data_version": "v1",
+        "experiment_name": "fmt",
+        "chip_tracker": "chips.csv",
+        "chip_id_column": "id",
+        "style": cm_style_cfg,
+        "embedding_extraction_strategies": {},
+    }
+    if fmt is not None:
+        config["figure_format"] = fmt
+    yaml_path = tmp_path / "exp_fmt.yaml"
+    with open(yaml_path, "w") as f:
+        yaml.dump(config, f)
+    args = (yaml_path, raw, tmp_path / "interim", tmp_path / "processed", tmp_path / "figs")
+    if ok is None:
+        with pytest.raises(ValueError, match="figure_format"):
+            setup_analysis_run(*args)
+    else:
+        assert setup_analysis_run(*args).figure_format == ok

@@ -1110,3 +1110,22 @@ def test_per_class_ecdf_plot_control_only(tmp_path):
     )
     assert not output_path.exists()
     gc.collect()
+
+
+@pytest.mark.parametrize("fmt,ok", [(None, "png"), ("svg", "svg"), ("jpg", None)])
+def test_setup_comparison_figure_format(tmp_path, fmt, ok):
+    """figure_format defaults to png, accepts svg, rejects others."""
+    import yaml
+
+    config = {"comparison_name": "T", "experiments": []}
+    if fmt is not None:
+        config["figure_format"] = fmt
+    yaml_path = tmp_path / "cmp.yaml"
+    with open(yaml_path, "w") as f:
+        yaml.dump(config, f)
+    args = (yaml_path, tmp_path / "processed", tmp_path / "figs")
+    if ok is None:
+        with pytest.raises(ValueError, match="figure_format"):
+            setup_comparison(*args)
+    else:
+        assert setup_comparison(*args).figure_format == ok
