@@ -101,6 +101,36 @@ def _load_cached_transform(cache_path: Path) -> tuple[np.ndarray, list[int]]:
     return df[data_cols].to_numpy(), chip_indices
 
 
+def _save_predictions(
+    predictions: np.ndarray,
+    labels: np.ndarray,
+    chip_indices: list[int],
+    path: Path,
+) -> None:
+    """Save model predictions to CSV so confusion matrices can be redrawn without re-running."""
+    df = pd.DataFrame({"id": chip_indices, "label": labels, "prediction": predictions})
+    df.to_csv(path, index=False)
+    logger.info(f"saved predictions to {path}")
+
+
+def _load_cached_predictions(path: Path, chip_indices: list[int]) -> np.ndarray | None:
+    """Load cached model predictions, or ``None`` if missing or stale.
+
+    Values are read as strings: :func:`gelos.plotting.confusion_matrix` casts
+    both labels and predictions to ``str`` anyway, and this keeps values such
+    as ``"01"`` from being coerced to ``1``. The stored ids must match the
+    current ``chip_indices`` exactly (as strings); otherwise the cache is
+    treated as stale and ignored.
+    """
+    if not path.exists():
+        return None
+    df = pd.read_csv(path, dtype={"id": str, "label": str, "prediction": str})
+    if df["id"].tolist() != [str(c) for c in chip_indices]:
+        logger.warning(f"cached predictions at {path} do not match current chips; ignoring")
+        return None
+    return df["prediction"].to_numpy()
+
+
 def drop_null_rows(
     embeddings: np.ndarray,
     chip_indices: list[int],
@@ -281,6 +311,7 @@ def run_analysis(
     processed_data_dir: Path,
     figures_base_dir: Path,
     overwrite: bool = False,
+    recreate_figures: bool = True,
 ) -> dict:
     """Run the config-driven embedding pipeline.
 
@@ -288,12 +319,29 @@ def run_analysis(
     and extraction strategy: extracts embeddings and dispatches through
     the configured transforms, plots, and models.
 
+    Compute steps (extracted embeddings, transform CSVs, metrics, model
+    results and predictions) are cached per step and skipped individually
+    when their outputs exist. Figures (plots and confusion matrices) are
+    cheap, so by default they are redrawn from the cached results on every
+    run; this lets style, label and plot-parameter edits in the YAML take
+    effect without recomputation. Pass ``recreate_figures=False`` to restore
+    skipping of existing figures.
+
     A ``.analysis_complete`` marker is written to the config's output
-    directory after a full pass; when it exists the run is skipped entirely
-    unless ``overwrite`` is set. ``overwrite`` bypasses only this marker —
-    the per-step caches (extracted embeddings, transform CSVs, metrics,
-    plots, model results) still skip individually, so a re-entered run only
-    computes what is missing. Delete the cached outputs for a full recompute.
+    directory after a full pass. It means "compute is done": when it exists
+    and ``overwrite`` is not set, the run enters *figures-only* mode — every
+    compute step reads from its cache and any missing cache (embeddings,
+    transform, metric or model predictions) is logged and skipped, never
+    computed. ``overwrite`` re-enters the run and computes whatever is
+    missing; per-step caches still skip, so delete cached outputs for a full
+    recompute. With ``recreate_figures=False`` the marker short-circuits the
+    run entirely, as before.
+
+    Model predictions are saved as ``{run_name}_{model}_predictions.csv``
+    next to the results CSV, so confusion matrices can be redrawn without
+    re-running the model. Outputs from before this file existed have no
+    predictions; their confusion matrices are redrawn only after one
+    ``overwrite`` run back-fills them.
 
     Figures are written to ``{figures_base_dir}/{data_version}/{config_stem}/``
     as ``{strategy}_{layer}_{transform}_{plot}.png`` and
@@ -307,7 +355,10 @@ def run_analysis(
         embedding_dir: Root directory for embeddings.
         processed_data_dir: Root directory for processed outputs.
         figures_base_dir: Root directory for generated figures.
-        overwrite: Re-enter a run marked complete (see above).
+        overwrite: Re-enter a run marked complete and compute missing steps
+            (see above).
+        recreate_figures: Redraw figures from cached results on every run
+            (default). ``False`` skips existing figures and completed runs.
 
     Returns:
         Nested dict of results keyed by ``{layer}_{strategy}_{step_type}``.
@@ -317,10 +368,17 @@ def run_analysis(
     )
 
     marker_file = ctx.output_dir / ".analysis_complete"
-    if marker_file.exists() and not overwrite:
+    marker_exists = marker_file.exists()
+    if marker_exists and not overwrite and not recreate_figures:
         logger.info("analysis already complete, skipping...")
         return {}
-    elif marker_file.exists() and overwrite:
+    figures_only = marker_exists and not overwrite
+    if figures_only:
+        logger.info(
+            "analysis already complete; regenerating figures from cached results "
+            "(pass --overwrite to compute missing steps)"
+        )
+    elif marker_exists:
         logger.info("re-entering completed analysis (cached steps still skip)...")
 
     if not ctx.embeddings_directories:
@@ -354,6 +412,13 @@ def run_analysis(
                 logger.info(f"loading cached embeddings from {emb_cache}")
                 embeddings = np.load(emb_cache)
                 chip_indices = np.load(idx_cache).tolist()
+            elif figures_only:
+                logger.warning(
+                    f"no cached embeddings for layer={embedding_layer}, "
+                    f"strategy={strategy_key} at {emb_cache}; skipping "
+                    "(re-run with --overwrite to extract them)"
+                )
+                continue
             else:
                 logger.info(
                     f"extracting embeddings: layer={embedding_layer}, strategy={strategy_key}"
@@ -401,6 +466,12 @@ def run_analysis(
                     logger.info(f"{cache_path} exists, loading cached {t_type} result")
                     cached_data, _ = _load_cached_transform(cache_path)
                     transform_results[t_type] = cached_data
+                elif figures_only:
+                    logger.warning(
+                        f"no cached {t_type} result at {cache_path}; skipping "
+                        "(re-run with --overwrite to compute it)"
+                    )
+                    continue
                 else:
                     t_fn = TRANSFORMS[t_type]
                     result = t_fn(embeddings, **t_params)
@@ -422,6 +493,12 @@ def run_analysis(
                 cache_path = layer_dir / f"{prefix}_{met_type}.csv"
                 if cache_path.exists():
                     logger.info(f"cached {met_type} result exists at {cache_path}, skipping")
+                elif figures_only:
+                    logger.warning(
+                        f"no cached {met_type} result at {cache_path}; skipping "
+                        "(re-run with --overwrite to compute it)"
+                    )
+                    continue
                 else:
                     met_fn = METRICS[met_type]
                     # Metrics needing chip metadata (e.g. knn_geo_distance reads chip
@@ -455,10 +532,12 @@ def run_analysis(
                     continue
 
                 data = transform_results[t_type]
-                output_path = ctx.figures_dir / f"{figure_prefix}_{t_type}_{p_type}.{ctx.figure_format}"
-                if output_path.exists():
+                output_path = (
+                    ctx.figures_dir / f"{figure_prefix}_{t_type}_{p_type}.{ctx.figure_format}"
+                )
+                if output_path.exists() and not recreate_figures:
                     logger.info(
-                        f"plot {p_type} for {strategy_key} with transform: {t_type}"
+                        f"plot {p_type} for {strategy_key} with transform: {t_type} "
                         "already exists - skipping"
                     )
                     continue
@@ -502,17 +581,46 @@ def run_analysis(
                 # (via _save_results_csv), so the cached result path is known
                 # before running.
                 results_csv = layer_dir / f"{run_name}_{m_type}_results.csv"
-                cm_path = ctx.figures_dir / f"{figure_prefix}_{m_type}_confusion_matrix.{ctx.figure_format}"
-                if results_csv.exists() and cm_path.exists():
+                preds_csv = layer_dir / f"{run_name}_{m_type}_predictions.csv"
+                cm_path = (
+                    ctx.figures_dir
+                    / f"{figure_prefix}_{m_type}_confusion_matrix.{ctx.figure_format}"
+                )
+
+                # Cached predictions only count when the results CSV exists too;
+                # a stale/mismatched predictions file loads as None.
+                predictions = (
+                    _load_cached_predictions(preds_csv, chip_indices)
+                    if results_csv.exists()
+                    else None
+                )
+                if predictions is not None:
+                    logger.info(f"model {m_type} results cached at {results_csv} - not re-running")
+                    if cm_path.exists() and not recreate_figures:
+                        continue
+                elif results_csv.exists() and cm_path.exists() and not recreate_figures:
                     logger.info(f"model {m_type} results exist at {results_csv} - skipping")
                     continue
-                logger.info(f"running model {m_type} for {strategy_key}")
-                m_fn = MODELS[m_type]
-                result = m_fn(data, labels, output_dir=layer_dir, run_name=run_name, **m_params)
+                elif figures_only:
+                    logger.warning(
+                        f"no cached predictions for model {m_type} at {preds_csv}; confusion "
+                        "matrix not regenerated (re-run with --overwrite to compute them)"
+                    )
+                    continue
+                else:
+                    logger.info(f"running model {m_type} for {strategy_key}")
+                    m_fn = MODELS[m_type]
+                    result = m_fn(
+                        data, labels, output_dir=layer_dir, run_name=run_name, **m_params
+                    )
+                    all_results[f"{prefix}_{m_type}"] = result
+                    predictions = result.get("predictions")
+                    if predictions is not None:
+                        _save_predictions(predictions, labels, chip_indices, preds_csv)
 
-                if result.get("predictions") is not None:
+                if predictions is not None:
                     confusion_matrix(
-                        predictions=result["predictions"],
+                        predictions=predictions,
                         labels=labels,
                         chip_indices=chip_indices,
                         style_cfg=ctx.style_cfg,
@@ -523,8 +631,6 @@ def run_analysis(
                         output_path=cm_path,
                     )
                     logger.info(f"confusion matrix saved to {cm_path}")
-
-                all_results[f"{prefix}_{m_type}"] = result
 
     ctx.output_dir.mkdir(exist_ok=True, parents=True)
     marker_file.touch()
@@ -564,8 +670,16 @@ def main(
     overwrite: Optional[bool] = typer.Option(
         False,
         "--overwrite",
-        help="Re-enter runs marked complete (.analysis_complete). Per-step caches still "
-        "skip, so only missing artifacts are recomputed; delete outputs for a full redo.",
+        help="Re-enter runs marked complete (.analysis_complete) and compute missing steps. "
+        "Completed runs redraw their figures anyway; --overwrite additionally computes "
+        "missing embeddings, transforms, metrics and models. Per-step caches still skip, "
+        "so delete outputs for a full redo.",
+    ),
+    recreate_figures: bool = typer.Option(
+        True,
+        "--recreate-figures/--no-recreate-figures",
+        help="Regenerate all figures from cached results on every run (default). "
+        "--no-recreate-figures restores skipping of existing figures and completed runs.",
     ),
 ):
     """
@@ -588,6 +702,7 @@ def main(
             processed_data_dir=processed_data_dir,
             figures_base_dir=figures_base_dir,
             overwrite=overwrite,
+            recreate_figures=recreate_figures,
         )
 
 

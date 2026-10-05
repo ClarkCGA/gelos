@@ -14,6 +14,22 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **Analysis figures are always recreated (issue #97).** **Behavior change:**
+  `run_analysis` now redraws every figure (plots and confusion matrices) from cached
+  results on each run, so style, label, plot-parameter, `experiment_name`, strategy
+  `title` and `figure_format` edits take effect without recomputation; previously an
+  existing PNG was skipped and had to be deleted by hand. Each model now also writes
+  `{run_name}_{model}_predictions.csv` (`id`, `label`, `prediction`) next to its results
+  CSV so the confusion matrix can be redrawn without re-running the model (predictions
+  are compared against the current chip ids and ignored when stale). The
+  `.analysis_complete` marker now means "compute is done" rather than "do nothing": a
+  completed config enters a figures-only pass that reads every compute step from its
+  cache and skips (with a warning) anything missing; `--overwrite` still re-enters the
+  run and computes missing steps. New `--no-recreate-figures` flag (`recreate_figures=False`)
+  restores the old skip-everything behavior for the marker, existing plots and cached
+  models. Outputs from before this change have no predictions CSV, so their confusion
+  matrices are redrawn only after one `--overwrite` run back-fills it. Also fixes a
+  missing space in the "plot ... already exists" log message.
 - **OlmoEarth band subsets and v1 deprecation (issue #81).** `OlmoEarthBackbone`
   (`model_args.bands`) now accepts a subset of the 12 Sentinel-2 L2A bands with a v1.2
   checkpoint: absent bands are reordered into OlmoEarth's 12-band layout and set to

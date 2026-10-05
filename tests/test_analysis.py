@@ -1013,48 +1013,253 @@ def _marker_ctx(tmp_path, synthetic_labels):
     )
 
 
+def _marker_spies(analysis_mod, ctx, embeddings, chip_indices, monkeypatch):
+    """Patch setup/extract with fakes and wrap knn, confusion_matrix and scatter_2d in spies.
+
+    Returns a dict of call lists keyed by ``extract``, ``knn``, ``cm`` and ``plot``.
+    The knn and confusion-matrix spies call through to the real functions; the
+    plot spy only touches ``output_path`` because ``_marker_ctx`` has no colors.
+    """
+    calls = {"extract": [], "knn": [], "cm": [], "plot": []}
+    monkeypatch.setattr(analysis_mod, "setup_analysis_run", lambda *a, **k: ctx)
+
+    def fake_extract(directory, slice_args):
+        calls["extract"].append(directory)
+        return embeddings, chip_indices
+
+    real_knn = analysis_mod.MODELS["knn"]
+
+    def knn_spy(*a, **k):
+        calls["knn"].append(k.get("run_name"))
+        return real_knn(*a, **k)
+
+    real_cm = analysis_mod.confusion_matrix
+
+    def cm_spy(*a, **k):
+        calls["cm"].append(k.get("output_path"))
+        return real_cm(*a, **k)
+
+    def plot_spy(data, chip_gdf, chip_indices, style_cfg, exp, title, t, layer, output_path, **k):
+        calls["plot"].append(output_path)
+        output_path.touch()
+
+    monkeypatch.setattr(analysis_mod, "extract_embeddings", fake_extract)
+    monkeypatch.setitem(analysis_mod.MODELS, "knn", knn_spy)
+    monkeypatch.setattr(analysis_mod, "confusion_matrix", cm_spy)
+    monkeypatch.setitem(analysis_mod.PLOTS, "scatter_2d", plot_spy)
+    return calls
+
+
+_PREDS_NAME = "exptest_strategy_layer_-1_knn_knn_predictions.csv"
+_RESULTS_NAME = "exptest_strategy_layer_-1_knn_knn_results.csv"
+
+
 def test_run_analysis_marker_and_model_skip(
     tmp_path, synthetic_embeddings, synthetic_labels, monkeypatch
 ):
-    """Second run skips via .analysis_complete; overwrite re-enters but cached models skip."""
+    """Marker runs redraw the confusion matrix from cached predictions without re-running knn.
+
+    Second run (marker present, default) returns {} and recomputes nothing but the
+    figure; overwrite re-enters and the cached model result still skips.
+    """
+    import pandas as pd
+
     import gelos.analysis as analysis_mod
 
     embeddings, chip_indices = synthetic_embeddings
     ctx = _marker_ctx(tmp_path, synthetic_labels)
     ctx.figures_dir.mkdir(parents=True)
-    monkeypatch.setattr(analysis_mod, "setup_analysis_run", lambda *a, **k: ctx)
-    extract_calls = []
-
-    def fake_extract(directory, slice_args):
-        extract_calls.append(directory)
-        return embeddings, chip_indices
-
-    monkeypatch.setattr(analysis_mod, "extract_embeddings", fake_extract)
+    calls = _marker_spies(analysis_mod, ctx, embeddings, chip_indices, monkeypatch)
     args = (tmp_path / "cfg.yaml", tmp_path, tmp_path, tmp_path, tmp_path)
 
     results = analysis_mod.run_analysis(*args)
     marker = ctx.output_dir / ".analysis_complete"
     assert marker.exists()
-    assert len(extract_calls) == 1
+    assert len(calls["extract"]) == 1
+    assert len(calls["knn"]) == 1
+    assert len(calls["cm"]) == 1
     assert any(key.endswith("_knn") for key in results)
-    model_csv = ctx.output_dir / "layer_-1" / "exptest_strategy_layer_-1_knn_knn_results.csv"
+    model_csv = ctx.output_dir / "layer_-1" / _RESULTS_NAME
     assert model_csv.exists()
+    preds_csv = ctx.output_dir / "layer_-1" / _PREDS_NAME
+    assert preds_csv.exists()
+    preds_df = pd.read_csv(preds_csv)
+    assert list(preds_df.columns) == ["id", "label", "prediction"]
+    assert len(preds_df) == N_SAMPLES
     # Figure names omit the config stem ("exptest"); the stem is the folder instead.
     cm_png = ctx.figures_dir / "strategy_layer_-1_knn_confusion_matrix.png"
     assert cm_png.exists()
     assert not list(ctx.figures_dir.glob("exptest_*"))
 
-    # Second run: marker short-circuits everything.
+    # Second run: marker means figures-only. No extraction, no model run, but the
+    # confusion matrix is redrawn from the cached predictions.
     assert analysis_mod.run_analysis(*args) == {}
-    assert len(extract_calls) == 1
+    assert len(calls["extract"]) == 1
+    assert len(calls["knn"]) == 1
+    assert len(calls["cm"]) == 2
 
     # Overwrite: re-enters, but embeddings come from cache and the cached model
-    # result (results CSV + confusion matrix) is not recomputed.
+    # result (results CSV + predictions) is not recomputed.
     csv_mtime = model_csv.stat().st_mtime_ns
     results = analysis_mod.run_analysis(*args, overwrite=True)
-    assert len(extract_calls) == 1  # .npy cache hit, no re-extraction
-    assert results == {}  # model skipped, nothing recomputed
+    assert len(calls["extract"]) == 1  # .npy cache hit, no re-extraction
+    assert len(calls["knn"]) == 1  # model skipped
+    assert len(calls["cm"]) == 3  # figure redrawn anyway
+    assert results == {}  # nothing recomputed
     assert model_csv.stat().st_mtime_ns == csv_mtime
+    gc.collect()
+
+
+def test_run_analysis_no_recreate_figures_preserves_skip(
+    tmp_path, synthetic_embeddings, synthetic_labels, monkeypatch
+):
+    """recreate_figures=False restores the old behavior: the marker short-circuits everything."""
+    import gelos.analysis as analysis_mod
+
+    embeddings, chip_indices = synthetic_embeddings
+    ctx = _marker_ctx(tmp_path, synthetic_labels)
+    ctx.figures_dir.mkdir(parents=True)
+    strategy = ctx.embedding_extraction_strategies["strategy"]
+    strategy["plots"] = [{"type": "scatter_2d", "transform": "pca"}]
+    calls = _marker_spies(analysis_mod, ctx, embeddings, chip_indices, monkeypatch)
+    args = (tmp_path / "cfg.yaml", tmp_path, tmp_path, tmp_path, tmp_path)
+
+    analysis_mod.run_analysis(*args)
+    assert (ctx.output_dir / ".analysis_complete").exists()
+    assert len(calls["cm"]) == 1
+    assert len(calls["plot"]) == 1
+
+    assert analysis_mod.run_analysis(*args, recreate_figures=False) == {}
+    assert len(calls["extract"]) == 1
+    assert len(calls["knn"]) == 1
+    assert len(calls["cm"]) == 1
+    assert len(calls["plot"]) == 1
+    gc.collect()
+
+
+def test_run_analysis_regenerates_plots(
+    tmp_path, synthetic_embeddings, synthetic_labels, monkeypatch
+):
+    """Plots are redrawn on every run by default; recreate_figures=False skips existing files."""
+    import gelos.analysis as analysis_mod
+
+    embeddings, chip_indices = synthetic_embeddings
+    ctx = _marker_ctx(tmp_path, synthetic_labels)
+    ctx.figures_dir.mkdir(parents=True)
+    strategy = ctx.embedding_extraction_strategies["strategy"]
+    strategy["plots"] = [{"type": "scatter_2d", "transform": "pca"}]
+    calls = _marker_spies(analysis_mod, ctx, embeddings, chip_indices, monkeypatch)
+    args = (tmp_path / "cfg.yaml", tmp_path, tmp_path, tmp_path, tmp_path)
+
+    analysis_mod.run_analysis(*args)
+    plot_png = ctx.figures_dir / "strategy_layer_-1_pca_scatter_2d.png"
+    assert calls["plot"] == [plot_png]
+    assert plot_png.exists()
+
+    # Second run (marker present): the plot is redrawn from the cached transform.
+    analysis_mod.run_analysis(*args)
+    assert len(calls["plot"]) == 2
+    assert len(calls["extract"]) == 1
+
+    # recreate_figures=False with overwrite: re-enters the run, but the existing
+    # plot file is skipped.
+    analysis_mod.run_analysis(*args, recreate_figures=False, overwrite=True)
+    assert len(calls["plot"]) == 2
+    gc.collect()
+
+
+def test_run_analysis_legacy_outputs_without_predictions(
+    tmp_path, synthetic_embeddings, synthetic_labels, monkeypatch
+):
+    """Legacy model outputs (no predictions CSV) are not re-run in figures-only mode.
+
+    A default re-run warns and leaves the confusion matrix alone; ``overwrite``
+    re-runs the model once and back-fills the predictions CSV.
+    """
+    import gelos.analysis as analysis_mod
+
+    embeddings, chip_indices = synthetic_embeddings
+    ctx = _marker_ctx(tmp_path, synthetic_labels)
+    ctx.figures_dir.mkdir(parents=True)
+    calls = _marker_spies(analysis_mod, ctx, embeddings, chip_indices, monkeypatch)
+    args = (tmp_path / "cfg.yaml", tmp_path, tmp_path, tmp_path, tmp_path)
+
+    analysis_mod.run_analysis(*args)
+    preds_csv = ctx.output_dir / "layer_-1" / _PREDS_NAME
+    assert preds_csv.exists()
+    preds_csv.unlink()  # simulate outputs from before predictions were saved
+
+    # Figures-only mode: no predictions, so neither the model nor the figure runs.
+    assert analysis_mod.run_analysis(*args) == {}
+    assert len(calls["knn"]) == 1
+    assert len(calls["cm"]) == 1
+    assert not preds_csv.exists()
+
+    # Overwrite back-fills: the model runs once more and writes the predictions.
+    results = analysis_mod.run_analysis(*args, overwrite=True)
+    assert len(calls["knn"]) == 2
+    assert len(calls["cm"]) == 2
+    assert preds_csv.exists()
+    assert any(key.endswith("_knn") for key in results)
+    gc.collect()
+
+
+def test_run_analysis_figures_only_does_not_compute_missing(
+    tmp_path, synthetic_embeddings, synthetic_labels, monkeypatch
+):
+    """A completed run does not compute a newly added metric until overwrite is passed."""
+    import gelos.analysis as analysis_mod
+
+    embeddings, chip_indices = synthetic_embeddings
+    ctx = _marker_ctx(tmp_path, synthetic_labels)
+    ctx.figures_dir.mkdir(parents=True)
+    calls = _marker_spies(analysis_mod, ctx, embeddings, chip_indices, monkeypatch)
+    args = (tmp_path / "cfg.yaml", tmp_path, tmp_path, tmp_path, tmp_path)
+
+    analysis_mod.run_analysis(*args)
+    assert (ctx.output_dir / ".analysis_complete").exists()
+
+    strategy = ctx.embedding_extraction_strategies["strategy"]
+    strategy["metrics"] = [{"type": "pca_ablation"}]
+    metric_csv = ctx.output_dir / "layer_-1" / "exptest_strategy_layer_-1_pca_ablation.csv"
+
+    analysis_mod.run_analysis(*args)
+    assert not metric_csv.exists()
+    assert len(calls["cm"]) == 2  # figures still redrawn
+
+    analysis_mod.run_analysis(*args, overwrite=True)
+    assert metric_csv.exists()
+    assert len(calls["knn"]) == 1
+    gc.collect()
+
+
+def test_prediction_cache_roundtrip_and_stale(tmp_path):
+    """_save_predictions/_load_cached_predictions keep strings intact and reject stale ids."""
+    from gelos.analysis import _load_cached_predictions, _save_predictions
+
+    path = tmp_path / "preds.csv"
+
+    # Leading zeros survive the round trip (dtype=str on read).
+    preds = np.array(["01", "02", "01"])
+    labels = np.array(["01", "01", "02"])
+    _save_predictions(preds, labels, [10, 11, 12], path)
+    loaded = _load_cached_predictions(path, [10, 11, 12])
+    assert loaded.tolist() == ["01", "02", "01"]
+
+    # Int predictions come back as strings matching labels.astype(str).
+    int_labels = np.array([0, 1, 2, 1])
+    int_preds = np.array([0, 1, 1, 1])
+    _save_predictions(int_preds, int_labels, [0, 1, 2, 3], path)
+    loaded = _load_cached_predictions(path, [0, 1, 2, 3])
+    assert loaded.tolist() == int_preds.astype(str).tolist()
+    assert set(loaded.tolist()) <= set(int_labels.astype(str).tolist())
+
+    # Stale ids (e.g. after null_handling changes) are ignored.
+    assert _load_cached_predictions(path, [0, 1, 2]) is None
+    assert _load_cached_predictions(path, [0, 1, 2, 4]) is None
+
+    # Missing file.
+    assert _load_cached_predictions(tmp_path / "nope.csv", [0, 1]) is None
     gc.collect()
 
 
