@@ -60,6 +60,22 @@ create_environment:
 # PROJECT RULES                                                                 #
 #################################################################################
 
+# gelos-lc sits next to the main gelos checkout; resolve it through git's common dir so the
+# target also works from a worktree under .git/wt/.
+GELOS_MAIN := $(shell dirname "$$(git rev-parse --path-format=absolute --git-common-dir)")
+GELOS_LC_PATH ?= $(abspath $(GELOS_MAIN)/../gelos-lc)
+GELOS_PATH ?= $(CURDIR)
+SMOKE_CONFIG ?= configs/smoke/exp001_prithvi300_smoke.yaml
+
+## Smoke-test a gelos checkout in gelos-lc (generation + analysis; GELOS_PATH=<checkout>)
+.PHONY: downstream-check
+downstream-check:
+	cd "$(GELOS_LC_PATH)" && export GELOS_MODULE_PATH="$(abspath $(GELOS_PATH))/" && \
+	docker compose run --rm --remove-orphans dev \
+		python -m gelos.generation -y $(SMOKE_CONFIG) --overwrite && \
+	docker compose run --rm --remove-orphans dev \
+		python -m gelos.analysis -y $(SMOKE_CONFIG) --overwrite
+
 
 
 #################################################################################
