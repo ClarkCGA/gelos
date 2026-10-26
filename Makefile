@@ -66,15 +66,17 @@ GELOS_MAIN := $(shell dirname "$$(git rev-parse --path-format=absolute --git-com
 GELOS_LC_PATH ?= $(abspath $(GELOS_MAIN)/../gelos-lc)
 GELOS_PATH ?= $(CURDIR)
 SMOKE_CONFIG ?= configs/smoke/exp001_prithvi300_smoke.yaml
+# SMOKE_CONFIG is looked up in the gelos checkout first (mounted at /app/gelos), then in gelos-lc.
+SMOKE_CONFIG_IN_APP = $(if $(wildcard $(GELOS_PATH)/$(SMOKE_CONFIG)),/app/gelos/$(SMOKE_CONFIG),$(SMOKE_CONFIG))
 
 ## Smoke-test a gelos checkout in gelos-lc (generation + analysis; GELOS_PATH=<checkout>)
 .PHONY: downstream-check
 downstream-check:
 	cd "$(GELOS_LC_PATH)" && export GELOS_MODULE_PATH="$(abspath $(GELOS_PATH))/" && \
 	docker compose run --rm --remove-orphans dev \
-		python -m gelos.generation -y $(SMOKE_CONFIG) --overwrite && \
+		python -m gelos.generation -y $(SMOKE_CONFIG_IN_APP) --overwrite && \
 	docker compose run --rm --remove-orphans dev \
-		python -m gelos.analysis -y $(SMOKE_CONFIG) --overwrite
+		python -m gelos.analysis -y $(SMOKE_CONFIG_IN_APP) --overwrite
 
 
 
