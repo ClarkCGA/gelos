@@ -1,7 +1,10 @@
 import gc
+import importlib.util
 from pathlib import Path
+import threading
 
 import geopandas as gpd
+from loguru import logger
 import numpy as np
 import pandas as pd
 import pytest
@@ -16,8 +19,15 @@ import yaml
 from gelos.analysis import run_analysis
 from gelos.cloud_embeddings import runner as cloud_runner
 from gelos.cloud_embeddings.aggregate import flatten_pool, mean_pool
+from gelos.cloud_embeddings.backends import zarr_mosaic
 from gelos.cloud_embeddings.backends.alphaearth import AlphaEarthBackend
 from gelos.cloud_embeddings.backends.base import FetchRequest
+from gelos.cloud_embeddings.backends.olmoearth import (
+    OlmoEarthBackend,
+    _OlmoEarthZoneReader,
+    dequantize,
+    resolve_zone,
+)
 from gelos.cloud_embeddings.footprints import compute_footprint_manifest
 from gelos.cloud_embeddings.patches import resolve_patch_indices, resolve_timestep_indices
 from gelos.cloud_embeddings.runner import generate_cloud_embeddings
@@ -751,6 +761,914 @@ def test_alphaearth_pad_crosses_chunk_boundary(tmp_path):
     gc.collect()
 
 
+def test_alphaearth_cache_key_snapshot():
+    """Pin the pre-refactor AEF cache-key format byte-for-byte.
+
+    Computed once with the original (pre-ZarrMosaicBackend) implementation:
+    sha256("EPSG:32619|2018|1.0|2.0|3.0|4.0|(16, 16)|pad1")[:8] == "29ad6864".
+    Existing on-disk ``_footprint_cache`` entries must stay valid.
+    """
+    key = AlphaEarthBackend()._cache_key("EPSG:32619", 2018, (1.0, 2.0, 3.0, 4.0), (16, 16))
+    assert key == "mosaic_EPSG32619_2018_1.000_2.000_3.000_4.000_29ad6864.tif"
+
+
+# ---------------------------------------------------------------------------
+# OlmoEarth backend (synthetic per-UTM-zone sharded Zarr v3 — no network)
+# ---------------------------------------------------------------------------
+
+OLMO_X0 = 499840.0
+OLMO_Y0 = 4001280.0
+OLMO_ZONE19_X0 = 300000.0
+
+
+def _write_synthetic_olmoearth_zarr(
+    path: Path,
+    zones: tuple[int, ...] = (18,),
+    years: tuple[int, ...] = (2023, 2024, 2025),
+    H: int = 64,
+    W: int = 64,
+    C: int = 128,
+    x0: float = OLMO_X0,
+    y0: float = OLMO_Y0,
+    res: float = 10.0,
+    nodata_corner: bool = False,
+    inner_chunks_yx: tuple[int, int] = (16, 16),
+    shard_yx: tuple[int, int] = (32, 32),
+    proj_code_override: str | None = None,
+    nodata_year_index: int | None = None,
+    index_bands: bool = False,
+) -> None:
+    """Write a synthetic OlmoEarth-shaped store: one ``utmNN`` group per zone.
+
+    Mirrors the real layout: ``embeddings`` dims ``(time, band, y, x)``, int8,
+    no ``band`` coordinate, int32 ``time`` years, descending ``y`` pixel
+    centres, ``proj:code`` attrs, and a sharded zarr v3 encoding whose inner
+    chunk (``inner_chunks_yx``, 64 bands) is smaller than the shard
+    (``shard_yx``, all bands). Band ``b`` holds int8 ``b - 60`` (all valid, a
+    mix of signs). Zone 19 (when requested) gets ``x0 = OLMO_ZONE19_X0`` so
+    bboxes are unambiguous. ``nodata_corner`` sets the top-left pixel of year
+    0 to -128; ``nodata_year_index`` blanks a whole year. ``index_bands``
+    overwrites band 0 with the pixel's row index and band 1 with its column
+    index (``H, W <= 127``) so tests can tell *which* source pixels a window
+    sampled.
+    """
+    for k, zone in enumerate(zones):
+        zx0 = x0 if zone == zones[0] else OLMO_ZONE19_X0
+        data = np.empty((len(years), C, H, W), dtype=np.int8)
+        for b in range(C):
+            data[:, b, :, :] = np.int8(b - 60)
+        if index_bands:
+            data[:, 0, :, :] = np.arange(H, dtype=np.int8)[:, None]
+            data[:, 1, :, :] = np.arange(W, dtype=np.int8)[None, :]
+        if nodata_corner:
+            data[0, :, 0, 0] = -128
+        if nodata_year_index is not None:
+            data[nodata_year_index] = -128
+        ds = xr.Dataset(
+            {"embeddings": (("time", "band", "y", "x"), data)},
+            coords={
+                "time": np.array(years, dtype="int32"),
+                "y": y0 - res / 2 - res * np.arange(H),  # descending centres
+                "x": zx0 + res / 2 + res * np.arange(W),
+            },
+            attrs={
+                "proj:code": proj_code_override or f"EPSG:326{zone:02d}",
+                "spatial:transform": [res, 0.0, zx0, 0.0, -res, y0],
+            },
+        )
+        ds.to_zarr(
+            path,
+            mode="w" if k == 0 else "a",
+            zarr_format=3,
+            group=f"utm{zone:02d}",
+            encoding={
+                "embeddings": {
+                    "chunks": (1, 64, inner_chunks_yx[0], inner_chunks_yx[1]),
+                    "shards": (1, C, shard_yx[0], shard_yx[1]),
+                }
+            },
+        )
+
+
+def _olmo_expected_band_values(C: int = 128) -> np.ndarray:
+    return dequantize(np.arange(C, dtype=np.int8) - np.int8(60))
+
+
+def test_olmoearth_registered_in_backends():
+    assert "olmoearth" in cloud_runner.BACKENDS
+    assert cloud_runner.BACKENDS["olmoearth"] is OlmoEarthBackend
+    assert cloud_runner._backend_accepts_kwarg(OlmoEarthBackend, "cache_dir")
+
+
+def test_olmoearth_dequantize_formula():
+    q = np.array([-128, -127, -64, 0, 64, 127], dtype=np.int8)
+    out = dequantize(q)
+    assert out.dtype == np.float32
+    assert np.isnan(out[0])
+    expected = np.array(
+        [-((127 / 127.5) ** 2), -((64 / 127.5) ** 2), 0.0, (64 / 127.5) ** 2, (127 / 127.5) ** 2]
+    )
+    np.testing.assert_allclose(out[1:], expected, atol=1e-6)
+    assert out[1] == pytest.approx(-0.9922, abs=1e-3)
+    # Float input with NaN already at nodata (what the base class passes).
+    f = np.array([np.nan, 64.0, -64.0], dtype=np.float32)
+    out_f = dequantize(f)
+    assert np.isnan(out_f[0])
+    np.testing.assert_allclose(out_f[1:], [(64 / 127.5) ** 2, -((64 / 127.5) ** 2)], atol=1e-6)
+
+
+def test_olmoearth_zone_resolution():
+    bbox_utm = (500000.0, 4000000.0, 502880.0, 4002880.0)
+    assert resolve_zone(bbox_utm, "EPSG:32618") == 18
+    assert resolve_zone(bbox_utm, "EPSG:32718") == 18
+    # WGS84 bboxes: centre longitude drives the zone.
+    assert resolve_zone((-74.1, 40.6, -73.9, 40.8), "EPSG:4326") == 18
+    assert resolve_zone((179.8, 10.0, 180.0, 10.2), "EPSG:4326") == 60
+    assert resolve_zone((-180.0, 10.0, -179.8, 10.2), "EPSG:4326") == 1
+    # Non-UTM projected CRS: centre is reprojected (Web Mercator over NYC).
+    bbox_3857 = tuple(transform_bounds("EPSG:4326", "EPSG:3857", -74.1, 40.6, -73.9, 40.8))
+    assert resolve_zone(bbox_3857, "EPSG:3857") == 18
+
+
+def test_olmoearth_invalid_dims_raises():
+    with pytest.raises(ValueError, match="dims"):
+        OlmoEarthBackend(dims=100)
+
+
+def test_olmoearth_chunk_cache_dir_rejected(tmp_path):
+    with pytest.raises(ValueError, match="chunk_cache_dir"):
+        OlmoEarthBackend(chunk_cache_dir=tmp_path / "chunks")
+
+
+def test_olmoearth_missing_zarr_raises_actionable_import_error(monkeypatch):
+    import importlib.util as iu
+
+    real_find_spec = iu.find_spec
+
+    def fake_find_spec(name, *args, **kwargs):
+        if name == "zarr":
+            return None
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(iu, "find_spec", fake_find_spec)
+    with pytest.raises(ImportError, match=r"gelos\[olmoearth-embeddings\]"):
+        OlmoEarthBackend()
+
+
+def test_olmoearth_fetch_utm_passthrough_dequantized(tmp_path):
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store)
+    backend = OlmoEarthBackend(url=str(store))
+    bbox = (OLMO_X0, OLMO_Y0 - 160, OLMO_X0 + 160, OLMO_Y0)
+    arr = backend.fetch(bbox, crs="EPSG:32618", year=2024)
+    assert arr.shape == (16, 16, 128)
+    assert arr.dtype == np.float32
+    assert not np.isnan(arr).any()
+    assert np.abs(arr).max() <= 1.0
+    expected = _olmo_expected_band_values(128)
+    for b in range(128):
+        np.testing.assert_allclose(arr[..., b], expected[b], atol=1e-6)
+    gc.collect()
+
+
+def test_olmoearth_dims_64_reads_first_bands(tmp_path):
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store)
+    backend = OlmoEarthBackend(url=str(store), dims=64)
+    bbox = (OLMO_X0, OLMO_Y0 - 160, OLMO_X0 + 160, OLMO_Y0)
+    arr = backend.fetch(bbox, crs="EPSG:32618", year=2024)
+    assert arr.shape == (16, 16, 64)
+    expected = _olmo_expected_band_values(128)[:64]
+    for b in range(64):
+        np.testing.assert_allclose(arr[..., b], expected[b], atol=1e-6)
+    # Inner chunk (16x16), not the 32x32 shard: pins prefer_inner_chunks.
+    reader = backend._reader(18)
+    assert reader._chunk_layout[:2] == (16, 16)
+    assert reader.band_slice == (0, 64)
+    gc.collect()
+
+
+def test_olmoearth_year_lookup_and_missing_year(tmp_path):
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store, years=(2023, 2024, 2025))
+    backend = OlmoEarthBackend(url=str(store))
+    reader = backend._reader(18)
+    assert reader._year_to_index(2023) == 0
+    assert reader._year_to_index(2024) == 1
+    assert reader._year_to_index(2025) == 2
+    bbox = (OLMO_X0, OLMO_Y0 - 160, OLMO_X0 + 160, OLMO_Y0)
+    with pytest.raises(ValueError, match="out of range") as excinfo:
+        backend.fetch(bbox, crs="EPSG:32618", year=2019)
+    assert "2023" in str(excinfo.value)
+    gc.collect()
+
+
+def test_olmoearth_nodata_becomes_nan(tmp_path):
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store, nodata_corner=True)
+    backend = OlmoEarthBackend(url=str(store))
+    bbox = (OLMO_X0, OLMO_Y0 - 160, OLMO_X0 + 160, OLMO_Y0)
+    arr = backend.fetch(bbox, crs="EPSG:32618", year=2023)
+    assert arr.shape == (16, 16, 128)
+    assert np.isnan(arr[0, 0, :]).all()
+    assert not np.isnan(arr[1:, :, :]).any()
+    assert not np.isnan(arr[:, 1:, :]).any()
+    gc.collect()
+
+
+def test_olmoearth_wgs84_request_with_out_shape(tmp_path):
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store)
+    backend = OlmoEarthBackend(url=str(store))
+    bbox_utm = (OLMO_X0 + 240, OLMO_Y0 - 400, OLMO_X0 + 400, OLMO_Y0 - 240)
+    bbox_wgs84 = tuple(transform_bounds("EPSG:32618", "EPSG:4326", *bbox_utm))
+    arr = backend.fetch(bbox_wgs84, crs="EPSG:4326", year=2024, out_shape=(8, 8))
+    assert arr.shape == (8, 8, 128)
+    assert not np.isnan(arr).any()
+    expected = _olmo_expected_band_values(128)
+    np.testing.assert_allclose(arr[..., 5], expected[5], atol=1e-6)
+    gc.collect()
+
+
+def test_olmoearth_southern_crs_reprojects(tmp_path):
+    """A southern-hemisphere UTM request (EPSG:327NN) is routed to utmNN and reprojected."""
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store)
+    backend = OlmoEarthBackend(url=str(store))
+    bbox_n = (OLMO_X0 + 240, OLMO_Y0 - 400, OLMO_X0 + 400, OLMO_Y0 - 240)
+    # EPSG:32718 differs from EPSG:32618 by a 10,000,000 m false northing.
+    bbox_s = tuple(transform_bounds("EPSG:32618", "EPSG:32718", *bbox_n))
+    assert bbox_s[1] == pytest.approx(bbox_n[1] + 10_000_000, abs=1e-3)
+    north = backend.fetch(bbox_n, crs="EPSG:32618", year=2024, out_shape=(8, 8))
+    south = backend.fetch(bbox_s, crs="EPSG:32718", year=2024, out_shape=(8, 8))
+    assert south.shape == (8, 8, 128)
+    assert not np.isnan(south).any()
+    np.testing.assert_allclose(south, north, atol=1e-6)
+    assert list(backend._readers) == [18]
+    gc.collect()
+
+
+def test_olmoearth_cache_roundtrip_dequantized(tmp_path, monkeypatch):
+    """Cache files stay int8 on disk; the cache-read path dequantizes like the fresh path."""
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store, nodata_corner=True)
+    cache_dir = tmp_path / "cache"
+    backend = OlmoEarthBackend(url=str(store), cache_dir=cache_dir)
+    bbox = (OLMO_X0, OLMO_Y0 - 160, OLMO_X0 + 160, OLMO_Y0)
+    first = backend.fetch(bbox, crs="EPSG:32618", year=2023)
+
+    cached_files = list(cache_dir.glob("*.tif"))
+    assert len(cached_files) == 1, f"expected one cached tif, got {cached_files}"
+    assert cached_files[0].name.startswith("olmoearth_utm18_d128_EPSG32618_2023_")
+    with rasterio.open(cached_files[0]) as src:
+        assert src.count == 128
+        assert set(src.dtypes) == {"int8"}  # one dtype entry per band
+        assert src.nodata == -128
+
+    def boom(self):
+        raise AssertionError("data_array must not be accessed on cache hit")
+
+    monkeypatch.setattr(_OlmoEarthZoneReader, "data_array", property(boom))
+    second = backend.fetch(bbox, crs="EPSG:32618", year=2023)
+    assert second.shape == first.shape
+    assert second.dtype == np.float32
+    np.testing.assert_allclose(second, first, equal_nan=True, atol=1e-6)
+    assert np.isnan(second[0, 0, :]).all()
+    assert np.abs(np.nan_to_num(second)).max() <= 1.0
+    gc.collect()
+
+
+def test_olmoearth_multi_zone_batch_preserves_order(tmp_path):
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store, zones=(18, 19))
+    backend = OlmoEarthBackend(url=str(store))
+    z18 = lambda k: (OLMO_X0 + 160 * k, OLMO_Y0 - 160, OLMO_X0 + 160 * (k + 1), OLMO_Y0)  # noqa: E731
+    z19 = lambda k: (  # noqa: E731
+        OLMO_ZONE19_X0 + 160 * k,
+        OLMO_Y0 - 320,
+        OLMO_ZONE19_X0 + 160 * (k + 1),
+        OLMO_Y0 - 160,
+    )
+    requests = [
+        FetchRequest(bbox=z18(0), crs="EPSG:32618", year=2024),
+        FetchRequest(bbox=z19(0), crs="EPSG:32619", year=2024),
+        FetchRequest(bbox=z18(1), crs="EPSG:32618", year=2025),
+        FetchRequest(bbox=z19(1), crs="EPSG:32619", year=2023),
+        FetchRequest(bbox=z18(2), crs="EPSG:32618", year=2024),
+    ]
+    batch = backend.fetch_batch(requests)
+    assert len(batch) == 5
+    assert sorted(backend._readers) == [18, 19]
+    individual = [backend.fetch(r.bbox, r.crs, r.year, out_shape=r.out_shape) for r in requests]
+    for i, (b, ind) in enumerate(zip(batch, individual)):
+        assert b.shape == ind.shape == (16, 16, 128), f"request {i}"
+        np.testing.assert_allclose(b, ind, equal_nan=True, atol=1e-6)
+    gc.collect()
+
+
+def test_olmoearth_fetch_batch_minimizes_inner_chunk_loads(tmp_path, monkeypatch):
+    """Four bboxes inside one 16x16 inner chunk trigger exactly one .load() call.
+
+    The bboxes keep a one-pixel margin from the chunk edges: every OlmoEarth
+    request is resampled onto a footprint-pinned grid, so its source
+    selection is padded by one pixel (see ``_pad_bbox_src``) and a bbox flush
+    against the chunk boundary would legitimately pull in the neighbour.
+    """
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store)
+    backend = OlmoEarthBackend(url=str(store))
+
+    load_count = {"n": 0}
+    original_load = xr.DataArray.load
+
+    def counting_load(self, *args, **kwargs):
+        load_count["n"] += 1
+        return original_load(self, *args, **kwargs)
+
+    monkeypatch.setattr(xr.DataArray, "load", counting_load)
+
+    x0, y0 = OLMO_X0, OLMO_Y0
+    requests = [
+        FetchRequest(bbox=(x0 + 10, y0 - 70, x0 + 70, y0 - 10), crs="EPSG:32618", year=2024),
+        FetchRequest(bbox=(x0 + 90, y0 - 70, x0 + 150, y0 - 10), crs="EPSG:32618", year=2024),
+        FetchRequest(bbox=(x0 + 10, y0 - 150, x0 + 70, y0 - 90), crs="EPSG:32618", year=2024),
+        FetchRequest(bbox=(x0 + 90, y0 - 150, x0 + 150, y0 - 90), crs="EPSG:32618", year=2024),
+    ]
+    results = backend.fetch_batch(requests)
+    assert all(r.shape == (6, 6, 128) for r in results)
+    assert load_count["n"] == 1, f"expected 1 .load() call, got {load_count['n']}"
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# OlmoEarth mean path (no out_shape): window pinned to the chip footprint
+# ---------------------------------------------------------------------------
+
+
+def _requantize(v: np.ndarray) -> np.ndarray:
+    """Invert ``dequantize`` for non-negative codes: ``(q / 127.5) ** 2 -> q``."""
+    return np.rint(np.sqrt(np.asarray(v, dtype=np.float64)) * 127.5).astype(int)
+
+
+def test_olmoearth_mean_path_window_pinned_to_footprint(tmp_path):
+    """A request without ``out_shape`` (``pool: mean``) over a footprint whose edges
+    sit half a pixel (5 m) off the 10 m zone grid comes back as exactly
+    ``extent / 10`` samples per axis — 16x16 for 160 m — drawn from 16 consecutive
+    source rows/cols the footprint covers, and ``mean_pool`` averages exactly those
+    pixels. Unpinned, ``.sel`` would pass through the 17x17 pixels whose centres fall
+    in the bbox (a 170 m window hanging half a pixel outside the footprint)."""
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store, index_bands=True)
+    backend = OlmoEarthBackend(url=str(store))
+    minx, maxy = OLMO_X0 + 45.0, OLMO_Y0 - 45.0  # edges at 5 mod 10 m
+    bbox = (minx, maxy - 160.0, minx + 160.0, maxy)
+    arr = backend.fetch(bbox, crs="EPSG:32618", year=2024)
+
+    assert arr.shape == (16, 16, 128)
+    assert not np.isnan(arr).any()
+    rows = _requantize(arr[:, :, 0])
+    cols = _requantize(arr[:, :, 1])
+    # Each output row samples one source row, each output column one source column.
+    assert (rows == rows[:, :1]).all() and (cols == cols[:1, :]).all()
+    first_row, first_col = int(rows[0, 0]), int(cols[0, 0])
+    # The footprint spans source rows/cols 4..20 (17 pixels at half-pixel offset);
+    # the pinned window picks 16 consecutive ones, starting at 4 or 5.
+    assert rows[:, 0].tolist() == list(range(first_row, first_row + 16))
+    assert cols[0, :].tolist() == list(range(first_col, first_col + 16))
+    assert 4 <= first_row <= 5 and 4 <= first_col <= 5
+
+    pooled = mean_pool(arr)
+    assert pooled.shape == (128,)
+    exp_rows = dequantize(np.arange(first_row, first_row + 16, dtype=np.int8))
+    exp_cols = dequantize(np.arange(first_col, first_col + 16, dtype=np.int8))
+    np.testing.assert_allclose(pooled[0], exp_rows.mean(), atol=1e-6)
+    np.testing.assert_allclose(pooled[1], exp_cols.mean(), atol=1e-6)
+    np.testing.assert_allclose(pooled[2:], _olmo_expected_band_values(128)[2:], atol=1e-6)
+    gc.collect()
+
+
+def test_olmoearth_mean_path_zone_and_reproject_branches_agree(tmp_path):
+    """Same half-pixel-offset footprint without ``out_shape`` via the zone CRS
+    (EPSG:326NN, no reprojection needed) and via the southern CRS (EPSG:327NN,
+    reproject branch): both are pinned to the same 16x16 footprint grid."""
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store)
+    backend = OlmoEarthBackend(url=str(store))
+    minx, maxy = OLMO_X0 + 45.0, OLMO_Y0 - 45.0
+    bbox_n = (minx, maxy - 160.0, minx + 160.0, maxy)
+    bbox_s = tuple(transform_bounds("EPSG:32618", "EPSG:32718", *bbox_n))
+    north = backend.fetch(bbox_n, crs="EPSG:32618", year=2024)
+    south = backend.fetch(bbox_s, crs="EPSG:32718", year=2024)
+    assert north.shape == south.shape == (16, 16, 128)
+    assert not np.isnan(north).any() and not np.isnan(south).any()
+    np.testing.assert_allclose(south, north, atol=1e-6)
+    assert list(backend._readers) == [18]
+    gc.collect()
+
+
+def test_olmoearth_mean_path_nan_aware(tmp_path):
+    """Nodata inside a pinned window stays NaN and ``mean_pool`` ignores it."""
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store, nodata_corner=True)
+    backend = OlmoEarthBackend(url=str(store))
+    bbox = (OLMO_X0, OLMO_Y0 - 160, OLMO_X0 + 160, OLMO_Y0)
+    arr = backend.fetch(bbox, crs="EPSG:32618", year=2023)
+    assert arr.shape == (16, 16, 128)
+    assert np.isnan(arr[0, 0, :]).all()
+    assert np.isnan(arr).sum() == 128
+    pooled = mean_pool(arr)
+    assert np.isfinite(pooled).all()
+    np.testing.assert_allclose(pooled, _olmo_expected_band_values(128), atol=1e-6)
+    gc.collect()
+
+
+def _spy_open_zarr(monkeypatch) -> list[dict]:
+    """Record the kwargs of every ``xr.open_zarr`` call made by the backends."""
+    captured: list[dict] = []
+    real_open_zarr = xr.open_zarr
+
+    def spy(*args, **kwargs):
+        captured.append(dict(kwargs))
+        return real_open_zarr(*args, **kwargs)
+
+    monkeypatch.setattr(xr, "open_zarr", spy)
+    return captured
+
+
+def test_olmoearth_zone_reader_opens_without_dask(tmp_path, monkeypatch):
+    """Zone groups are opened with ``chunks=None`` (no dask graph), values unchanged.
+
+    The real zone array has ~50M inner chunks; a dask-wrapped open pays ~a
+    minute of graph optimisation per windowed read. ``da.chunks is None`` is
+    asserted on the loaded variable, and — because the test image has no dask,
+    so that alone would pass trivially — the open kwargs are spied as well.
+    """
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store)
+    captured = _spy_open_zarr(monkeypatch)
+    backend = OlmoEarthBackend(url=str(store))
+    bbox = (OLMO_X0, OLMO_Y0 - 160, OLMO_X0 + 160, OLMO_Y0)
+    arr = backend.fetch(bbox, crs="EPSG:32618", year=2024)
+
+    reader = backend._reader(18)
+    assert reader.use_dask is False
+    assert captured, "xr.open_zarr was never called"
+    assert all("chunks" in kw and kw["chunks"] is None for kw in captured), captured
+    assert reader.data_array.chunks is None
+    # Inner-chunk batching still resolves through encoding["chunks"] without dask.
+    assert reader._chunk_layout[:2] == (16, 16)
+
+    assert arr.shape == (16, 16, 128)
+    expected = _olmo_expected_band_values(128)
+    for b in range(128):
+        np.testing.assert_allclose(arr[..., b], expected[b], atol=1e-6)
+    gc.collect()
+
+
+def test_alphaearth_opens_with_default_dask_chunking(tmp_path, monkeypatch):
+    """AlphaEarth keeps xarray's default chunking: ``chunks`` is never passed."""
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path, chunks_yx=(8, 8))
+    captured = _spy_open_zarr(monkeypatch)
+    backend = AlphaEarthBackend(url=str(zarr_path), anon=False)
+    assert backend.use_dask is True
+    arr = backend.fetch((-71.7, 42.2, -71.5, 42.5), crs="EPSG:4326", year=2018)
+    assert captured, "xr.open_zarr was never called"
+    assert all("chunks" not in kw for kw in captured), captured
+    assert arr.shape[-1] == 64
+    gc.collect()
+
+
+def test_olmoearth_proj_code_mismatch_raises(tmp_path):
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store, proj_code_override="EPSG:32619")
+    backend = OlmoEarthBackend(url=str(store))
+    bbox = (OLMO_X0, OLMO_Y0 - 160, OLMO_X0 + 160, OLMO_Y0)
+    with pytest.raises(ValueError, match="proj:code"):
+        backend.fetch(bbox, crs="EPSG:32618", year=2024)
+    gc.collect()
+
+
+def test_olmoearth_all_nodata_batch_warns(tmp_path):
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store, nodata_year_index=1)
+    backend = OlmoEarthBackend(url=str(store))
+    bbox = (OLMO_X0, OLMO_Y0 - 160, OLMO_X0 + 160, OLMO_Y0)
+
+    captured: list[str] = []
+    sink_id = logger.add(lambda msg: captured.append(str(msg)), level="WARNING")
+    try:
+        arr = backend.fetch(bbox, crs="EPSG:32618", year=2024)
+    finally:
+        logger.remove(sink_id)
+
+    assert arr.shape == (16, 16, 128)
+    assert np.isnan(arr).all()
+    warnings_text = "\n".join(captured)
+    assert "1/1 footprints" in warnings_text
+    assert "2017-2022" in warnings_text
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Transient-error retry around store opens and chunk loads (ZarrMosaicBackend._with_retries)
+# ---------------------------------------------------------------------------
+
+_HAS_AIOHTTP = importlib.util.find_spec("aiohttp") is not None
+
+
+def _connection_reset() -> BaseException:
+    return ConnectionResetError(104, "Connection reset by peer")
+
+
+def _aiohttp_payload_error() -> BaseException:
+    import aiohttp
+
+    # Exactly what the real store produces mid-download (see smoke logs).
+    exc = aiohttp.ClientPayloadError(
+        "Response payload is not completed: <ContentLengthError: 400, message="
+        "'Not enough data to satisfy content length header (received 16384 of 93888 bytes).'>"
+    )
+    exc.__cause__ = ConnectionResetError(104, "Connection reset by peer")
+    return exc
+
+
+_TRANSIENT_FACTORIES = [
+    pytest.param(_connection_reset, id="ConnectionResetError"),
+    pytest.param(
+        _aiohttp_payload_error,
+        id="aiohttp.ClientPayloadError",
+        marks=pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed"),
+    ),
+]
+
+
+class _FlakyLoad:
+    """Monkeypatch target for ``xr.DataArray.load`` that fails the first ``n_fail`` calls.
+
+    The failure counter is shared across the prefetch pool's worker threads,
+    so it is guarded by a lock; after ``n_fail`` failures every call succeeds
+    (or, with ``n_fail=None``, every call fails).
+    """
+
+    def __init__(self, make_exc, n_fail: int | None) -> None:
+        self.make_exc = make_exc
+        self.n_fail = n_fail
+        self.calls = 0
+        self._lock = threading.Lock()
+        self._original = xr.DataArray.load
+
+    def install(self, monkeypatch) -> None:
+        # A plain function (not a callable instance) so attribute lookup on a
+        # DataArray binds it as a method.
+        monkeypatch.setattr(xr.DataArray, "load", lambda da, *a, **kw: self(da, *a, **kw))
+
+    def __call__(self, da, *args, **kwargs):
+        with self._lock:
+            self.calls += 1
+            fail = self.n_fail is None or self.calls <= self.n_fail
+        if fail:
+            raise self.make_exc()
+        return self._original(da, *args, **kwargs)
+
+
+def _patch_retry_sleep(monkeypatch) -> list[float]:
+    """Replace the backoff sleep with a recorder so retry tests run instantly."""
+    delays: list[float] = []
+    monkeypatch.setattr(zarr_mosaic, "_sleep", lambda d: delays.append(d))
+    return delays
+
+
+def _capture_warnings():
+    captured: list[str] = []
+    sink_id = logger.add(lambda msg: captured.append(str(msg)), level="WARNING")
+    return captured, sink_id
+
+
+@pytest.mark.parametrize("make_exc", _TRANSIENT_FACTORIES)
+def test_zarr_mosaic_retries_transient_load_errors(tmp_path, monkeypatch, make_exc):
+    """A chunk load that fails transiently N times then succeeds yields the same
+    results as a clean run, logs one warning per retry, and backs off exponentially."""
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path, H=32, W=32, chunks_yx=(8, 8))
+    requests = [
+        FetchRequest(bbox=(-72.0, 42.85, -71.85, 42.95), crs="EPSG:4326", year=2018),
+        FetchRequest(bbox=(-71.5, 42.45, -71.4, 42.55), crs="EPSG:4326", year=2018),
+        FetchRequest(bbox=(-71.85, 42.7, -71.7, 42.85), crs="EPSG:4326", year=2018),
+        FetchRequest(bbox=(-71.5, 42.45, -71.4, 42.55), crs="EPSG:4326", year=2019),
+    ]
+    clean = AlphaEarthBackend(url=str(zarr_path), anon=False).fetch_batch(requests)
+
+    flaky = _FlakyLoad(make_exc, n_fail=2)
+    flaky.install(monkeypatch)
+    delays = _patch_retry_sleep(monkeypatch)
+    backend = zarr_mosaic.ZarrMosaicBackend(
+        url=str(zarr_path), anon=False, max_retries=4, retry_backoff=0.5
+    )
+    captured, sink_id = _capture_warnings()
+    try:
+        results = backend.fetch_batch(requests)
+    finally:
+        logger.remove(sink_id)
+
+    assert len(results) == len(clean)
+    for got, exp in zip(results, clean):
+        assert got.shape == exp.shape
+        np.testing.assert_array_equal(got, exp)
+
+    # The two failures may hit one chunk twice (retry 1/4 then 2/4) or two
+    # chunks once each (retry 1/4 twice) — the prefetch pool is concurrent.
+    retry_lines = [m for m in captured if "load failed" in m and "retry " in m]
+    assert len(retry_lines) == 2, captured
+    assert all("/4 in " in m for m in retry_lines)
+    assert all(type(make_exc()).__name__ in m for m in retry_lines)
+    assert len(delays) == 2
+    # Each delay is 0.5 * 2**attempt (attempt 0 or 1) plus up to 10 % jitter.
+    assert all(0.5 <= d <= 0.55 or 1.0 <= d <= 1.1 for d in delays), delays
+    gc.collect()
+
+
+def test_zarr_mosaic_retry_exhaustion_reraises_original(tmp_path, monkeypatch):
+    """When every attempt fails the original exception (not a wrapper) propagates,
+    after exactly max_retries sleeps and max_retries + 1 load attempts."""
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path, H=32, W=32, chunks_yx=(8, 8))
+    flaky = _FlakyLoad(_connection_reset, n_fail=None)
+    flaky.install(monkeypatch)
+    delays = _patch_retry_sleep(monkeypatch)
+    backend = AlphaEarthBackend(url=str(zarr_path), anon=False)
+    backend.max_retries = 2
+    backend.retry_backoff = 0.25
+
+    captured, sink_id = _capture_warnings()
+    try:
+        with pytest.raises(ConnectionResetError, match="reset by peer") as excinfo:
+            # Single uncached request -> notebook fast path, one chunk.
+            backend.fetch((-72.0, 42.85, -71.93, 42.95), "EPSG:4326", 2018)
+    finally:
+        logger.remove(sink_id)
+
+    assert excinfo.value.errno == 104
+    assert flaky.calls == 3
+    # Exponential backoff on a single chunk: 0.25, then 0.5 (each + <=10 % jitter).
+    assert len(delays) == 2
+    assert 0.25 <= delays[0] <= 0.275 and 0.5 <= delays[1] <= 0.55, delays
+    retry_lines = [m for m in captured if "load failed" in m and "retry " in m]
+    assert [("retry 1/2" in m, "retry 2/2" in m) for m in retry_lines] == [
+        (True, False),
+        (False, True),
+    ]
+    assert any("giving up after 3 attempt(s)" in m for m in captured), captured
+    gc.collect()
+
+
+@pytest.mark.parametrize(
+    "make_exc",
+    [
+        pytest.param(lambda: KeyError("c/0/0/0"), id="KeyError"),
+        pytest.param(lambda: FileNotFoundError("https://host/store/c/0/0"), id="404"),
+    ],
+)
+def test_zarr_mosaic_non_transient_errors_not_retried(tmp_path, monkeypatch, make_exc):
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path, H=32, W=32, chunks_yx=(8, 8))
+    flaky = _FlakyLoad(make_exc, n_fail=None)
+    flaky.install(monkeypatch)
+    delays = _patch_retry_sleep(monkeypatch)
+    backend = AlphaEarthBackend(url=str(zarr_path), anon=False)
+
+    with pytest.raises(type(make_exc())):
+        backend.fetch((-72.0, 42.85, -71.93, 42.95), "EPSG:4326", 2018)
+    assert flaky.calls == 1
+    assert delays == []
+    gc.collect()
+
+
+def test_zarr_mosaic_max_retries_zero_disables_retry(tmp_path, monkeypatch):
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path, H=32, W=32, chunks_yx=(8, 8))
+    flaky = _FlakyLoad(_connection_reset, n_fail=1)
+    flaky.install(monkeypatch)
+    delays = _patch_retry_sleep(monkeypatch)
+    backend = zarr_mosaic.ZarrMosaicBackend(url=str(zarr_path), anon=False, max_retries=0)
+    with pytest.raises(ConnectionResetError):
+        backend.fetch((-72.0, 42.85, -71.93, 42.95), "EPSG:4326", 2018)
+    assert flaky.calls == 1 and delays == []
+
+
+def test_zarr_mosaic_retry_options_validated():
+    with pytest.raises(ValueError, match="max_retries"):
+        zarr_mosaic.ZarrMosaicBackend(url="x.zarr", max_retries=-1)
+    with pytest.raises(ValueError, match="retry_backoff"):
+        zarr_mosaic.ZarrMosaicBackend(url="x.zarr", retry_backoff=-0.1)
+    with pytest.raises(ValueError, match="max_retries"):
+        OlmoEarthBackend(max_retries=-1)
+
+
+def _http_status_error(status: int) -> BaseException:
+    """What fsspec's HTTP filesystem raises (unwrapped) for a non-2xx response."""
+    import aiohttp
+    from multidict import CIMultiDict, CIMultiDictProxy
+    from yarl import URL
+
+    # A real RequestInfo: aiohttp's __str__ formats request_info.real_url, which
+    # the backend's retry log lines exercise via f"{exc}".
+    url = URL("https://data.source.coop/olmoearth/embeddings.zarr/utm34/y/c/8")
+    info = aiohttp.RequestInfo(url, "GET", CIMultiDictProxy(CIMultiDict()), url)
+    return aiohttp.ClientResponseError(request_info=info, history=(), status=status)
+
+
+def test_is_transient_error_classification():
+    is_transient = zarr_mosaic._is_transient_error
+    assert is_transient(ConnectionResetError(104, "reset"))
+    assert is_transient(TimeoutError("read timed out"))
+    # Wrapped transient error is recognised through the cause chain.
+    wrapper = RuntimeError("store read failed")
+    wrapper.__cause__ = ConnectionResetError(104, "reset")
+    assert is_transient(wrapper)
+    assert not is_transient(KeyError("k"))
+    assert not is_transient(FileNotFoundError("404"))
+    assert not is_transient(PermissionError("403"))
+    assert not is_transient(OSError("generic"))
+    if _HAS_AIOHTTP:
+        assert is_transient(_aiohttp_payload_error())
+        # HTTP statuses: 429 and 5xx are the proxy misbehaving (503 observed
+        # live while opening a zone group); 4xx are configuration errors.
+        assert is_transient(_http_status_error(503))
+        assert is_transient(_http_status_error(502))
+        assert is_transient(_http_status_error(429))
+        assert not is_transient(_http_status_error(404))
+        assert not is_transient(_http_status_error(403))
+        # ... and the same through a zarr/fsspec wrapper.
+        wrapped_503 = RuntimeError("store open failed")
+        wrapped_503.__cause__ = _http_status_error(503)
+        assert is_transient(wrapped_503)
+        wrapped_404 = RuntimeError("store open failed")
+        wrapped_404.__cause__ = _http_status_error(404)
+        assert not is_transient(wrapped_404)
+
+
+class _FlakyOpenZarr:
+    """Monkeypatch target for ``xr.open_zarr`` that fails the first ``n_fail`` calls."""
+
+    def __init__(self, make_exc, n_fail: int | None) -> None:
+        self.make_exc = make_exc
+        self.n_fail = n_fail
+        self.calls = 0
+        self._original = xr.open_zarr
+
+    def install(self, monkeypatch) -> None:
+        monkeypatch.setattr(xr, "open_zarr", self)
+
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        if self.n_fail is None or self.calls <= self.n_fail:
+            raise self.make_exc()
+        return self._original(*args, **kwargs)
+
+
+_OPEN_BBOX = (-72.0, 42.85, -71.93, 42.95)
+
+
+@pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
+def test_zarr_mosaic_open_retries_transient_http_errors(tmp_path, monkeypatch):
+    """A 503 from ``xr.open_zarr`` (eager coordinate read) is retried like a chunk
+    read: the open succeeds after N failures, the fetch is correct, one warning per
+    retry, exponential delays."""
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path, H=32, W=32, chunks_yx=(8, 8))
+    clean = AlphaEarthBackend(url=str(zarr_path), anon=False).fetch(_OPEN_BBOX, "EPSG:4326", 2018)
+
+    flaky = _FlakyOpenZarr(lambda: _http_status_error(503), n_fail=2)
+    flaky.install(monkeypatch)
+    delays = _patch_retry_sleep(monkeypatch)
+    backend = zarr_mosaic.ZarrMosaicBackend(
+        url=str(zarr_path), anon=False, max_retries=4, retry_backoff=0.5
+    )
+    captured, sink_id = _capture_warnings()
+    try:
+        got = backend.fetch(_OPEN_BBOX, "EPSG:4326", 2018)
+    finally:
+        logger.remove(sink_id)
+
+    np.testing.assert_array_equal(got, clean)
+    assert flaky.calls == 3
+    retry_lines = [m for m in captured if "store open at" in m and "retry " in m]
+    assert len(retry_lines) == 2, captured
+    assert "retry 1/4" in retry_lines[0] and "retry 2/4" in retry_lines[1]
+    assert all("ClientResponseError" in m and "503" in m for m in retry_lines)
+    assert len(delays) == 2
+    assert 0.5 <= delays[0] <= 0.55 and 1.0 <= delays[1] <= 1.1, delays
+    gc.collect()
+
+
+@pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
+def test_zarr_mosaic_open_retry_exhaustion_reraises_and_leaves_backend_usable(
+    tmp_path, monkeypatch
+):
+    """Exhausting the open retry re-raises the original 503 and caches nothing, so
+    the same backend opens and reads fine once the network recovers."""
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path, H=32, W=32, chunks_yx=(8, 8))
+    clean = AlphaEarthBackend(url=str(zarr_path), anon=False).fetch(_OPEN_BBOX, "EPSG:4326", 2018)
+
+    flaky = _FlakyOpenZarr(lambda: _http_status_error(503), n_fail=None)
+    flaky.install(monkeypatch)
+    delays = _patch_retry_sleep(monkeypatch)
+    backend = zarr_mosaic.ZarrMosaicBackend(
+        url=str(zarr_path), anon=False, max_retries=2, retry_backoff=0.25
+    )
+    import aiohttp
+
+    captured, sink_id = _capture_warnings()
+    try:
+        with pytest.raises(aiohttp.ClientResponseError) as excinfo:
+            backend.fetch(_OPEN_BBOX, "EPSG:4326", 2018)
+    finally:
+        logger.remove(sink_id)
+    assert excinfo.value.status == 503
+    assert flaky.calls == 3 and len(delays) == 2
+    assert any("store open at" in m and "giving up after 3 attempt(s)" in m for m in captured)
+    assert backend._dataset is None and backend._da is None
+
+    # "Network recovers": the very next fetch opens the store and reads correctly.
+    flaky.n_fail = 0
+    got = backend.fetch(_OPEN_BBOX, "EPSG:4326", 2018)
+    np.testing.assert_array_equal(got, clean)
+    assert flaky.calls == 4 and len(delays) == 2
+    gc.collect()
+
+
+@pytest.mark.parametrize(
+    "make_exc",
+    [
+        pytest.param(
+            lambda: FileNotFoundError("https://host/store.zarr/zarr.json"), id="fsspec-404"
+        ),
+        pytest.param(
+            lambda: _http_status_error(404),
+            id="ClientResponseError-404",
+            marks=pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed"),
+        ),
+    ],
+)
+def test_zarr_mosaic_open_404_not_retried(tmp_path, monkeypatch, make_exc):
+    zarr_path = tmp_path / "synthetic.zarr"
+    _write_synthetic_zarr(zarr_path, H=32, W=32, chunks_yx=(8, 8))
+    flaky = _FlakyOpenZarr(make_exc, n_fail=None)
+    flaky.install(monkeypatch)
+    delays = _patch_retry_sleep(monkeypatch)
+    backend = zarr_mosaic.ZarrMosaicBackend(url=str(zarr_path), anon=False, max_retries=4)
+    with pytest.raises(type(make_exc())):
+        backend.fetch(_OPEN_BBOX, "EPSG:4326", 2018)
+    # One consolidated=True attempt; FileNotFoundError (an OSError) also triggers
+    # the consolidated=False fallback, which fails the same way - still no retry.
+    assert flaky.calls <= 2 and delays == []
+    assert backend._dataset is None
+    gc.collect()
+
+
+@pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
+def test_olmoearth_zone_open_retries_transient_http_errors(tmp_path, monkeypatch):
+    """The OlmoEarth zone readers inherit the open retry (the live 503 was raised
+    while opening ``utm34``'s coordinate arrays)."""
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store)
+    flaky = _FlakyOpenZarr(lambda: _http_status_error(503), n_fail=1)
+    flaky.install(monkeypatch)
+    delays = _patch_retry_sleep(monkeypatch)
+    backend = OlmoEarthBackend(url=str(store), max_retries=3, retry_backoff=0.01)
+    captured, sink_id = _capture_warnings()
+    try:
+        arr = backend.fetch((OLMO_X0, OLMO_Y0 - 80, OLMO_X0 + 80, OLMO_Y0), "EPSG:32618", 2024)
+    finally:
+        logger.remove(sink_id)
+    assert arr.shape == (8, 8, 128)
+    np.testing.assert_allclose(arr[0, 0], _olmo_expected_band_values(), atol=1e-6)
+    assert flaky.calls == 2 and len(delays) == 1
+    assert any("OlmoEarth utm18 store open at" in m and "retry 1/3" in m for m in captured)
+    gc.collect()
+
+
+def test_olmoearth_passes_retry_options_to_zone_readers(tmp_path, monkeypatch):
+    """OlmoEarthBackend(max_retries=..., retry_backoff=...) reaches every zone reader
+    and a flaky OlmoEarth read recovers with correct dequantized values."""
+    store = tmp_path / "olmo.zarr"
+    _write_synthetic_olmoearth_zarr(store)
+    backend = OlmoEarthBackend(url=str(store), max_retries=3, retry_backoff=0.01)
+    reader = backend._reader(18)
+    assert reader.max_retries == 3 and reader.retry_backoff == 0.01
+
+    flaky = _FlakyLoad(_connection_reset, n_fail=1)
+    flaky.install(monkeypatch)
+    delays = _patch_retry_sleep(monkeypatch)
+    arr = backend.fetch((OLMO_X0, OLMO_Y0 - 80, OLMO_X0 + 80, OLMO_Y0), "EPSG:32618", 2024)
+    assert arr.shape == (8, 8, 128)
+    np.testing.assert_allclose(arr[0, 0], _olmo_expected_band_values(), atol=1e-6)
+    assert flaky.calls == 2 and len(delays) == 1
+    gc.collect()
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher (gelos.generation.generate_embeddings) routing
 # ---------------------------------------------------------------------------
@@ -963,4 +1881,65 @@ def test_runner_fallback_for_backend_without_fetch_batch(cloud_run_dirs):
         cloud_run_dirs["embedding_dir"] / cloud_run_dirs["data_version"] / yaml_path.stem
     )
     assert (output_dir / ".embeddings_complete").exists()
+    gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# OlmoEarth backend end-to-end through the runner (real backend, synthetic store)
+# ---------------------------------------------------------------------------
+
+
+def test_olmoearth_e2e_through_runner(cloud_run_dirs, tmp_path):
+    """OlmoEarthBackend through generate_cloud_embeddings: cache_dir injection, both pools."""
+    raw_dir = cloud_run_dirs["raw_data_dir"] / cloud_run_dirs["data_version"]
+    # Georeference both chips in UTM 18N: 96 px x 30 m = 2880 m starting at
+    # (500000, 4000000); center_2x2 patches at 16 px cover rows/cols 2-3.
+    for name in ("S2L2A_000001_00.tif", "S2L2A_000002_00.tif"):
+        _rewrite_tiff_with_transform(
+            raw_dir / name, from_origin(500000, 4000000, 30, 30), "EPSG:32618"
+        )
+
+    # 320 px x 10 m store spanning x 499840-503040, y 3997440-4000640: encloses
+    # the centre patches (x 500960-501920, y 3998080-3999040) with margin.
+    store = tmp_path / "olmo_e2e.zarr"
+    _write_synthetic_olmoearth_zarr(store, H=320, W=320, y0=4000640.0)
+
+    fixture = Path(__file__).parent / "fixtures" / "example_olmoearth_embeddings_config.yaml"
+    cfg = yaml.safe_load(fixture.read_text())
+    assert cfg["cloud_embedding"]["backend"] == "olmoearth"
+    cfg["cloud_embedding"]["init_args"] = {"url": str(store), "dims": 64}
+    yaml_path = tmp_path / "olmoearth_e2e.yaml"
+    yaml_path.write_text(yaml.safe_dump(cfg))
+
+    generate_cloud_embeddings(
+        yaml_path,
+        raw_data_dir=cloud_run_dirs["raw_data_dir"],
+        embedding_dir=cloud_run_dirs["embedding_dir"],
+    )
+
+    output_dir = cloud_run_dirs["embedding_dir"] / cloud_run_dirs["data_version"] / yaml_path.stem
+    expected = _olmo_expected_band_values(128)[:64]
+
+    parquets = sorted((output_dir / "center_2x2").glob("*_embedding.parquet"))
+    assert len(parquets) == 2
+    for pq in parquets:
+        emb = np.asarray(pd.read_parquet(pq)["embedding"].iloc[0].tolist())
+        assert emb.shape == (4, 64)
+        assert np.isfinite(emb).all()
+        np.testing.assert_allclose(emb, np.broadcast_to(expected, (4, 64)), atol=1e-6)
+
+    flatten_parquets = sorted((output_dir / "center_2x2_flatten").glob("*_embedding.parquet"))
+    assert len(flatten_parquets) == 2
+    for pq in flatten_parquets:
+        emb = np.asarray(pd.read_parquet(pq)["embedding"].iloc[0].tolist())
+        assert emb.shape == (4, 16 * 16 * 64)
+        assert np.isfinite(emb).all()
+
+    assert (output_dir / ".embeddings_complete").exists()
+    cache_files = list((output_dir / "_footprint_cache").glob("olmoearth_utm18_d64_*.tif"))
+    # Both chips share one footprint but carry different tracker years (2023,
+    # 2024): 4 patches x 2 years x 2 strategies (mean: out_shape=None, flatten:
+    # 16x16) = 16 unique keys.
+    assert len(cache_files) == 16, f"unexpected cache files: {sorted(p.name for p in cache_files)}"
+    assert all("_2023_" in p.name or "_2024_" in p.name for p in cache_files)
     gc.collect()

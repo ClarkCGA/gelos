@@ -12,12 +12,14 @@ import yaml
 from gelos.cloud_embeddings.aggregate import POOLS, write_chip_parquet
 from gelos.cloud_embeddings.backends.alphaearth import AlphaEarthBackend
 from gelos.cloud_embeddings.backends.base import FetchRequest
+from gelos.cloud_embeddings.backends.olmoearth import OlmoEarthBackend
 from gelos.cloud_embeddings.footprints import compute_footprint_manifest
 from gelos.cloud_embeddings.year import resolve_chip_year
 from gelos.generation import instantiate_recursive
 
 BACKENDS: dict[str, type] = {
     "alphaearth": AlphaEarthBackend,
+    "olmoearth": OlmoEarthBackend,
 }
 
 DEFAULT_WINDOW_CHIPS = 256
@@ -59,7 +61,9 @@ def _build_backend(cloud_cfg: dict[str, Any], default_cache_dir: Path):
     # chunk_cache_dir is opt-in only: fsspec's SimpleCacheFileSystem._cat_file
     # rejects negative `start` values, which zarr v3's sharding codec emits for
     # shard-index reads (SuffixByteRequest). Auto-enabling the wrapper would
-    # break any sharded store. Users can still opt in via YAML init_args.
+    # break any sharded store — the OlmoEarth store is sharded and rejects it
+    # outright (ValueError at __init__). Users of unsharded stores can still
+    # opt in via YAML init_args.
     return backend_cls(**init_args)
 
 

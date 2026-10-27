@@ -539,3 +539,97 @@ Notes:
 - **Comparison workflow.** Each modality combination is its own generation config (`spectral_s2.yaml`, `spectral_s2s1dem.yaml`, etc.) with its own `data.bands` and its own `spectral_band_extraction`. Comparison configs reference spectral-band runs by the same `(config, strategy, layer)` triple as any model run. S2 pixels getting written twice is bounded (~kB/chip per run at the 4-token cap).
 
 `embedding_extraction_strategies` still applies on top — each spectral-band subdir becomes a "layer" for analysis, and each embedding-extraction strategy runs its slice/transforms/plots/models against it.
+
+## Cloud-embedding configs
+
+Some providers publish *precomputed* annual embeddings as global rasters. Instead of running a model over GELOS chips, a cloud-embedding config fetches the published embedding pixels that fall inside each chip's patch footprints and pools them into per-patch vectors. The output parquets match `EmbeddingGenerationTask`'s schema (`embedding_dir/data_version/config_stem/<strategy>/*_embedding.parquet`), so analysis and comparison stages consume them with no special-casing.
+
+Replace the `model` block with a top-level `cloud_embedding` block (a config may have one or the other, never both). The `data` block is still required: the dataset only supplies each chip's georeferencing, from which the patch footprints are derived.
+
+```yaml
+cloud_embedding:
+  backend: olmoearth            # registered backend: "alphaearth" or "olmoearth"
+  reference_sensor: S2L2A       # sensor whose tiff defines the chip grid (CRS, transform)
+  patch_size: 16                # pixels per patch along the reference sensor's grid
+  # window_chips: 256           # chips per fetch_batch window (memory vs. chunk sharing)
+  year_strategy:                # which annual slab to read for each chip
+    type: from_column           # ... from a chip-tracker column
+    column: year
+    # type: from_filename       # ... or parsed from the reference tiff's filename
+    # sensor: S2L2A
+    # pattern: "_(\\d{4})_"
+  init_args:                    # backend constructor kwargs (see the backend tables below)
+    dims: 128
+  extraction_strategies:        # each key becomes a per-strategy output subdir ("layer")
+    center_2x2:
+      title: "Center 2x2 patches"
+      patches: center_2x2       # 'center_NxN' or an explicit list of [row, col] pairs
+      # pool: mean              # default: NaN-aware mean over the footprint -> [C]
+    center_2x2_flatten:
+      title: "Center 2x2 patches (flattened)"
+      patches: center_2x2
+      pool: flatten             # resample to patch_size x patch_size -> [patch_size*patch_size*C]
+```
+
+Output layout under `embedding_dir/data_version/config_stem/`:
+
+- `<strategy>/<chip stem>_embedding.parquet` — one row per chip, `embedding` is `(n_patches, C)` (`C` = embedding width for `mean`, `patch_size * patch_size * width` for `flatten`), plus `file_id`.
+- `_footprint_manifest.parquet` — the cached per-patch footprint table (`chip_index`, `strategy`, `patch_row`, `patch_col`, bbox, `crs`); delete it to recompute.
+- `_footprint_cache/` — one GeoTIFF per `(backend namespace, crs, year, bbox, out_shape)`; backends that accept `cache_dir` receive this directory by default (an explicit `init_args.cache_dir` wins). Re-runs and new pooling experiments over the same footprints never touch the network. Delete the directory to invalidate.
+- `.embeddings_complete` — marker; `--overwrite` re-enters the run.
+
+`embedding_extraction_strategies` still applies on top, exactly as for spectral-band configs.
+
+### AlphaEarth (`backend: alphaearth`)
+
+Reads the TGE Labs AlphaEarth Foundations (AEF) 64-band annual mosaic (GeoZarr v3, EPSG:4326, int8, nodata `-128`, years 2017–2025) from `s3://us-west-2.opendata.source.coop/tge-labs/aef-mosaic/`. Values are returned as stored (float32 with `-128` -> NaN). Install the s3 dependencies with `pip install 'gelos[alphaearth]'`.
+
+| `init_args` key | default | meaning |
+|---|---|---|
+| `url` | the TGE Labs mosaic | Zarr store URL or local path |
+| `cache_dir` | injected by the runner | footprint GeoTIFF cache (`mosaic_*.tif`) |
+| `chunk_cache_dir` | `None` | opt-in fsspec `simplecache::` wrapper that mirrors Zarr chunk files to local disk |
+| `anon` | `true` | anonymous S3 access |
+| `variable` | `None` | data variable name when the store has more than one |
+| `nodata` | `-128` | nodata sentinel mapped to NaN |
+| `year_origin` | `2017` | year of `time[0]`; years map as `idx = year - year_origin` |
+| `prefetch_workers` / `extract_workers` | `16` / `8` | thread-pool sizes for chunk downloads / reproject + cache writes |
+
+### OlmoEarth v1.3 embeddings (`backend: olmoearth`)
+
+Reads Ai2's precomputed [OlmoEarth v1.3 embeddings](https://source.coop/olmoearth/olmoearth-v1-3-embeddings) from Source Cooperative. The embeddings are released under the OlmoEarth Artifact License (see the dataset's `LICENSE.txt`); GELOS does not enforce it. A ready-to-edit config ships as `configs/olmoearth_v1_3_embeddings.yaml`.
+
+**Store layout.** A public, anonymous Zarr v3 store with one group per UTM zone (`utm01`..`utm60`). Each group holds an `embeddings` array with dims `(time, band, y, x)`, int8, nodata `-128`, 10 m pixels, `time` = `2017..2025`, and `proj:code` `EPSG:326NN` for *every* zone (southern-hemisphere data has negative `y`). Arrays are sharded (`(1, 128, 2048, 2048)` shards, `(1, 64, 256, 256)` inner chunks); GELOS batches reads on the ~4 MB inner chunk, so a footprint typically costs one or two latency-bound range requests.
+
+```yaml
+cloud_embedding:
+  backend: olmoearth
+  reference_sensor: S2L2A
+  patch_size: 16
+  year_strategy: {type: from_column, column: year}
+  init_args:
+    dims: 128
+```
+
+| `init_args` key | default | meaning |
+|---|---|---|
+| `url` | `https://data.source.coop/olmoearth/olmoearth-v1-3-embeddings/embeddings.zarr` | HTTPS store (fsspec HTTP filesystem, needs `aiohttp`). Alternative: `s3://olmoearth/olmoearth-v1-3-embeddings/embeddings.zarr` together with `endpoint_url` (needs `s3fs`). A local path also works. |
+| `endpoint_url` | `https://data.source.coop` | S3-compatible endpoint; only used for `s3://` URLs |
+| `dims` | `128` | embedding width: `128` (full) or `64` (matryoshka head, bands `0:64`, half the download). 64-d and 128-d vectors are different embedding spaces — never compare them with each other. |
+| `cache_dir` | injected by the runner | footprint GeoTIFF cache; files are `olmoearth_{utmNN}_d{dims}_{crs}_{year}_{bbox}_{hash}.tif` and stay lossless int8 |
+| `anon` | `true` | anonymous access |
+| `nodata` | `-128` | nodata sentinel mapped to NaN |
+| `prefetch_workers` / `extract_workers` | `16` / `8` | thread-pool sizes (per zone batch) |
+| `max_retries` / `retry_backoff` | `4` / `1.0` | retry of each zone-group open and each chunk read on transient network errors (connection resets, aiohttp client errors such as `ClientPayloadError`, timeouts, HTTP `429`/`5xx` responses such as `503 Service Unavailable`): up to `max_retries` extra attempts, sleeping `retry_backoff * 2**attempt` seconds (+ up to 10 % jitter) between them. Other HTTP status errors (404/403) and programming errors are never retried; after the last attempt the original error is raised. `max_retries: 0` disables retrying. |
+| `storage_options` | `None` | extra fsspec options merged into the inner filesystem's options |
+| `chunk_cache_dir` | — | **rejected** (`ValueError`): the store is sharded and fsspec's `simplecache` cannot serve the suffix byte requests shard indexes need |
+
+Notes:
+
+- **Zone rule.** Each footprint is read from exactly one zone group: the zone of the chip's CRS when it is `EPSG:326NN`/`EPSG:327NN` (every group extends >=160 km past its nominal edge, so a chip native to zone NN always lies inside `utmNN`), otherwise the nominal zone of the footprint's centre longitude. Footprints are never split or stitched across zones; a footprint reaching past its group's extent comes back partially NaN. Southern-hemisphere CRSs are handled by reprojection (pure false-northing offset).
+- **Dequantization.** Stored codes are signed-square-root quantized; GELOS returns `(|q| / 127.5) ** 2 * sign(q)`, i.e. float32 in `[-1, 1]`, with `-128` -> NaN, on both fresh reads and cache hits. `mean` pooling is NaN-aware; `flatten` keeps NaN in place.
+- **Footprint window.** GELOS chip grids sit half a pixel (5 m) off the store's 10 m zone grid, so every footprint — with or without `out_shape`, i.e. for `mean` as well as `flatten` pooling — is resampled (nearest-neighbour) onto a grid pinned to the footprint bbox at 10 m: a 160 m footprint is always a 16x16 window, in the chip's own zone and after reprojection from a southern (`EPSG:327NN`) CRS alike. Cache entries carry the `olmo2` version token; `olmo1` entries (which held the unpinned 17x17 window for `mean` requests) are orphaned, not reused.
+- **Year coverage.** 2023–2025 are global; 2017–2022 exist in the store but are only computed for selected countries. A year that is not computed for a region yields all-NaN vectors (no error); the backend logs one warning per fetch window with the count of such footprints. Requesting a year absent from the store (`time` coordinate) raises `ValueError` listing the available years.
+- **Fully-nodata chips.** About 3 % of GELOS chips are entirely nodata in the store (water/ocean, store gaps) and come back as all-NaN vectors; the shipped config sets the top-level `null_handling: zero` so the analysis stage zeroes those rows instead of dropping them (the default `drop`).
+- **Transient errors.** Reading `data.source.coop` over HTTPS with 16 concurrent readers drops a connection every few minutes (`aiohttp.ClientPayloadError: Response payload is not completed ... ConnectionResetError(104)`), and the proxy occasionally answers `503 Service Unavailable` — including while a zone group is being opened, which eagerly reads its coordinate arrays. The backend retries just the failing operation (the group open or the chunk read; `max_retries` / `retry_backoff`, logged as warnings) instead of aborting the run; a failed open caches nothing, so the next window simply opens again. Lower `prefetch_workers` if retries are frequent.
+- **Install.** `pip install 'gelos[olmoearth-embeddings]'` for the default HTTPS transport; add `'gelos[alphaearth]'` (s3fs) to read the `s3://` mirror.

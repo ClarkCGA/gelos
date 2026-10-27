@@ -1,0 +1,55 @@
+experiment_name: "OlmoEarth v1.3 Embeddings (precomputed, test fixture)"
+data_version: "v0.50.1"
+chip_tracker: "gelos_chip_tracker.geojson"
+chip_id_column: "id"
+
+data:
+  class_path: gelos.gelosdatamodule.GELOSDataModule
+  init_args:
+    dataset_class: tests.test_data.ExampleGELOSDataSet
+    batch_size: 1
+    num_workers: 0
+    bands:
+      S2L2A: [blue, green, red]
+
+cloud_embedding:
+  backend: olmoearth
+  reference_sensor: S2L2A
+  patch_size: 16
+  year_strategy:
+    type: from_column
+    column: year
+  init_args:
+    # `url` is overridden in tests (the e2e test points it at a synthetic local
+    # store and rewrites this file into tmp_path); without it the backend reads
+    # the public Source Cooperative HTTPS store.
+    dims: 128
+  extraction_strategies:
+    center_2x2:
+      title: "Center 2x2 patches"
+      patches: center_2x2
+    center_2x2_flatten:
+      title: "Center 2x2 patches (flattened)"
+      patches: center_2x2
+      pool: flatten
+
+embedding_extraction_strategies:
+  all_tokens:
+    title: "All cloud-embedding tokens"
+    slice_args:
+      - {start: 0, stop: null, step: 1}
+    transforms:
+      - type: pca
+        params: {n_components: 2}
+    plots:
+      - type: scatter_2d
+        transform: pca
+
+style:
+  category_column: "lulc"
+  colors:
+    "1": "#419bdf"
+    "2": "#397d49"
+  labels:
+    "1": "Water"
+    "2": "Trees"

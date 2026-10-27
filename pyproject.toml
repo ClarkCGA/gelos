@@ -46,6 +46,11 @@ dependencies = [
 # added to botocore.Session.__init__ in botocore 1.34.51 — bound prevents that
 # version-skew TypeError in downstream pip installs.
 alphaearth = ["s3fs>=2024.6.0", "zarr>=3.0"]
+# OlmoEarth v1.3 precomputed embeddings (cloud_embedding.backend: olmoearth). The
+# default HTTPS transport reads the Source Cooperative store through fsspec's HTTP
+# filesystem, which is built on aiohttp. Reading the s3:// mirror instead
+# additionally needs s3fs — install the `alphaearth` extra as well.
+olmoearth-embeddings = ["zarr>=3.0", "aiohttp>=3.9"]
 
 [tool.ruff]
 line-length = 99

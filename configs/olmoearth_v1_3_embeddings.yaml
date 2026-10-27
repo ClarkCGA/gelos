@@ -1,0 +1,79 @@
+experiment_name: "OlmoEarth v1.3 Embeddings (precomputed, 128-d)"
+data_version: "v0.50.1"
+chip_tracker: "gelos_chip_tracker.geojson"
+chip_id_column: "id"
+# ~3% of chips are fully nodata in the store (water/ocean, store gaps) and come
+# back as all-NaN vectors; zero them for the analysis stage instead of dropping
+# the rows (the `drop` default would silently shrink every class).
+null_handling: zero
+
+# No `model` block: the `cloud_embedding` block below replaces it. The dataset
+# is only used to derive each chip's footprint grid (reference_sensor x
+# patch_size), so a minimal band list is enough — no pixels are fed to a model.
+data:
+  class_path: gelos.gelosdatamodule.GELOSDataModule
+  init_args:
+    dataset_class: gelos.gelosdataset.GELOSDataSet
+    batch_size: 8
+    num_workers: 4
+    bands:
+      S2L2A: [RED, GREEN, BLUE]
+
+cloud_embedding:
+  backend: olmoearth
+  reference_sensor: S2L2A
+  patch_size: 16
+  # window_chips: 256  # optional — chips per fetch_batch window; trades memory for chunk-sharing.
+  year_strategy:
+    type: from_column
+    column: year
+  init_args:
+    # Embedding width: 128 (full) or 64 (the matryoshka 64-d head, bands 0:64 —
+    # halves the download). 64-d and 128-d vectors are different spaces: never
+    # compare them in one comparison config.
+    dims: 128
+    # Default transport is the public HTTPS store (fsspec HTTP + aiohttp; install
+    # `gelos[olmoearth-embeddings]`). To read the S3 mirror instead (needs s3fs,
+    # `gelos[alphaearth]`), set both of:
+    # url: s3://olmoearth/olmoearth-v1-3-embeddings/embeddings.zarr
+    # endpoint_url: https://data.source.coop
+    # `cache_dir` defaults to <embedding_dir>/<data_version>/<config stem>/_footprint_cache;
+    # `chunk_cache_dir` is NOT supported for this (sharded) store.
+    # Transient-network retry: data.source.coop resets a connection every few
+    # minutes under the default 16 prefetch workers and occasionally answers
+    # 503. Opening a zone group and each chunk read are retried up to
+    # `max_retries` times on connection/timeout errors and HTTP 429/5xx
+    # responses, with exponential backoff (`retry_backoff`, `2*retry_backoff`,
+    # `4*...` seconds plus jitter) before the run aborts; HTTP 404/403 and
+    # programming errors are never retried.
+    # max_retries: 4
+    # retry_backoff: 1.0
+  extraction_strategies:
+    center_2x2:
+      title: "Center 2x2 patches"
+      patches: center_2x2
+    center_2x2_flatten:
+      title: "Center 2x2 patches (flattened)"
+      patches: center_2x2
+      pool: flatten
+
+embedding_extraction_strategies:
+  all_tokens:
+    title: "All cloud-embedding tokens"
+    slice_args:
+      - {start: 0, stop: null, step: 1}
+    transforms:
+      - type: pca
+        params: {n_components: 2}
+    plots:
+      - type: scatter_2d
+        transform: pca
+
+style:
+  category_column: "lulc"
+  colors:
+    "1": "#419bdf"    # Water
+    "2": "#397d49"    # Trees
+  labels:
+    "1": "Water"
+    "2": "Trees"

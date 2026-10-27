@@ -14,6 +14,46 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **OlmoEarth v1.3 precomputed embeddings backend (issue #101).** New cloud-embedding
+  backend `cloud_embedding.backend: olmoearth` reads Ai2's OlmoEarth v1.3 embeddings from
+  the public Source Cooperative Zarr v3 store (one group per UTM zone, int8 signed-sqrt
+  quantization). Values are dequantized to float32 in `[-1, 1]` with `-128` -> NaN on both
+  fresh reads and cache hits; `init_args.dims: 64 | 128` selects the matryoshka 64-d head
+  (bands `0:64`, half the download) or the full embedding. Default transport is HTTPS via
+  fsspec/aiohttp (new optional extra `gelos[olmoearth-embeddings]`); the `s3://` mirror is
+  supported through `init_args.endpoint_url` plus `gelos[alphaearth]` (s3fs). Each
+  footprint is routed to exactly one zone group — the zone of a `EPSG:326NN`/`327NN` chip
+  CRS, else the bbox-centre longitude — and read on the ~4 MB inner chunk rather than the
+  ~512 MB shard. Zone groups are opened without dask (`chunks=None`, new
+  `ZarrMosaicBackend(use_dask=...)` switch): with dask, each windowed read of the
+  ~50M-chunk zone array spent ~65 s in GIL-bound graph optimisation for ~2 s of I/O,
+  serialising the prefetch pool; AlphaEarth keeps dask's default chunking. Footprint cache
+  files are namespaced per zone and width
+  (`olmoearth_{utmNN}_d{dims}_*.tif`, lossless int8). `chunk_cache_dir` is rejected for
+  this (sharded) store. Store opens (which eagerly read the coordinate arrays) and chunk
+  reads retry transient network errors (connection resets, aiohttp client errors,
+  timeouts, and HTTP 429/5xx responses such as `503 Service Unavailable`) with exponential
+  backoff — `init_args.max_retries` (default 4) / `retry_backoff` (default 1.0 s) on both
+  `ZarrMosaicBackend` and `OlmoEarthBackend` — because `data.source.coop` resets a
+  connection every few minutes under 16 concurrent HTTPS readers and occasionally answers
+  503 while a zone group is opened; HTTP 404/403 and programming errors (`KeyError`, ...)
+  still fail immediately, and a failed open caches nothing. Every OlmoEarth footprint is resampled onto a
+  grid pinned to the request bbox at 10 m (new `ZarrMosaicBackend(pin_native_grid=...)`
+  switch, on for OlmoEarth zone readers, off for AlphaEarth): GELOS chip grids sit 5 m off
+  the zone grid, so a `pool: mean` request (no `out_shape`) previously passed through the
+  17x17 source pixels whose centres fell in the 160 m bbox — a half-pixel-offset 170 m
+  window — and now yields the same 16x16 footprint-aligned window as `flatten`; the
+  OlmoEarth cache version token is bumped (`olmo1` -> `olmo2`) so stale entries are
+  orphaned. Years absent from the store raise; years present but not
+  backfilled for a region (2017-2022 outside selected countries) come back as all-NaN
+  vectors with one warning per fetch window. The shipped config sets `null_handling: zero`
+  because ~3 % of chips are fully nodata in the store (water/ocean, gaps) and would
+  otherwise be dropped from the analysis. Internal: `AlphaEarthBackend` now derives from
+  the new `ZarrMosaicBackend` (`gelos/cloud_embeddings/backends/zarr_mosaic.py`), which
+  holds the shared cache / padding / chunk-streaming machinery; its public API, cache-key
+  format and behavior are unchanged (pinned by a snapshot test). New shipped config
+  `configs/olmoearth_v1_3_embeddings.yaml` and a new "Cloud-embedding configs" section in
+  the configuration reference documenting the `cloud_embedding` block and both backends.
 - **Analysis figures are always recreated (issue #97).** **Behavior change:**
   `run_analysis` now redraws every figure (plots and confusion matrices) from cached
   results on each run, so style, label, plot-parameter, `experiment_name`, strategy
