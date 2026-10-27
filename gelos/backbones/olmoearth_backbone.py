@@ -26,20 +26,30 @@ S1 extension (API NOTE R2):
   S1 mask shape: (B, H, W, T, 1) — 1 band set.
   S1 output key: out["tokens_and_masks"].sentinel1, shape (B, H', W', T, 1, D).
   S2 mask shape: (B, H, W, T, S) — S band sets, read from the loaded encoder's
-    ``tokenization_config.get_num_bandsets("sentinel2_l2a")``: 1 for v1.2
+    ``tokenization_config.get_num_bandsets("sentinel2_l2a")``: 1 for v1.2/v1.3
     checkpoints (one 12-band set), 3 for v1 (10m/20m/60m).
   Source: verified against allenai/olmoearth_pretrain datatypes.py and constants.py.
 
-Checkpoint generations (issue #81):
-  OlmoEarth v1.2 is the supported generation. The ``olmoearth_v1_*`` factories
-  (v1 checkpoints) are DEPRECATED: they still work for the full 12-band S2L2A
-  input but emit a ``DeprecationWarning`` and will be removed in a future
-  release. ``OlmoEarthBackbone``'s default ``model_id`` is v1.2 Base.
+Checkpoint generations (issues #81, #100):
+  OlmoEarth v1.2 (Nano/Tiny/Small/Base) and v1.3 (Base only,
+  ``allenai/OlmoEarth-v1_3-Base``) are the supported generations; v1.2 Base is
+  ``OlmoEarthBackbone``'s default ``model_id`` because it loads on the released
+  ``olmoearth-pretrain`` the project pins. v1.3 shares v1.2's 12-band S2 order,
+  single S2 band set, band dropout and pretraining normalization stats, but its
+  config references ``olmoearth_pretrain.nn.flexi_vit.AttentionPoolerConfig``,
+  which no PyPI release (<= 0.1.2) ships: it needs the upstream-main snapshot
+  pinned in the Dockerfile (``_OLMOEARTH_PRETRAIN_V1_3_SNAPSHOT``), and on an
+  older package construction raises ``ImportError`` with that install hint.
+  v1.3 is also absent from the package's ``ModelID`` enum, so
+  ``_load_olmoearth_model`` fetches its ``config.json``/``weights.pth`` from
+  HuggingFace directly. The ``olmoearth_v1_*`` factories (v1 checkpoints) are
+  DEPRECATED: they still work for the full 12-band S2L2A input but emit a
+  ``DeprecationWarning`` and will be removed in a future release.
 
-Band subsets (issue #81, v1.2 only):
+Band subsets (issue #81, v1.2 and v1.3):
   ``bands`` may be a SUBSET of the 12 S2L2A bands. Bands not listed are
   zero-filled AFTER pretraining normalization, per band for the whole sample,
-  which is exactly what v1.2's pretraining band dropout fed the encoder
+  which is exactly what v1.2's (and v1.3's) pretraining band dropout fed the encoder
   (``MultiModalPatchEmbeddings._apply_band_dropout`` multiplies a whole
   normalized band channel by 0; paper arXiv 2605.20804 §2.2). One warning is
   emitted at construction naming the zero-filled bands; a stronger warning
@@ -70,7 +80,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from contextlib import contextmanager
+import importlib.metadata
 import json
+from pathlib import Path
 import warnings
 
 import torch
@@ -338,7 +350,8 @@ def absent_s2_bands(reorder_index: Sequence[int | None]) -> list[str]:
 
 
 # Largest number of absent S2 bands still considered in distribution with v1.2's
-# pretraining band dropout (rate ~U(0, 0.2), i.e. ~10% of 12 bands on average).
+# and v1.3's pretraining band dropout (rate ~U(0, 0.2), i.e. ~10% of 12 bands on
+# average).
 # Above this the constructor emits a stronger warning (it never raises for it).
 _MAX_ABSENT_BANDS_IN_DISTRIBUTION = 3
 
@@ -463,15 +476,15 @@ def _resolve_s2_num_band_sets(inner_encoder: nn.Module, model_id: str) -> int:
     """Number of Sentinel-2 L2A band sets the loaded OlmoEarth encoder tokenizes.
 
     Prefers the encoder's own ``tokenization_config.get_num_bandsets("sentinel2_l2a")``
-    (olmoearth_pretrain 0.1.1: 1 for v1.2 checkpoints, 3 for v1). Falls back to
-    parsing ``model_id`` only when the encoder exposes no tokenization config.
+    (olmoearth_pretrain 0.1.1+: 1 for v1.2/v1.3 checkpoints, 3 for v1). Falls back
+    to parsing ``model_id`` only when the encoder exposes no tokenization config.
     """
     tokenization_config = getattr(inner_encoder, "tokenization_config", None)
     get_num_bandsets = getattr(tokenization_config, "get_num_bandsets", None)
     if get_num_bandsets is not None:
         return int(get_num_bandsets("sentinel2_l2a"))
-    # v1.2 (and v1.1) checkpoints use a single 12-band set; v1 uses three.
-    return 1 if ("v1_2" in model_id or "v1_1" in model_id) else 3
+    # v1.1, v1.2 and v1.3 checkpoints use a single 12-band set; v1 uses three.
+    return 1 if any(tag in model_id for tag in ("v1_1", "v1_2", "v1_3")) else 3
 
 
 @contextmanager
@@ -498,6 +511,79 @@ def _attention_mask_enabled(encoder: nn.Module):
         encoder.training = previous
 
 
+# Pinned upstream snapshot that can build OlmoEarth v1.3 configs (first build
+# with ``olmoearth_pretrain.nn.flexi_vit.AttentionPoolerConfig``; no PyPI
+# release <= 0.1.2 has it). Mirrors the Dockerfile; bump both together.
+_OLMOEARTH_PRETRAIN_V1_3_SNAPSHOT = (
+    "olmoearth-pretrain @ https://github.com/allenai/olmoearth_pretrain/archive/"
+    "7353d1b5105a3ad662809a700c98065fc711f4ab.tar.gz"
+)
+
+
+def _load_olmoearth_model(model_id: str, pretrained: bool) -> nn.Module:
+    """Build (and optionally load weights for) an OlmoEarth checkpoint by id.
+
+    Checkpoints the installed ``olmoearth-pretrain`` knows (its ``ModelID``
+    enum: v1, v1.1, v1.2) go through ``load_model_from_id`` unchanged. Any other
+    id (e.g. ``"allenai/OlmoEarth-v1_3-Base"``, which is in no released enum) is
+    resolved as a HuggingFace repo — ``model_id`` itself when it contains ``/``,
+    else ``allenai/<model_id>`` — whose ``config.json`` (and ``weights.pth``
+    when ``pretrained``) are fetched with ``hf_hub_download`` into one snapshot
+    directory and built with ``load_model_from_path``. An ``AttributeError``
+    raised while building that config (the installed package lacks a class the
+    checkpoint references, as with v1.3 on <= 0.1.2) is re-raised as an
+    ``ImportError`` naming the checkpoint, the installed version and the fix.
+    ``huggingface_hub`` errors (e.g. ``RepositoryNotFoundError``) propagate.
+    """
+    try:
+        from olmoearth_pretrain.model_loader import (  # type: ignore[import-not-found]
+            ModelID,
+            load_model_from_id,
+            load_model_from_path,
+        )
+    except ImportError as exc:  # pragma: no cover - exercised only without extra
+        raise ImportError(
+            "OlmoEarthBackbone requires the 'olmoearth-pretrain' package. "
+            "Install it with `pip install gelos` (olmoearth-pretrain is a "
+            "core gelos dependency)."
+        ) from exc
+
+    # ModelID values are bare checkpoint names ("OlmoEarth-v1-Base"); strip
+    # the optional "allenai/" org prefix that the factory defaults include.
+    model_id_clean = model_id.split("/")[-1]
+    try:
+        known_id = ModelID(model_id_clean)
+    except ValueError:
+        known_id = None
+    if known_id is not None:
+        return load_model_from_id(known_id, load_weights=pretrained)
+
+    # Not in the installed package's enum: fetch the HF repo's files ourselves.
+    # hf_hub_download puts every file of a repo revision in the same snapshot
+    # directory, so the config's parent is a valid ``load_model_from_path`` dir.
+    from huggingface_hub import hf_hub_download
+
+    repo_id = model_id if "/" in model_id else f"allenai/{model_id_clean}"
+    config_path = hf_hub_download(repo_id=repo_id, filename="config.json")
+    if pretrained:
+        hf_hub_download(repo_id=repo_id, filename="weights.pth")
+    try:
+        return load_model_from_path(Path(config_path).parent, load_weights=pretrained)
+    except AttributeError as exc:
+        try:
+            version = importlib.metadata.version("olmoearth-pretrain")
+        except importlib.metadata.PackageNotFoundError:  # pragma: no cover
+            version = "unknown"
+        raise ImportError(
+            f"OlmoEarth checkpoint {model_id!r} needs a newer 'olmoearth-pretrain' than "
+            f"the installed {version} (its config references a class the installed "
+            f"package lacks: {exc}). OlmoEarth v1.3 requires "
+            "olmoearth_pretrain.nn.flexi_vit.AttentionPoolerConfig, first available on "
+            "the upstream main branch (e.g. pip install --no-deps "
+            f"'{_OLMOEARTH_PRETRAIN_V1_3_SNAPSHOT}')."
+        ) from exc
+
+
 class OlmoEarthBackbone(nn.Module):
     """Adapts an OlmoEarth encoder to terratorch's backbone ``forward_features``.
 
@@ -508,18 +594,18 @@ class OlmoEarthBackbone(nn.Module):
     token tensor over the spectral-group axis, and returns a single-element list
     ``[tokens]`` (terratorch necks expect a list of layer tensors).
 
-    Band subsets (v1.2 checkpoints only): ``bands`` may list only some of the
-    12 S2L2A bands (``C == len(bands)``; it must match ``data.bands.S2L2A``).
+    Band subsets (v1.2 and v1.3 checkpoints): ``bands`` may list only some of
+    the 12 S2L2A bands (``C == len(bands)``; it must match ``data.bands.S2L2A``).
     Each absent band's channel is set to exactly 0 *after* pretraining
     normalization, for the whole sample (every pixel and timestep), whether or
-    not ``apply_pretraining_normalization`` is on — the same input v1.2's
+    not ``apply_pretraining_normalization`` is on — the same input v1.2/v1.3's
     pretraining band dropout produced, so the encoder infers the missing bands
     from the present ones. Nodata masking is unaffected (the mask keeps the
     dataset's channel count). Construction warns once, naming the zero-filled
     bands, and more strongly when more than three bands are absent (far outside
     the ~10% pretraining dropout rate). v1 checkpoints (deprecated) have no band
     dropout, so they raise ``ValueError`` on a subset; the generation is read
-    from the loaded encoder's S2 band-set count (1 = v1.2, 3 = v1).
+    from the loaded encoder's S2 band-set count (1 = v1.2/v1.3, 3 = v1).
 
     With ``apply_pretraining_normalization=True`` (default), inputs must be RAW
     sensor scale — S2 L2A digital numbers (0–10000) and S1 linear-power gamma0 —
@@ -630,7 +716,7 @@ class OlmoEarthBackbone(nn.Module):
         # Precompute and validate the band-reorder map eagerly so misconfigured
         # bands (unknown names) fail at construction time, not mid-forward.
         # Absent bands are ``None`` here; they are zero-filled in forward_features
-        # (v1.2 only — the v1 check below needs the loaded encoder).
+        # (v1.2/v1.3 only — the v1 check below needs the loaded encoder).
         self.reorder_index = build_band_reorder_index(self.bands)
         self.absent_bands: list[str] = absent_s2_bands(self.reorder_index)
         # Gather/scatter indices for the subset path: present source channels
@@ -657,22 +743,11 @@ class OlmoEarthBackbone(nn.Module):
                 OLMOEARTH_S1_BAND_ORDER
             )
 
-        try:
-            from olmoearth_pretrain.model_loader import (  # type: ignore[import-not-found]
-                ModelID,
-                load_model_from_id,
-            )
-        except ImportError as exc:  # pragma: no cover - exercised only without extra
-            raise ImportError(
-                "OlmoEarthBackbone requires the 'olmoearth-pretrain' package. "
-                "Install it with `pip install gelos` (olmoearth-pretrain is a "
-                "core gelos dependency)."
-            ) from exc
-
-        # ModelID values are bare checkpoint names ("OlmoEarth-v1-Base"); strip
-        # the optional "allenai/" org prefix that the factory defaults include.
+        # Lazy olmoearth_pretrain import + enum/HF-path routing live in the helper
+        # (v1.3 is in no released ``ModelID`` enum). The bare checkpoint name
+        # ("OlmoEarth-v1_2-Base") is kept for the band-set fallback below.
         model_id_clean = model_id.split("/")[-1]
-        self.encoder = load_model_from_id(ModelID(model_id_clean), load_weights=pretrained)
+        self.encoder = _load_olmoearth_model(model_id, pretrained)
 
         # Expose the embedding dim so terratorch necks can introspect. The
         # LatentMIM wrapper exposes its inner encoder as .encoder; prefer that
@@ -686,9 +761,9 @@ class OlmoEarthBackbone(nn.Module):
             getattr(inner_enc, "embed_dim", fallback_dim),
         )
 
-        # S2 band-set count of the loaded checkpoint: 1 for v1.2 (one 12-band
-        # set, pretrained with band dropout), 3 for v1 (10m/20m/60m, no band
-        # dropout). Drives the S2 mask's last dim and the band-subset guard.
+        # S2 band-set count of the loaded checkpoint: 1 for v1.2/v1.3 (one
+        # 12-band set, pretrained with band dropout), 3 for v1 (10m/20m/60m, no
+        # band dropout). Drives the S2 mask's last dim and the band-subset guard.
         self.s2_num_band_sets = _resolve_s2_num_band_sets(inner_enc, model_id_clean)
 
         if self.absent_bands:
@@ -698,7 +773,7 @@ class OlmoEarthBackbone(nn.Module):
                     f"{self.s2_num_band_sets} band sets (a deprecated v1 checkpoint) and "
                     "was not pretrained with band dropout, so a band subset is not "
                     f"supported: absent band(s) {self.absent_bands}. Supply all 12 "
-                    f"bands {OLMOEARTH_S2_BAND_ORDER} or use a v1.2 checkpoint "
+                    f"bands {OLMOEARTH_S2_BAND_ORDER} or use a v1.2 or v1.3 checkpoint "
                     "(e.g. 'allenai/OlmoEarth-v1_2-Base'), which zero-fills absent bands."
                 )
             n_absent, n_total = len(self.absent_bands), len(OLMOEARTH_S2_BAND_ORDER)
@@ -707,7 +782,7 @@ class OlmoEarthBackbone(nn.Module):
                     f"OlmoEarthBackbone: {n_absent} of {n_total} Sentinel-2 L2A bands are "
                     f"absent from model_args.bands and will be zero-filled after "
                     f"pretraining normalization: {self.absent_bands}. This is FAR "
-                    "OUTSIDE OlmoEarth v1.2's pretraining band-dropout regime (about "
+                    "OUTSIDE OlmoEarth v1.2/v1.3's pretraining band-dropout regime (about "
                     f"10% of bands, at most {_MAX_ABSENT_BANDS_IN_DISTRIBUTION} absent "
                     "is in distribution); expect degraded embeddings. Configured "
                     f"bands: {self.bands}.",
@@ -718,7 +793,7 @@ class OlmoEarthBackbone(nn.Module):
                 warnings.warn(
                     f"OlmoEarthBackbone: Sentinel-2 L2A band(s) {self.absent_bands} are "
                     "absent from model_args.bands and will be zero-filled after "
-                    "pretraining normalization (matching OlmoEarth v1.2's pretraining "
+                    "pretraining normalization (matching OlmoEarth v1.2/v1.3's pretraining "
                     f"band dropout; {n_total - n_absent} of {n_total} bands present). "
                     f"Configured bands: {self.bands}.",
                     UserWarning,
@@ -879,8 +954,8 @@ class OlmoEarthBackbone(nn.Module):
             x_s2 = minmax_normalize(x_s2, self._s2_norm_means, self._s2_norm_stds)
 
         # 2c. Zero-fill absent bands AFTER normalization (raw 0 would normalize
-        # to a non-zero value): exactly what v1.2's pretraining band dropout fed
-        # the encoder — the whole band channel, every pixel and timestep, is 0.
+        # to a non-zero value): exactly what v1.2/v1.3's pretraining band dropout
+        # fed the encoder — the whole band channel, every pixel and timestep, is 0.
         if self.absent_bands:
             x_s2[..., self._absent_target_index] = 0.0
 
@@ -1672,6 +1747,86 @@ def olmoearth_v1_2_base_s1s2(
     )
 
 
+def olmoearth_v1_3_base(
+    pretrained: bool = True,
+    model_id: str = "allenai/OlmoEarth-v1_3-Base",
+    bands: list[str] | None = None,
+    patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
+    hidden_dim: int | None = 768,
+    **kwargs,
+) -> OlmoEarthBackbone:
+    """Terratorch backbone factory for the OlmoEarth v1.3 Base checkpoint (D=768).
+
+    Registered under its own name (``olmoearth_v1_3_base``) in
+    ``gelos.backbones.olmoearth_backbone``; ``BACKBONE_REGISTRY.build("olmoearth_v1_3_base",
+    **model_args)`` returns an :class:`OlmoEarthBackbone`. Base is the only
+    published v1.3 size.
+
+    PACKAGE REQUIREMENT: the v1.3 config references
+    ``olmoearth_pretrain.nn.flexi_vit.AttentionPoolerConfig``, which no
+    ``olmoearth-pretrain`` PyPI release (<= 0.1.2) ships. Install the upstream
+    snapshot pinned in the Dockerfile (``_OLMOEARTH_PRETRAIN_V1_3_SNAPSHOT``);
+    on an older package construction raises ``ImportError`` with that hint.
+    The checkpoint is not in the package's ``ModelID`` enum, so its files are
+    fetched from HuggingFace by repo id (see :func:`_load_olmoearth_model`).
+
+    NOTE: inputs must be RAW S2 L2A digital numbers (0-10000). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper min-max
+    normalizes each band over mean±2σ, exactly as OlmoEarth's pretraining data
+    loader did (v1.3 reuses v1.2's stats). Configure the datamodule with
+    ``normalize: false``.
+    """
+    return OlmoEarthBackbone(
+        pretrained=pretrained,
+        model_id=model_id,
+        bands=bands,
+        patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
+        hidden_dim=hidden_dim,
+        **kwargs,
+    )
+
+
+def olmoearth_v1_3_base_s1s2(
+    pretrained: bool = True,
+    model_id: str = "allenai/OlmoEarth-v1_3-Base",
+    bands: list[str] | None = None,
+    bands_s1: list[str] | None = None,
+    patch_size: int = 4,
+    apply_pretraining_normalization: bool = True,
+    hidden_dim: int | None = 768,
+    **kwargs,
+) -> OlmoEarthBackbone:
+    """Terratorch backbone factory for OlmoEarth v1.3 Base with S2+S1 combined input (D=768).
+
+    Pass ``bands_s1=["VV", "VH"]`` (or via YAML ``model_args.bands_s1``) to enable S1.
+    Omitting ``bands_s1`` falls back to S2-only, identical to ``olmoearth_v1_3_base``.
+
+    PACKAGE REQUIREMENT: as for :func:`olmoearth_v1_3_base` — needs an
+    ``olmoearth-pretrain`` build with ``AttentionPoolerConfig`` (no PyPI release
+    <= 0.1.2 has it; see ``_OLMOEARTH_PRETRAIN_V1_3_SNAPSHOT`` / the Dockerfile).
+
+    NOTE: inputs must be RAW sensor scale — S2 L2A digital numbers (0-10000) and
+    S1 linear-power gamma0 (e.g. Planetary Computer sentinel-1-rtc). With
+    ``apply_pretraining_normalization=True`` (default) the wrapper converts S1 to
+    dB and min-max normalizes both modalities per band over mean±2σ, exactly as
+    OlmoEarth's pretraining data loader did. Configure the datamodule with
+    ``normalize: false`` and do NOT apply ``db_scale_bands`` to S1, or values get
+    double-transformed.
+    """
+    return OlmoEarthBackbone(
+        pretrained=pretrained,
+        model_id=model_id,
+        bands=bands,
+        bands_s1=bands_s1,
+        patch_size=patch_size,
+        apply_pretraining_normalization=apply_pretraining_normalization,
+        hidden_dim=hidden_dim,
+        **kwargs,
+    )
+
+
 import logging as _logging
 
 _logger = _logging.getLogger("terratorch")
@@ -1695,13 +1850,17 @@ try:
         olmoearth_v1_2_tiny_s1s2,
         olmoearth_v1_2_small_s1s2,
         olmoearth_v1_2_base_s1s2,
+        olmoearth_v1_3_base,
+        olmoearth_v1_3_base_s1s2,
     ):
         _REG.register(_f)
     _logger.info(
         "Registered OlmoEarth backbones: 'olmoearth_v1_2_nano', 'olmoearth_v1_2_tiny', "
         "'olmoearth_v1_2_small', 'olmoearth_v1_2_base', "
         "'olmoearth_v1_2_nano_s1s2', 'olmoearth_v1_2_tiny_s1s2', "
-        "'olmoearth_v1_2_small_s1s2', 'olmoearth_v1_2_base_s1s2'; "
+        "'olmoearth_v1_2_small_s1s2', 'olmoearth_v1_2_base_s1s2', "
+        "'olmoearth_v1_3_base', 'olmoearth_v1_3_base_s1s2' (v1.3 needs an "
+        "olmoearth-pretrain build with AttentionPoolerConfig); "
         "DEPRECATED (v1, still registered): 'olmoearth_v1_nano', "
         "'olmoearth_v1_tiny', 'olmoearth_v1_base', 'olmoearth_v1_large', "
         "'olmoearth_v1_nano_s1s2', 'olmoearth_v1_tiny_s1s2', "

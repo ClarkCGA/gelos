@@ -312,8 +312,22 @@ def test_default_model_id_is_v1_2_base():
 
 _V1_2_NANO = "allenai/OlmoEarth-v1_2-Nano"
 _V1_NANO = "allenai/OlmoEarth-v1-Nano"
+# OlmoEarth v1.3 (issue #100): Base is the only published size. Its config needs
+# an olmoearth-pretrain build with AttentionPoolerConfig (no PyPI release <= 0.1.2).
+_V1_3_BASE = "allenai/OlmoEarth-v1_3-Base"
 # S2-Agri-Patch style subset: no COASTAL_AEROSOL (B01) / WATER_VAPOR (B09).
 TEN_BANDS = [b for b in ALL_12_BANDS if b not in ("COASTAL_AEROSOL", "WATER_VAPOR")]
+
+
+def _skip_unless_v1_3_supported():
+    """Skip model-backed v1.3 tests on an olmoearth-pretrain that cannot build v1.3."""
+    pytest.importorskip("olmoearth_pretrain")
+    import olmoearth_pretrain.nn.flexi_vit as fv
+
+    if not hasattr(fv, "AttentionPoolerConfig"):
+        pytest.skip(
+            "installed olmoearth-pretrain cannot build OlmoEarth v1.3 (no AttentionPoolerConfig)"
+        )
 
 
 class _CapturingEncoder(torch.nn.Module):
@@ -490,6 +504,73 @@ def test_s2_mask_band_sets_follow_encoder(model_id, expected):
 
 
 # ---------------------------------------------------------------------------
+# OlmoEarth v1.3 Base (issue #100) — model-backed; skipped unless the installed
+# olmoearth-pretrain has AttentionPoolerConfig. ``pretrained=False`` so only the
+# ~10 KB config.json is fetched from HF (like the v1.2 Nano tests above).
+# ---------------------------------------------------------------------------
+
+
+def test_v1_3_base_builds_with_one_s2_band_set():
+    _skip_unless_v1_3_supported()
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    backbone = OlmoEarthBackbone(
+        pretrained=False, model_id=_V1_3_BASE, bands=ALL_12_BANDS, hidden_dim=768
+    )
+    assert backbone.s2_num_band_sets == 1
+    assert backbone.out_channels == 768
+    assert backbone.absent_bands == []
+
+
+def test_v1_3_s2_mask_has_one_band_set():
+    _skip_unless_v1_3_supported()
+    bb, stub = _capturing_backbone(ALL_12_BANDS, model_id=_V1_3_BASE, hidden_dim=768)
+    assert bb.s2_num_band_sets == 1
+    _captured_s2(bb, stub, _raw_s2(12))
+    assert stub.samples[-1].sentinel2_l2a_mask.shape == (1, 8, 8, 2, 1)
+
+
+def test_v1_3_base_forward_shape():
+    _skip_unless_v1_3_supported()
+    from gelos.backbones.olmoearth_backbone import OlmoEarthBackbone
+
+    backbone = OlmoEarthBackbone(
+        pretrained=False, model_id=_V1_3_BASE, bands=ALL_12_BANDS, patch_size=4, hidden_dim=768
+    ).eval()
+    torch.manual_seed(0)
+    x = 1500 + 500 * torch.randn(1, 12, 2, 16, 16)  # raw DN scale, (B, C, T, H, W)
+    with torch.no_grad():
+        out = backbone.forward_features(x)
+    assert isinstance(out, list) and len(out) == 1
+    assert out[0].shape == (1, 16, 768)  # 4x4 grid, mean over T (default)
+
+    # Masked path (fast_pass=False + _attention_mask_enabled on the new encoder):
+    # one 4x4 patch nodata at both timesteps; the output shape is unchanged.
+    mask = torch.zeros(1, 12, 2, 16, 16, dtype=torch.bool)
+    mask[0, :, :, 0:4, 0:4] = True
+    backbone.set_batch_nodata_mask(mask)
+    try:
+        with torch.no_grad():
+            masked = backbone.forward_features(x)[0]
+    finally:
+        backbone.clear_batch_nodata_mask()
+    assert masked.shape == (1, 16, 768)
+    assert torch.equal(masked[0, 0], torch.zeros(768))  # masked patch (0, 0) is zero
+    assert backbone.encoder.encoder.training is False  # toggle undone
+
+
+def test_v1_3_subset_zero_fills_like_v1_2():
+    _skip_unless_v1_3_supported()
+    with pytest.warns(UserWarning, match="zero-filled"):
+        bb, stub = _capturing_backbone(TEN_BANDS, model_id=_V1_3_BASE, hidden_dim=768)
+    assert bb.absent_bands == ["COASTAL_AEROSOL", "WATER_VAPOR"]
+    out = _captured_s2(bb, stub, _raw_s2(10))
+    absent_idx = [OLMOEARTH_S2_BAND_ORDER.index(b) for b in ("COASTAL_AEROSOL", "WATER_VAPOR")]
+    assert out.shape == (1, 8, 8, 2, 12)
+    assert torch.equal(out[..., absent_idx], torch.zeros_like(out[..., absent_idx]))
+
+
+# ---------------------------------------------------------------------------
 # OlmoEarth v1 factory deprecation (issue #81).
 # ---------------------------------------------------------------------------
 
@@ -539,6 +620,22 @@ def test_v1_2_factories_do_not_warn():
         if issubclass(w.category, DeprecationWarning) and "olmoearth_v1" in str(w.message)
     ]
     assert not ours
+
+
+def test_v1_3_factories_do_not_warn():
+    _skip_unless_v1_3_supported()
+    import gelos.backbones.olmoearth_backbone as oe
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        backbone = oe.olmoearth_v1_3_base(pretrained=False, bands=ALL_12_BANDS)
+    ours = [
+        w
+        for w in record
+        if issubclass(w.category, DeprecationWarning) and "olmoearth_v1" in str(w.message)
+    ]
+    assert not ours
+    assert backbone.s2_num_band_sets == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1170,6 +1267,167 @@ def test_v1_2_factories_registered():
 
     for name, _hidden_dim, _model_id in V1_2_FACTORIES:
         assert name in TERRATORCH_BACKBONE_REGISTRY
+
+
+# ---------------------------------------------------------------------------
+# OlmoEarth v1.3 factory tests (issue #100; model-free: signature + registry).
+# ---------------------------------------------------------------------------
+
+V1_3_FACTORIES = [
+    ("olmoearth_v1_3_base", 768, _V1_3_BASE),
+    ("olmoearth_v1_3_base_s1s2", 768, _V1_3_BASE),
+]
+
+
+@pytest.mark.parametrize("name, hidden_dim, model_id", V1_3_FACTORIES)
+def test_v1_3_factory_defaults(name, hidden_dim, model_id):
+    import inspect
+
+    import gelos.backbones.olmoearth_backbone as oe
+
+    fn = getattr(oe, name)
+    params = inspect.signature(fn).parameters
+    assert params["hidden_dim"].default == hidden_dim
+    assert params["model_id"].default == model_id
+    assert params["pretrained"].default is True
+    assert params["patch_size"].default == 4
+    if name.endswith("_s1s2"):
+        assert "bands_s1" in params
+    else:
+        assert "bands_s1" not in params
+
+
+def test_v1_3_factories_registered():
+    try:
+        from terratorch.registry import TERRATORCH_BACKBONE_REGISTRY
+    except ImportError:
+        pytest.skip("terratorch registry not importable in this environment")
+    import gelos.backbones.olmoearth_backbone  # noqa: F401
+
+    for name, _hidden_dim, _model_id in V1_3_FACTORIES:
+        assert name in TERRATORCH_BACKBONE_REGISTRY
+
+
+def test_resolve_s2_num_band_sets_fallback_v1_3():
+    # A bare object has no tokenization_config, so the model_id fallback decides.
+    from gelos.backbones.olmoearth_backbone import _resolve_s2_num_band_sets
+
+    assert _resolve_s2_num_band_sets(object(), "OlmoEarth-v1_3-Base") == 1
+    assert _resolve_s2_num_band_sets(object(), "OlmoEarth-v1_2-Base") == 1
+    assert _resolve_s2_num_band_sets(object(), "OlmoEarth-v1-Base") == 3
+
+
+# ---------------------------------------------------------------------------
+# Loader helper (issue #100) — model-free: olmoearth_pretrain.model_loader and
+# huggingface_hub.hf_hub_download are monkeypatched at module level (the helper
+# imports them lazily, so module attributes are resolved at call time).
+# ---------------------------------------------------------------------------
+
+
+def _patch_loader(monkeypatch, tmp_path, *, from_id=None, from_path=None, hf=None):
+    """Monkeypatch the three loader touch-points; return the recorders."""
+    pytest.importorskip("olmoearth_pretrain")
+    import huggingface_hub
+    import olmoearth_pretrain.model_loader as ml
+
+    downloads: list[tuple[str, str]] = []
+    path_calls: list[tuple] = []
+
+    def _fail_from_id(*args, **kwargs):
+        raise AssertionError(f"load_model_from_id must not be called: {args} {kwargs}")
+
+    def _fail_hf(*args, **kwargs):
+        raise AssertionError(f"hf_hub_download must not be called: {args} {kwargs}")
+
+    def _record_hf(repo_id, filename, **kwargs):
+        downloads.append((repo_id, filename))
+        return str(tmp_path / filename)
+
+    def _record_from_path(model_path, load_weights=True):
+        path_calls.append((model_path, load_weights))
+        return torch.nn.Identity()
+
+    monkeypatch.setattr(ml, "load_model_from_id", from_id or _fail_from_id)
+    monkeypatch.setattr(ml, "load_model_from_path", from_path or _record_from_path)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", hf or _record_hf)
+    return downloads, path_calls
+
+
+def test_load_model_falls_back_to_hf_path_for_unknown_model_id(monkeypatch, tmp_path):
+    from gelos.backbones.olmoearth_backbone import _load_olmoearth_model
+
+    downloads, path_calls = _patch_loader(monkeypatch, tmp_path)
+    model = _load_olmoearth_model(_V1_3_BASE, pretrained=True)
+    assert isinstance(model, torch.nn.Identity)
+    assert downloads == [(_V1_3_BASE, "config.json"), (_V1_3_BASE, "weights.pth")]
+    assert path_calls == [(tmp_path, True)]
+
+
+def test_load_model_without_pretrained_downloads_only_config(monkeypatch, tmp_path):
+    from gelos.backbones.olmoearth_backbone import _load_olmoearth_model
+
+    downloads, path_calls = _patch_loader(monkeypatch, tmp_path)
+    _load_olmoearth_model(_V1_3_BASE, pretrained=False)
+    assert downloads == [(_V1_3_BASE, "config.json")]  # the 785 MB weights are skipped
+    assert path_calls == [(tmp_path, False)]
+
+
+def test_load_model_uses_model_id_enum_when_known(monkeypatch, tmp_path):
+    from gelos.backbones.olmoearth_backbone import _load_olmoearth_model
+
+    sentinel = torch.nn.Identity()
+    seen = []
+
+    def _from_id(model_id, load_weights=True):
+        seen.append((model_id, load_weights))
+        return sentinel
+
+    def _fail_hf(*args, **kwargs):
+        raise AssertionError("hf_hub_download must not be called for a known ModelID")
+
+    _patch_loader(monkeypatch, tmp_path, from_id=_from_id, hf=_fail_hf)
+    assert _load_olmoearth_model("allenai/OlmoEarth-v1_2-Nano", False) is sentinel
+    assert len(seen) == 1
+    assert str(seen[0][0]) == "OlmoEarth-v1_2-Nano" and seen[0][1] is False
+
+
+def test_load_model_bare_name_gets_allenai_prefix(monkeypatch, tmp_path):
+    from gelos.backbones.olmoearth_backbone import _load_olmoearth_model
+
+    downloads, _path_calls = _patch_loader(monkeypatch, tmp_path)
+    _load_olmoearth_model("OlmoEarth-v1_3-Base", pretrained=False)
+    assert downloads == [("allenai/OlmoEarth-v1_3-Base", "config.json")]
+
+
+def test_load_model_wraps_missing_config_class_in_import_error(monkeypatch, tmp_path):
+    from gelos.backbones.olmoearth_backbone import _load_olmoearth_model
+
+    def _old_package(model_path, load_weights=True):
+        raise AttributeError(
+            "module 'olmoearth_pretrain.nn.flexi_vit' has no attribute 'AttentionPoolerConfig'"
+        )
+
+    _patch_loader(monkeypatch, tmp_path, from_path=_old_package)
+    with pytest.raises(ImportError, match="AttentionPoolerConfig") as excinfo:
+        _load_olmoearth_model(_V1_3_BASE, pretrained=False)
+    msg = str(excinfo.value)
+    assert _V1_3_BASE in msg and "olmoearth_pretrain/archive/" in msg
+    assert isinstance(excinfo.value.__cause__, AttributeError)
+
+
+def test_load_model_propagates_hf_download_errors(monkeypatch, tmp_path):
+    # A missing repo must surface huggingface_hub's own error, not be swallowed.
+    from gelos.backbones.olmoearth_backbone import _load_olmoearth_model
+
+    class _RepoMissing(Exception):
+        pass
+
+    def _missing(repo_id, filename, **kwargs):
+        raise _RepoMissing(repo_id)
+
+    _patch_loader(monkeypatch, tmp_path, hf=_missing)
+    with pytest.raises(_RepoMissing, match="allenai/OlmoEarth-v9-Nope"):
+        _load_olmoearth_model("allenai/OlmoEarth-v9-Nope", pretrained=False)
 
 
 # ---------------------------------------------------------------------------

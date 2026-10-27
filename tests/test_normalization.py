@@ -84,6 +84,11 @@ def test_olmoearth_disables_datamodule_normalization():
     assert resolved == {"normalize": False, "set_nodata": 0}
     resolved = resolve_model_normalization("olmoearth_v1_2_base", {"S2L2A": ["BLUE"]})
     assert resolved == {"normalize": False, "set_nodata": 0}
+    # v1.3 (issue #100) is covered by the same "olmoearth_v1" prefix match.
+    resolved = resolve_model_normalization("olmoearth_v1_3_base", {"S2L2A": ["BLUE"]})
+    assert resolved == {"normalize": False, "set_nodata": 0}
+    resolved = resolve_model_normalization("olmoearth_v1_3_base_s1s2", {"S2L2A": ["BLUE"]})
+    assert resolved == {"normalize": False, "set_nodata": 0}
 
 
 def test_dinov3_resolves_clip_and_stretch_imagenet_stats():
