@@ -188,7 +188,7 @@ with `COASTAL_AEROSOL`) raises an error; override with explicit `means`/`stds` i
 
 | Field | Purpose |
 |-------|---------|
-| `model` | TerraTorch model identifier (e.g., `prithvi_eo_v2_300`, `prithvi_eo_v2_600`, `prithvi_eo_v2_300_tl_coords` (also `tiny`/`100`/`600` TL siblings; see **Prithvi TL** below), `terramind_v1_base`, `olmoearth_v1_2_base`, `olmoearth_v1_2_base_s1s2`; the `olmoearth_v1_*` identifiers are deprecated) |
+| `model` | TerraTorch model identifier (e.g., `prithvi_eo_v2_300`, `prithvi_eo_v2_600`, `prithvi_eo_v2_300_tl_coords` (also `tiny`/`100`/`600` TL siblings; see **Prithvi TL** below), `terramind_v1_base`, `olmoearth_v1_2_base`, `olmoearth_v1_2_base_s1s2`, `olmoearth_v1_3_base`, `olmoearth_v1_3_base_s1s2`; the `olmoearth_v1_*` identifiers are deprecated) |
 | `model_args.bands` | Band names as the **model** expects them (may differ from your dataset band names) |
 | `model_args.bands_s1` | S1 band names for OlmoEarth S1+S2 models (e.g., `[VV, VH]`). Omit or set to null to disable S1. |
 | `model_args.mask_nodata` | OlmoEarth only. Default `true`: when `data.init_args.nodata_value` is set, nodata patches are masked out of the encoder (see **Nodata masking** below). Set `false` to feed `set_nodata` values through unmasked |
@@ -197,15 +197,16 @@ with `COASTAL_AEROSOL`) raises an error; override with explicit `means`/`stds` i
 | `embedding_pooling` | Set to `null` to keep the full token sequence |
 | `has_cls` | Whether the model produces a CLS token at position 0 |
 
-#### OlmoEarth (`olmoearth_v1_2_base`, `olmoearth_v1_2_base_s1s2`, and size variants)
+#### OlmoEarth (`olmoearth_v1_2_*` / `olmoearth_v1_3_base*`, and size variants)
 
 Ai2's [OlmoEarth](https://pypi.org/project/olmoearth-pretrain/) is supported as a
 terratorch-compatible backbone via a wrapper in `gelos/backbones/olmoearth_backbone.py`,
 which registers itself automatically when `gelos.generation` is imported. No file
 placement is required — install the extra and use the model identifiers directly.
-The supported generation is **v1.2**, with sizes `nano` (D=128), `tiny` (D=192),
-`small` (D=384), and `base` (D=768). Each size has a Sentinel-2-only variant and a
-combined S2+S1 variant:
+The supported generations are **v1.2** (sizes `nano` (D=128), `tiny` (D=192),
+`small` (D=384), and `base` (D=768)) and **v1.3** (Base only, D=768; see the
+package requirement below). Each has a Sentinel-2-only variant and a combined
+S2+S1 variant:
 
 | Model identifier | Sensors | Hidden dim |
 |---|---|---|
@@ -213,10 +214,12 @@ combined S2+S1 variant:
 | `olmoearth_v1_2_tiny` | S2 only | 192 |
 | `olmoearth_v1_2_small` | S2 only | 384 |
 | `olmoearth_v1_2_base` | S2 only | 768 |
+| `olmoearth_v1_3_base` | S2 only | 768 |
 | `olmoearth_v1_2_nano_s1s2` | S2 + S1 | 128 |
 | `olmoearth_v1_2_tiny_s1s2` | S2 + S1 | 192 |
 | `olmoearth_v1_2_small_s1s2` | S2 + S1 | 384 |
 | `olmoearth_v1_2_base_s1s2` | S2 + S1 | 768 |
+| `olmoearth_v1_3_base_s1s2` | S2 + S1 | 768 |
 
 The earlier **v1** generation (sizes `nano`, `tiny`, `base`, `large` D=1024; no
 `small`) is **deprecated**: its factories still work for the full 12-band input but
@@ -239,12 +242,24 @@ Notes and limitations:
 
 - **Included in core install.** OlmoEarth support ships with gelos — no extra
   install step required beyond `pip install gelos`.
-- **Sentinel-2 L2A bands; subsets are zero-filled (v1.2).** The wrapper reorders
-  the input channels to OlmoEarth's expected 12-band S2L2A order
+- **OlmoEarth v1.3 package requirement.** `allenai/OlmoEarth-v1_3-Base` (the only
+  published v1.3 size) needs an `olmoearth-pretrain` build that has
+  `olmoearth_pretrain.nn.flexi_vit.AttentionPoolerConfig`, which no PyPI release
+  up to 0.1.2 ships. The GELOS Docker image installs a pinned upstream-main snapshot
+  (`--no-deps`; see the `Dockerfile`); on a released package the backbone raises an
+  `ImportError` naming the exact `pip install` to run. v1.3 is also not in the
+  package's `ModelID` enum, so GELOS downloads `config.json`/`weights.pth` from the
+  HuggingFace repo directly and builds the model with `load_model_from_path`. v1.3
+  shares v1.2's band order, single S2 band set, band dropout (so band subsets work
+  the same way) and pretraining normalization stats; v1.2 Base remains the default
+  `model_id`. See `configs/olmoearth_v1_3_base.yaml` and
+  `configs/olmoearth_v1_3_base_s1s2.yaml`.
+- **Sentinel-2 L2A bands; subsets are zero-filled (v1.2 and v1.3).** The wrapper
+  reorders the input channels to OlmoEarth's expected 12-band S2L2A order
   (`B02,B03,B04,B08,B05,B06,B07,B8A,B11,B12,B01,B09`). `model_args.bands` lists
   the bands in the order the tensor presents them and must match
   `data.bands.S2L2A` exactly (same names, same order); an unknown band name raises
-  a clear `ValueError`. With a v1.2 checkpoint `model_args.bands` may be a
+  a clear `ValueError`. With a v1.2 or v1.3 checkpoint `model_args.bands` may be a
   **subset** of the 12 bands (e.g. a 10-band dataset without `COASTAL_AEROSOL` /
   B01 and `WATER_VAPOR` / B09): each absent band's channel is set to exactly `0`
   *after* pretraining normalization, for the whole sample, which is what v1.2's

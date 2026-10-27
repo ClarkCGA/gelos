@@ -14,6 +14,22 @@ gelos = {git = "https://github.com/ClarkCGA/gelos.git", tag = "v1.0.0"}
 
 ## [Unreleased]
 
+- **OlmoEarth v1.3 Base backbone (issue #100).** New factories `olmoearth_v1_3_base`
+  (S2) and `olmoearth_v1_3_base_s1s2` (S2+S1), both `allenai/OlmoEarth-v1_3-Base`
+  (D=768; the only published v1.3 size), with configs `configs/olmoearth_v1_3_base*.yaml`.
+  v1.3 keeps v1.2's 12-band S2 order, single S2 band set, band dropout (band subsets
+  zero-fill as for v1.2) and pretraining normalization stats, so `gelos.normalization`'s
+  `olmoearth_v1` prefix already covers it. `OlmoEarthBackbone` now falls back to
+  downloading `config.json`/`weights.pth` from `allenai/<model_id>` on HuggingFace and
+  `load_model_from_path` when a checkpoint is not in the installed package's `ModelID`
+  enum (v1.3 is in none). **Requirement:** the v1.3 config references
+  `AttentionPoolerConfig`, which no `olmoearth-pretrain` PyPI release (<=0.1.2) has;
+  the Dockerfile installs the upstream main snapshot `7353d1b` with `--no-deps`, and on
+  an older package the backbone raises an `ImportError` with the install hint. v1.2
+  remains the default `model_id`. `requirements.txt` also pins `brotli>=1.2`: a fresh
+  image build now resolves `huggingface_hub>=2`, whose vendored `httpx2` needs it, and
+  the base image's `brotli` 1.1.0 made `hf_hub_download` of brotli-encoded files (e.g.
+  the v1.2 `config.json`) fail with `TypeError: process() takes no keyword arguments`.
 - **Analysis figures are always recreated (issue #97).** **Behavior change:**
   `run_analysis` now redraws every figure (plots and confusion matrices) from cached
   results on each run, so style, label, plot-parameter, `experiment_name`, strategy
