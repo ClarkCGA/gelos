@@ -1,5 +1,7 @@
-# olmoearth-pretrain requires torch>=2.7,<2.8 — keep the base torch inside that
-# range so the requirements install doesn't replace the baked-in torch.
+# The base torch is kept at 2.7.1 for terratorch 1.1.1 (and the released
+# olmoearth-pretrain 0.1.x, which pins torch>=2.7,<2.8), so the requirements
+# install doesn't replace the baked-in torch. The olmoearth-pretrain upstream
+# snapshot below is installed without deps for the same reason.
 FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime AS base
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -15,6 +17,15 @@ ENV PYTHONPATH=/app
 
 COPY requirements.txt /app/
 RUN uv pip install --system --no-cache -r requirements.txt
+
+# OlmoEarth v1.3 (allenai/OlmoEarth-v1_3-Base) needs olmoearth_pretrain's
+# AttentionPoolerConfig, which no PyPI release (<=0.1.2) ships yet. Install the
+# upstream main snapshot that has it, --no-deps so its torch>=2.9 pin does not
+# replace the baked-in torch 2.7.1 (the inference path GELOS uses runs on 2.7.1).
+# Bump the SHA (or switch back to a PyPI version) once a release includes it.
+# Keep in sync with _OLMOEARTH_PRETRAIN_V1_3_SNAPSHOT in gelos/backbones/olmoearth_backbone.py.
+RUN uv pip install --system --no-cache --no-deps \
+    "olmoearth-pretrain @ https://github.com/allenai/olmoearth_pretrain/archive/7353d1b5105a3ad662809a700c98065fc711f4ab.tar.gz"
 
 COPY pyproject.toml README.md Makefile LICENSE /app/
 COPY gelos/ /app/gelos/

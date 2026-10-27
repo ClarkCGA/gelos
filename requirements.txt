@@ -17,3 +17,8 @@ einops
 loguru
 zarr>=3.0
 olmoearth-pretrain~=0.1.1
+# huggingface_hub>=2 (pulled in by terratorch/timm/olmoearth-pretrain) ships httpx2,
+# whose Brotli decoder needs brotli>=1.2; the pytorch base image preinstalls 1.1.0,
+# which makes every hf_hub_download of a brotli-encoded file (e.g. OlmoEarth v1.2
+# config.json) fail with "TypeError: process() takes no keyword arguments".
+brotli>=1.2
