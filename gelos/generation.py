@@ -32,6 +32,34 @@ class LenientEmbeddingGenerationTask(EmbeddingGenerationTask):
     def check_file_ids(self, file_ids, x):
         return
 
+    def pool_embedding(
+        self,
+        embedding: torch.Tensor,
+        pooling: str | None,
+        has_cls: bool | None,
+    ) -> torch.Tensor:
+        """Average ViT patch tokens independently at each timestep.
+
+        ``vit_spatial_mean`` expects output from a temporal wrapper configured
+        with ``temporal_pooling="keep"``: ``(T, tokens, channels)``.
+        """
+        if pooling != "vit_spatial_mean":
+            return super().pool_embedding(embedding, pooling, has_cls)
+        if embedding.ndim != 3:
+            raise ValueError(
+                "Expected temporal ViT embeddings shaped (timesteps, tokens, channels) "
+                f"for vit_spatial_mean, got {embedding.ndim}D."
+            )
+        if has_cls is None:
+            has_cls = embedding.shape[1] % 2 == 1
+        if has_cls:
+            if embedding.shape[1] < 2:
+                raise ValueError("Cannot spatially pool ViT embeddings containing only a CLS token.")
+            embedding = embedding[:, 1:, :]
+        if embedding.shape[1] == 0:
+            raise ValueError("Cannot spatially pool an empty ViT token sequence.")
+        return embedding.mean(dim=1)
+
     @staticmethod
     def _resolve_setter(backbone: Any, name: str) -> Any:
         """Return the object exposing ``name`` — the backbone itself or its
